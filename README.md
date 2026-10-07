@@ -150,6 +150,11 @@ tools/go build ./...     # 用包装器调用，它负责设好 GOROOT/GOPATH/GO
 
 而这个系统明确要求三平台原生能力（UIAutomation / macOS Accessibility / Linux AT-SPI2）。
 
+**已实测，不是声称**：在 Linux 上直接产出
+`PE32+ executable for MS Windows` 与 `Mach-O 64-bit arm64 executable`；
+`windows/amd64`、`darwin/amd64`、`darwin/arm64`、`linux/arm64` 四个目标全部通过。
+`go list -m all` 只有它自己 —— **零外部依赖**。
+
 **硬纪律：`go.mod` 的 `require` 必须为空。** 只用标准库——
 框架、序列化、哈希、Ed25519、HTTP、进程控制全在 stdlib 里够用。
 （`tools/check_kernel.py` 的 Gate 2 守这一条，`replace` 也算违规。）
