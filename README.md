@@ -86,8 +86,10 @@ mv .sansheng ~/sansheng
 
 ```
 core/       Frame · Log · Budget · Refusal      459 行 · 6 类型 · 零依赖 · 领域词 0
+evidence/   证据阶梯 E0–E4                          唯一一处定义，store 与 memory 都从这里取
 organs/     session（状态机 + 停滞守卫，已实现）
-            仲裁 · 合成 · 核验 · 记忆 · 算力池      其余外设，纯函数为主
+            composer（上下文合成器，已实现）· memory（双时间轴，已实现）
+            仲裁 · 核验 · 算力池                  其余外设，纯函数为主
 store/      cas（内容寻址）· manifest（Skill ABI）· license（闭包代数）
             refs（可变的那一半）· compose（组合代数）· register（八步流水线）
 adapters/   shell（stdio + HTTP，已实现）· http · dsh · mcp   可删
@@ -111,7 +113,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 
 ---
 
-## 当前状态：**P0–P2 已落地，P3–P5 未开始**
+## 当前状态：**P0–P3 已落地，P4–P5 未开始**
 
 诚实地写清楚，免得后来者读成"已经做完了"：
 
@@ -132,16 +134,19 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | **P2 技能店：注册流水线** | ✅ **`store/register.go`——八步，`ref` 最后才动** |
 | **P2 技能店：可变的一半** | ✅ **`store/refs.go`——先写历史再移指针** |
 | **P2 组合代数** | ✅ **`store/compose.go`——可靠性是乘积；剪枝要报告丢掉了什么** |
-| **自由判据** | ✅ **`tools/drive.sh` 65 项断言全过，只用 curl** |
-| 上下文合成器 / 记忆（P3） | ⬜ 未写 |
+| **自由判据** | ✅ **`tools/drive.sh` 88 项断言全过，只用 curl** |
+| **P3 证据阶梯** | ✅ **`evidence/`——唯一一处定义；未知等级传播，不被排序** |
+| **P3 上下文合成器** | ✅ **`organs/composer/`——按 score/单位长度背包；年表段不许被重排** |
+| **P3 记忆** | ✅ **`organs/memory/`——双时间轴；写入不可变；E0 写得下但默认看不见** |
+| **P3 两个器官落在同一条链上** | ✅ **memory 与 session 各自投影自己的记录，互不 import** |
 | 升级仲裁 + Beta 自校准（P4） | ⬜ 未写 |
 | 宿主适配器 dsh / mcp（P5） | ⬜ 未写 |
 
 ### 证据（五条命令，可复跑）
 
 ```sh
-tools/go test ./...              # core + organs/session + store（51 个测试）
-bash tools/drive.sh              # 65/65，全程只有 curl
+tools/go test ./...              # 六个包，97 个测试
+bash tools/drive.sh              # 88/88，全程只有 curl
 bash tools/check_format.sh       # gofmt 干净
 python3 tools/check_kernel.py    # 四条内核守卫
 python3 tools/check_contract.py  # 文档与代码的拒绝码不许漂移
@@ -156,14 +161,18 @@ python3 tools/check_contract.py  # 文档与代码的拒绝码不许漂移
 **`drive.sh` 验的是判据本身，不是功能。** 它断言：序号由服务端分配、客户端自供
 `seq`/`rev`/`head` 一律 `client_authority`、同键跨重启仍幂等、**被拒的请求一条都没写进链**、
 链头跨重启一致、预算全有或全无、未知类型只拒绝不断连接；**非法状态迁移被拒且不动链**、
-**会话跨重启从日志里重放出来**；以及技能店的**内容寻址**、**许可证闭包**、
-**E0 不许固化**、**同内容重发布幂等**、**被拒时 CAS 里零 blob**。
+**会话跨重启从日志里重放出来**；技能店的**内容寻址**、**许可证闭包**、
+**E0 不许固化**、**同内容重发布幂等**、**被拒时 CAS 里零 blob**；记忆的
+**写不是编辑**、**E0 写得下但默认检索不到**、**两个时钟各管一段**（t=115 还没学到、t=135 已知且旧值已走）；
+合成器的**年表段不许被重排**、**近重复进 dropped 而不是消失**、**装不下的长候选不许挡住后面的短候选**。
 
-单元测试另有三条 `drive.sh` 做不到的：
+单元测试另有五条 `drive.sh` 做不到的：
 
 - **篡改中间一条记录后重开，链必须拒绝**（`recovery_required`）——追加式哈希链的价值全在这一条上。
 - **CAS 里被改过的 blob，读的时候必须被拒绝**——「一个无法担保自己返回的字节的存储不是内容寻址，只是内容贴标」。
 - **许可证闭包沿依赖传播**：先放宽策略注册一个 GPL 依赖，再用默认策略注册依赖它的 MIT 技能 → `license_conflict`。
+- **未知证据等级不许被折成 E0**——E0 是真实等级，把 `"E9"` 折成它是把打字错误变成信任决定。
+- **SimHash 半径必须真的分开两个总体**（测试打印 `radius 12 separates near=6 from far=32`，让漂移可见）。
 
 ### 四条守卫各自被注入测试证过
 

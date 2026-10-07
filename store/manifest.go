@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"sansheng/core"
+	"sansheng/evidence"
 )
 
 // Kind is a skill's execution form.
@@ -29,49 +30,24 @@ var kinds = map[Kind]bool{
 
 // Evidence is the trust level of a claim, and it travels **with** the claim.
 //
-// The levels are the whole defence of the固化 loop: generation → verification →
-// freeze is a positive feedback loop, and a wrong answer that gets frozen is
-// wrong forever, executed N times and recorded as a success each time.
-type Evidence string
+// The ladder itself is defined in package evidence — see that package for why
+// it is not defined here. These are **aliases, not copies**: a copy would
+// compile, and would then be free to drift from the ladder the memory organ
+// filters with.
+type Evidence = evidence.Level
 
 const (
-	E0 Evidence = "E0" // model-generated, unverified — never enters core memory
-	E1 Evidence = "E1" // ran once in a sandbox and succeeded
-	E2 Evidence = "E2" // confirmed by a second, independent source
-	E3 Evidence = "E3" // external authority, or a human
-	E4 Evidence = "E4" // succeeded N times with no failure
+	E0 = evidence.L0 // model-generated, unverified — never enters core memory
+	E1 = evidence.L1 // ran once in a sandbox and succeeded
+	E2 = evidence.L2 // confirmed by a second, independent source
+	E3 = evidence.L3 // external authority, or a human
+	E4 = evidence.L4 // succeeded N times with no failure
 )
 
-var evidenceRank = map[Evidence]int{E0: 0, E1: 1, E2: 2, E3: 3, E4: 4}
-
-// MinEvidence returns the weaker of two levels.
-//
-// Composition may lower trust and may never raise it. Stitching a pile of E1s
-// into something that reads as E3 is the laundering route into the固化 loop,
-// and this function is where that route is closed.
-func MinEvidence(a, b Evidence) Evidence {
-	if evidenceRank[a] <= evidenceRank[b] {
-		return a
-	}
-	return b
-}
-
-// MinEvidenceAll folds MinEvidence over a set.
-//
-// It seeds from the first element rather than from E0 — because E0 *is* the
-// minimum, and a fold that starts at the identity of `min` can only ever return
-// that identity. An empty set still means E0: a composition with no verified
-// children has no verified claim to make.
-func MinEvidenceAll(evs []Evidence) Evidence {
-	if len(evs) == 0 {
-		return E0
-	}
-	out := evs[0]
-	for _, e := range evs[1:] {
-		out = MinEvidence(out, e)
-	}
-	return out
-}
+// MinEvidence and MinEvidenceAll keep their names as forwarders, so the store's
+// tests keep exercising the ladder through the path its callers use.
+func MinEvidence(a, b Evidence) Evidence     { return evidence.Min(a, b) }
+func MinEvidenceAll(evs []Evidence) Evidence { return evidence.MinAll(evs) }
 
 // Env is the environment closure a skill runs in.
 //
@@ -138,7 +114,7 @@ func (m *Manifest) Validate() *core.Refusal {
 	if !kinds[m.Kind] {
 		return bad("unknown kind: " + string(m.Kind))
 	}
-	if _, ok := evidenceRank[m.Evidence]; !ok {
+	if !evidence.Known(m.Evidence) {
 		return bad("unknown evidence level: " + string(m.Evidence))
 	}
 	if len(m.Verify) == 0 {
@@ -204,5 +180,5 @@ func (m *Manifest) ManifestHash() (string, *core.Refusal) {
 // into the stable channel. E0 is generation without verification, and it must
 // never be promoted — that is the one rule the固化 loop cannot bend.
 func (m *Manifest) Verified() bool {
-	return evidenceRank[m.Evidence] >= evidenceRank[E1]
+	return evidence.AtLeast(m.Evidence, E1)
 }

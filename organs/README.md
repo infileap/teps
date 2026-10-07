@@ -43,9 +43,9 @@
 |---|---|---|
 | **会话状态机 + 停滞守卫** | ✅ **已实现**（纯函数，20 个测试） | `session/` |
 | 仲裁器（opex + capex） | ⬜ 规格已定 | [../docs/ARBITER.md](../docs/ARBITER.md) |
-| 上下文合成器 | ⬜ 规格已定 | [../docs/CONTRACT.md](../docs/CONTRACT.md) |
+| 上下文合成器 | ✅ **已实现**（纯函数，21 个测试） | `composer/` |
 | 核验器 | ⬜ 未写 | 见上文"关键推论" |
-| 记忆 / 索引 | ⬜ 未写 | — |
+| 记忆 / 索引 | ✅ **已实现**（纯函数，15 个测试） | `memory/` |
 | 技能店 | ✅ **已实现**（P2，但落在 `store/` 不在 `organs/`） | [../store/README.md](../store/README.md) |
 | 算力池注册表 | ⬜ 未写 | — |
 | HTTP 传输 | ✅ 已实现 | [../adapters/shell](../adapters/shell) |

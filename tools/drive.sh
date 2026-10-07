@@ -233,6 +233,62 @@ r=$(req '{"t":"skill.promote","v":1,"key":"pr2","body":{"name":"read.file","from
 expect "from/to 没有默认值" "$r" 'bad_request'
 
 echo
+echo "—— 记忆：写不是编辑，纠正靠取代 ——"
+r=$(req '{"t":"memory.write","v":1,"key":"m1","body":{"id":"r1","text":"the kernel keeps four concepts","evidence":"E2","recorded_at":100,"tags":["kernel"]}}')
+expect "写入被接受到链上" "$r" '"op":"write"'
+r=$(req '{"t":"memory.write","v":1,"key":"m2","body":{"id":"r1","text":"a second write must be refused","evidence":"E2","recorded_at":110}}')
+expect "同 id 二次写被拒（写不是编辑）" "$r" 'bad_request'
+r=$(req '{"t":"memory.retrieve","v":1,"body":{}}')
+expect "默认检索看得见 E2" "$r" '"ids":["r1"]'
+expect "★ 被拒的那次一个字节都没进链" "$r" '"total":1'
+
+r=$(req '{"t":"memory.write","v":1,"key":"m3","body":{"id":"r0","text":"a guess with nothing verifying it","evidence":"E0","recorded_at":100}}')
+expect "E0 写得下" "$r" '"op":"write"'
+r=$(req '{"t":"memory.retrieve","v":1,"body":{}}')
+expect "★ 但 E0 默认检索不到（写得下，看不见）" "$r" '"ids":["r1"]'
+r=$(req '{"t":"memory.retrieve","v":1,"body":{"min_evidence":"E0"}}')
+expect "点名 E0 才可见" "$r" '"ids":["r0","r1"]'
+
+r=$(req '{"t":"memory.write","v":1,"key":"m4","body":{"id":"r2","text":"the kernel keeps four concepts and nothing else","evidence":"E3","recorded_at":120,"tags":["kernel","revised"]}}')
+expect "第二条记录写入" "$r" '"op":"write"'
+r=$(req '{"t":"memory.supersede","v":1,"key":"m5","body":{"id":"r1","superseded_by":"r2","recorded_at":130}}')
+expect "取代被接受到链上" "$r" '"op":"supersede"'
+r=$(req '{"t":"memory.retrieve","v":1,"body":{"min_evidence":"E0"}}')
+expect "取代后旧记录离开当前视图" "$r" '"ids":["r0","r2"]'
+
+echo
+echo "—— 记忆：两个时钟，不是一个 ——"
+r=$(req '{"t":"memory.retrieve","v":1,"body":{"min_evidence":"E0","as_of":115}}')
+expect "★ t=115 时我们还没学到 r2" "$r" '"ids":["r0","r1"]'
+r=$(req '{"t":"memory.retrieve","v":1,"body":{"min_evidence":"E0","as_of":135}}')
+expect "★ t=135 时 r2 已知且 r1 已被取代" "$r" '"ids":["r0","r2"]'
+r=$(req '{"t":"memory.retrieve","v":1,"body":{"min_evidence":"E0","tags":["kernel"]}}')
+expect "标签命中 r2（r1 已被取代，即使它有同一个标签）" "$r" '"ids":["r2"]'
+r=$(req '{"t":"memory.retrieve","v":1,"body":{"min_evidence":"E0","tags":["kernel","revised"]}}')
+expect "标签是全必需，不是任选" "$r" '"ids":["r2"]'
+r=$(req '{"t":"memory.retrieve","v":1,"body":{"min_evidence":"E0","tags":["kernel","nope"]}}')
+expect "缺一个标签就不算命中" "$r" '"ids":[]'
+r=$(req '{"t":"memory.retrieve","v":1,"body":{"min_evidence":"E9"}}')
+expect "未知证据等级被拒" "$r" 'bad_request'
+
+echo
+echo "—— 上下文合成器：背包、年表、去重 ——"
+r=$(req '{"t":"compose.build","v":1,"body":{"class":"chat","budget":200,"candidates":[{"id":"t1","section":"recent","text":"first turn","similarity":1,"evidence":"E2","recency":1,"task_relevance":1},{"id":"t2","section":"recent","text":"second turn","similarity":1,"evidence":"E2","recency":1,"task_relevance":1},{"id":"t3","section":"recent","text":"third turn","similarity":1,"evidence":"E2","recency":1,"task_relevance":1}]}}')
+expect "★ recent 段保持年表（打包不许重写时间）" "$r" '"kept":["t1","t2","t3"]'
+expect "各段预算被报告" "$r" '"recent"'
+expect "用量被报告" "$r" '"used"'
+
+r=$(req '{"t":"compose.build","v":1,"body":{"class":"task_exec","budget":1000,"candidates":[{"id":"d1","section":"retrieval","text":"the kernel keeps only four concepts because a concept earns its place by being authoritative or atomic or crossed by every request and nothing else does","similarity":1,"evidence":"E2","recency":1,"task_relevance":1},{"id":"d2","section":"retrieval","text":"the kernel keeps only four concepts because a concept earns its place by being authoritative or atomic or crossed by every reply and nothing else does","similarity":0.9,"evidence":"E2","recency":1,"task_relevance":1}]}}')
+expect "★ 近重复被去掉，留下更强的那条" "$r" '"kept":["d1"]'
+expect "被去掉的进了 dropped，不是消失" "$r" '"dropped":["d2"]'
+
+r=$(req '{"t":"compose.build","v":1,"body":{"class":"task_exec","budget":100,"candidates":[  {"id":"big","section":"retrieval","text":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","similarity":1,"evidence":"E2","recency":1,"task_relevance":1},  {"id":"small","section":"retrieval","text":"bbbbbbbbbb","similarity":0.5,"evidence":"E2","recency":1,"task_relevance":1}]}}')
+expect "★ 装不下的长候选不许挡住后面的短候选" "$r" '"kept":["small"]'
+
+r=$(req '{"t":"compose.build","v":1,"body":{"class":"nonsense","budget":10,"candidates":[]}}')
+expect "未知任务类被拒" "$r" 'bad_request'
+
+echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null

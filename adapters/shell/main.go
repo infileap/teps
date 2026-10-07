@@ -36,6 +36,7 @@ type server struct {
 	log      *core.Log
 	acct     *core.Account
 	sessions *sessionStore
+	memory   *memoryStore
 	skills   *store.Store
 }
 
@@ -66,6 +67,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	mem, ref := newMemoryStore(lg)
+	if ref != nil {
+		fmt.Fprintln(os.Stderr, "shell adapter: "+ref.Error())
+		os.Exit(1)
+	}
+
 	sdir := *storeDir
 	if sdir == "" {
 		sdir = filepath.Join(*dir, "skills")
@@ -80,6 +87,7 @@ func main() {
 		log:      lg,
 		acct:     core.NewAccount(core.Budget{MS: *ms, Tokens: *tokens, Money: *money}),
 		sessions: sessions,
+		memory:   mem,
 		skills:   sk,
 	}
 
@@ -163,6 +171,10 @@ func (s *server) handle(f core.Frame) core.Frame {
 		if s.handleSkill(f, &out) {
 			return out
 		}
+	}
+
+	if s.handleKnowledge(f, &out) {
+		return out
 	}
 
 	switch f.T {
