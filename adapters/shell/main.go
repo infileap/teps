@@ -33,11 +33,12 @@ import (
 const scannerMax = 8 << 20
 
 type server struct {
-	log      *core.Log
-	acct     *core.Account
-	sessions *sessionStore
-	memory   *memoryStore
-	skills   *store.Store
+	log       *core.Log
+	acct      *core.Account
+	sessions  *sessionStore
+	memory    *memoryStore
+	skills    *store.Store
+	decisions *decisionStore
 }
 
 func main() {
@@ -73,6 +74,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	dec, ref := newDecisionStore(lg)
+	if ref != nil {
+		fmt.Fprintln(os.Stderr, "shell adapter: "+ref.Error())
+		os.Exit(1)
+	}
+
 	sdir := *storeDir
 	if sdir == "" {
 		sdir = filepath.Join(*dir, "skills")
@@ -84,11 +91,12 @@ func main() {
 	}
 
 	s := &server{
-		log:      lg,
-		acct:     core.NewAccount(core.Budget{MS: *ms, Tokens: *tokens, Money: *money}),
-		sessions: sessions,
-		memory:   mem,
-		skills:   sk,
+		log:       lg,
+		acct:      core.NewAccount(core.Budget{MS: *ms, Tokens: *tokens, Money: *money}),
+		sessions:  sessions,
+		memory:    mem,
+		skills:    sk,
+		decisions: dec,
 	}
 
 	if *addr != "" {
@@ -174,6 +182,10 @@ func (s *server) handle(f core.Frame) core.Frame {
 	}
 
 	if s.handleKnowledge(f, &out) {
+		return out
+	}
+
+	if s.handleDecision(f, &out) {
 		return out
 	}
 

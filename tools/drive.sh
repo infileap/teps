@@ -289,6 +289,75 @@ r=$(req '{"t":"compose.build","v":1,"body":{"class":"nonsense","budget":10,"cand
 expect "未知任务类被拒" "$r" 'bad_request'
 
 echo
+echo "—— 仲裁器：后验是从链上折出来的，不是另存一份 ——"
+r=$(req '{"t":"arbiter.observe","v":1,"key":"a1","body":{"attempt":"t1","skill":"read.file","task_class":"task_exec"}}')
+expect "意图先上链，尝试处于打开状态" "$r" '"open":1'
+r=$(req '{"t":"arbiter.observe","v":1,"key":"a2","body":{"attempt":"t1","skill":"read.file","task_class":"task_exec","outcome":"ok","verified_by":"verifier"}}')
+expect "结论落下后尝试关闭" "$r" '"open":0'
+r=$(req '{"t":"arbiter.observe","v":1,"key":"a3","body":{"attempt":"t2","skill":"read.file","task_class":"task_exec","outcome":"ok","verified_by":"verifier"}}')
+# Assert the reason, not only the code. Two different guards can both answer
+# bad_request, and a test that checks the code alone cannot tell which one fired
+# — which is how a removed guard survives its own test.
+expect "★ 没有意图的结论被拒（链上不能有无源之事）" "$r" 'no open attempt to resolve'
+r=$(req '{"t":"arbiter.observe","v":1,"key":"a4a","body":{"attempt":"t3","skill":"read.file","task_class":"task_exec"}}')
+expect "先为 t3 写入意图" "$r" '"open":1'
+r=$(req '{"t":"arbiter.observe","v":1,"key":"a4","body":{"attempt":"t3","skill":"read.file","task_class":"task_exec","outcome":"ok"}}')
+expect "★ 没有核验者的 ok 被拒（执行者不许自证）" "$r" 'needs verified_by'
+r=$(req '{"t":"arbiter.observe","v":1,"key":"a5","body":{"skill":"read.file","task_class":"task_exec","outcome":"ok","verified_by":"v"}}')
+expect "★ 没有 attempt id 的观测被拒" "$r" 'bad_request'
+r=$(req '{"t":"arbiter.observe","v":1,"key":"a6","body":{"attempt":"t4","skill":"read.file","task_class":"task_exec","outcome":"nonsense","verified_by":"v"}}')
+expect "未知结果被拒" "$r" 'bad_request'
+r=$(req '{"t":"arbiter.state","v":1,"body":{"skill":"read.file","task_class":"task_exec"}}')
+# The unquoted form is the point: a number rendered as text stops being a
+# number. One verified ok on a Beta(1,1) prior is 2/3, so 0.6 is also the
+# arithmetic, not a magic threshold.
+expect "后验被报告，且是数字不是字符串" "$r" '"mean":0.6'
+expect "被拒的四次一条都没上链" "$r" '"observations":1'
+
+echo
+echo "—— 仲裁器：技能腐烂，没人通知它 ——"
+rank_req='{"t":"arbiter.rank","v":1,"body":{"margin":0.2,"offers":[{"action":"skill","skill":"read.file","task_class":"task_exec","value":10,"cost":0.01,"latency":0.05,"latency_weight":0.1},{"action":"escalate","skill":"l3","task_class":"task_exec","value":10,"cost":1.0,"latency":2.0,"latency_weight":0.1,"pinned":0.9,"use_pinned":true}]}}'
+i=0
+while [ $i -lt 30 ]; do
+  i=$((i + 1))
+  req "{\"t\":\"arbiter.observe\",\"v\":1,\"key\":\"iok$i\",\"body\":{\"attempt\":\"ok$i\",\"skill\":\"read.file\",\"task_class\":\"task_exec\"}}" >/dev/null
+  req "{\"t\":\"arbiter.observe\",\"v\":1,\"key\":\"rok$i\",\"body\":{\"attempt\":\"ok$i\",\"skill\":\"read.file\",\"task_class\":\"task_exec\",\"outcome\":\"ok\",\"verified_by\":\"verifier\"}}" >/dev/null
+done
+r=$(req "$rank_req")
+expect "★ 技能好用时仲裁器选它" "$r" '"chosen":"skill"'
+
+switched=""
+i=0
+while [ $i -lt 40 ]; do
+  i=$((i + 1))
+  req "{\"t\":\"arbiter.observe\",\"v\":1,\"key\":\"ibad$i\",\"body\":{\"attempt\":\"bad$i\",\"skill\":\"read.file\",\"task_class\":\"task_exec\"}}" >/dev/null
+  req "{\"t\":\"arbiter.observe\",\"v\":1,\"key\":\"rbad$i\",\"body\":{\"attempt\":\"bad$i\",\"skill\":\"read.file\",\"task_class\":\"task_exec\",\"outcome\":\"failed\",\"verified_by\":\"verifier\"}}" >/dev/null
+  r=$(req "$rank_req")
+  case "$r" in
+    *'"chosen":"skill"'*) ;;
+    *) switched=$i; break ;;
+  esac
+done
+if [ -n "$switched" ]; then
+  printf '  ok    ★ 技能腐烂后第 %s 次失败起被自动弃用（没人通知过仲裁器）\n' "$switched"
+else
+  printf '  FAIL  技能腐烂了，仲裁器还在选它\n'
+  fails=$((fails + 1))
+fi
+r=$(req '{"t":"arbiter.state","v":1,"body":{"skill":"read.file","task_class":"task_exec"}}')
+expect "★ 上界仍高于均值（否则这个技能再也回不来）" "$r" '"upper"'
+
+echo
+echo "—— 仲裁器：固化不是看这次省了多少 ——"
+r=$(req '{"t":"arbiter.fix","v":1,"body":{"calls":10000,"opex_now":0.01,"opex_after":0.001,"capex":5,"expected_calls":200,"loss":50,"at":"E1"}}')
+expect "★ 同样的节省，E1 证据下不该固化" "$r" '"fix":false'
+r=$(req '{"t":"arbiter.fix","v":1,"body":{"calls":10000,"opex_now":0.01,"opex_after":0.001,"capex":5,"expected_calls":200,"loss":50,"at":"E4"}}')
+expect "★ E4 证据下同一笔账值得固化" "$r" '"fix":true'
+r=$(req '{"t":"arbiter.fix","v":1,"body":{"calls":100,"opex_now":0.02,"opex_after":0,"capex":2,"expected_calls":0,"loss":0,"at":"E3"}}')
+expect "收支相抵不算理由" "$r" '"fix":false'
+r=$(req '{"t":"arbiter.fix","v":1,"body":{"calls":100,"at":"E9"}}')
+expect "未知证据等级不给数字" "$r" 'bad_request'
+
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null
