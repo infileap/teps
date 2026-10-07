@@ -85,12 +85,13 @@ mv .sansheng ~/sansheng
 ## 目录
 
 ```
-core/       Frame · Log · Budget · Refusal      ≤3000 行 · 零依赖 · 领域词为 0
+core/       Frame · Log · Budget · Refusal      456 行 · 6 类型 · 零依赖 · 领域词 0
 organs/     仲裁 · 合成 · 核验 · 记忆 · 算力池     外设，纯函数为主
 store/      技能店（内容寻址）
-adapters/   http · shell · dsh · mcp             可删
+adapters/   shell（stdio + HTTP，已实现）· http · dsh · mcp   可删
 docs/       规格
 tools/      check_kernel.py                      四条守卫，可跑
+            drive.sh                             ★ 自由判据：只有 curl 驱动全流程
             go · install_go.sh                   自包含工具链：包装器 + 重建
 .toolchain/ go1.27.1                             gitignore，可重建
 ```
@@ -106,7 +107,7 @@ tools/      check_kernel.py                      四条守卫，可跑
 
 ---
 
-## 当前状态：**这是设计，不是实现**
+## 当前状态：**P0 已落地，P1–P5 未开始**
 
 诚实地写清楚，免得后来者读成"已经做完了"：
 
@@ -118,9 +119,35 @@ tools/      check_kernel.py                      四条守卫，可跑
 | capex 仲裁 | ✅ 已定 |
 | 四条守卫 | ✅ **可跑，已验**（含 camelCase 泄漏的注入测试） |
 | **Go 工具链** | ✅ **go1.27.1 已装**（项目内自包含、sha256 校验、可重建） |
-| Go 内核实现 | ⬜ **未写一行**（`core/` 只有包文档） |
-| 外设实现 | ⬜ 未写一行 |
-| 宿主适配器 | ⬜ 未写一行 |
+| **P0 内核** | ✅ **四概念已写成类型**（456 行 / 6 公开类型 / 领域词 0） |
+| **P0 shell 适配器** | ✅ **stdio + HTTP，curl 可驱动** |
+| **自由判据** | ✅ **`tools/drive.sh` 24 项断言全过，只用 curl** |
+| 会话状态机 / 停滞断路器（P1） | ⬜ 未写 |
+| 技能店（P2） | ⬜ 未写 |
+| 上下文合成器 / 记忆（P3） | ⬜ 未写 |
+| 升级仲裁 + Beta 自校准（P4） | ⬜ 未写 |
+| 宿主适配器 dsh / mcp（P5） | ⬜ 未写 |
+
+### P0 的证据（三条命令，可复跑）
+
+```sh
+tools/go test ./...        # ok  sansheng/core
+bash tools/drive.sh        # 24/24，全程只有 curl
+python3 tools/check_kernel.py
+```
+
+守卫读数：**456 / 3000 行 · 0 / 0 依赖 · 6 / 12 公开类型 · 0 / 0 领域词**。
+
+内核现在只有六个公开类型：`Frame` `Refusal` `Log` `Entry` `Budget` `Account`。
+`Account` 是**唯一持有可变值**的东西，理由是"检查与扣减必须是不可分割的一步"；
+其余全部是无状态或只追加的。
+
+**`drive.sh` 验的是判据本身，不是功能。** 它断言：序号由服务端分配、客户端自供
+`seq`/`rev`/`head` 一律 `client_authority`、同键跨重启仍幂等、**被拒的请求一条都没写进链**、
+链头跨重启一致、预算全有或全无、未知类型只拒绝不断连接。
+
+单元测试另有一条 `drive.sh` 做不到的：**篡改中间一条记录后重开，链必须拒绝**
+（`recovery_required`）——追加式哈希链的价值全在这一条上。
 
 ### 工具链：自包含，且可重建
 
