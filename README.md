@@ -88,11 +88,13 @@ mv .sansheng ~/sansheng
 core/       Frame · Log · Budget · Refusal      459 行 · 6 类型 · 零依赖 · 领域词 0
 organs/     session（状态机 + 停滞守卫，已实现）
             仲裁 · 合成 · 核验 · 记忆 · 算力池      其余外设，纯函数为主
-store/      技能店（内容寻址）
+store/      cas（内容寻址）· manifest（Skill ABI）· license（闭包代数）
+            refs（可变的那一半）· compose（组合代数）· register（八步流水线）
 adapters/   shell（stdio + HTTP，已实现）· http · dsh · mcp   可删
 docs/       规格
 tools/      check_kernel.py                      四条内核守卫，可跑
             check_contract.py                    文档 ↔ 代码的拒绝码不许漂移
+            check_format.sh                      gofmt 干净，别让 diff 里混进重排
             drive.sh                             ★ 自由判据：只有 curl 驱动全流程
             go · install_go.sh                   自包含工具链：包装器 + 重建
 .toolchain/ go1.27.1                             gitignore，可重建
@@ -109,7 +111,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 
 ---
 
-## 当前状态：**P0–P1 已落地，P2–P5 未开始**
+## 当前状态：**P0–P2 已落地，P3–P5 未开始**
 
 诚实地写清楚，免得后来者读成"已经做完了"：
 
@@ -119,23 +121,28 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | 协议契约（公理/帧/消息/拒绝码） | ✅ 已定 |
 | 四个 ABI + 执行记录 | ✅ 已定 |
 | capex 仲裁 | ✅ 已定 |
-| 四条内核守卫 + 契约守卫 | ✅ **可跑，已验**（含领域词泄漏与文档漂移的注入测试） |
+| 四条内核守卫 + 契约守卫 + 格式守卫 | ✅ **可跑，已验**（领域词泄漏、文档漂移、格式漂移各有注入测试） |
 | **Go 工具链** | ✅ **go1.27.1 已装**（项目内自包含、sha256 校验、可重建） |
 | **P0 内核** | ✅ **四概念已写成类型**（459 行 / 6 公开类型 / 领域词 0） |
 | **P0 shell 适配器** | ✅ **stdio + HTTP，curl 可驱动** |
 | **P1 会话状态机 + 停滞守卫** | ✅ **`organs/session/`，纯函数，20 个测试** |
-| **会话落在链上** | ✅ **重启后从日志重放；适配器内存里没有真相** |
-| **自由判据** | ✅ **`tools/drive.sh` 44 项断言全过，只用 curl** |
-| 技能店（P2） | ⬜ 未写 |
+| **P1 会话落在链上** | ✅ **重启后从日志重放；适配器内存里没有真相** |
+| **P2 技能店：内容寻址** | ✅ **`store/cas.go`——读时重算哈希，不符即拒** |
+| **P2 技能店：许可证闭包** | ✅ **`store/license.go`——闭包等级 = 成员最大值** |
+| **P2 技能店：注册流水线** | ✅ **`store/register.go`——八步，`ref` 最后才动** |
+| **P2 技能店：可变的一半** | ✅ **`store/refs.go`——先写历史再移指针** |
+| **P2 组合代数** | ✅ **`store/compose.go`——可靠性是乘积；剪枝要报告丢掉了什么** |
+| **自由判据** | ✅ **`tools/drive.sh` 65 项断言全过，只用 curl** |
 | 上下文合成器 / 记忆（P3） | ⬜ 未写 |
 | 升级仲裁 + Beta 自校准（P4） | ⬜ 未写 |
 | 宿主适配器 dsh / mcp（P5） | ⬜ 未写 |
 
-### 证据（四条命令，可复跑）
+### 证据（五条命令，可复跑）
 
 ```sh
-tools/go test ./...              # core + organs/session
-bash tools/drive.sh              # 44/44，全程只有 curl
+tools/go test ./...              # core + organs/session + store（51 个测试）
+bash tools/drive.sh              # 65/65，全程只有 curl
+bash tools/check_format.sh       # gofmt 干净
 python3 tools/check_kernel.py    # 四条内核守卫
 python3 tools/check_contract.py  # 文档与代码的拒绝码不许漂移
 ```
@@ -148,24 +155,36 @@ python3 tools/check_contract.py  # 文档与代码的拒绝码不许漂移
 
 **`drive.sh` 验的是判据本身，不是功能。** 它断言：序号由服务端分配、客户端自供
 `seq`/`rev`/`head` 一律 `client_authority`、同键跨重启仍幂等、**被拒的请求一条都没写进链**、
-链头跨重启一致、预算全有或全无、未知类型只拒绝不断连接；以及**非法状态迁移被拒且不动链**、
-**会话跨重启从日志里重放出来**。
+链头跨重启一致、预算全有或全无、未知类型只拒绝不断连接；**非法状态迁移被拒且不动链**、
+**会话跨重启从日志里重放出来**；以及技能店的**内容寻址**、**许可证闭包**、
+**E0 不许固化**、**同内容重发布幂等**、**被拒时 CAS 里零 blob**。
 
-单元测试另有一条 `drive.sh` 做不到的：**篡改中间一条记录后重开，链必须拒绝**
-（`recovery_required`）——追加式哈希链的价值全在这一条上。
+单元测试另有三条 `drive.sh` 做不到的：
 
-### 三条守卫各自被注入测试证过
+- **篡改中间一条记录后重开，链必须拒绝**（`recovery_required`）——追加式哈希链的价值全在这一条上。
+- **CAS 里被改过的 blob，读的时候必须被拒绝**——「一个无法担保自己返回的字节的存储不是内容寻址，只是内容贴标」。
+- **许可证闭包沿依赖传播**：先放宽策略注册一个 GPL 依赖，再用默认策略注册依赖它的 MIT 技能 → `license_conflict`。
+
+### 四条守卫各自被注入测试证过
 
 | 守卫 | 它防什么 | 注入测试 |
 |---|---|---|
 | `check_kernel.py` | 领域词 / 宿主词泄漏进内核 | `type skillRef struct{ TotalGain int }` → 2 处报警 |
 | `check_contract.py` | 文档与代码的拒绝码漂移 | 改一个 ✅、删一行、给常量改名 → 三种全被抓住 |
+| `check_format.sh` | 混进 diff 的几百行重排 | 第一次运行就判出 `core/refusal.go` 与 `adapters/shell/session.go` 是脏的 |
 | `organs/session` 的穷尽测试 | 状态机漏边、阈值漂移 | 10 个变异（删边、改阈值、改比较符）全部被抓住 |
+| `store` 的双门一致性测试 | 同一事实被两道门判成两个码 | 把 `Validate` 改回 `bad_request` → `one fact, two codes` |
 
 ★ **`check_contract.py` 是在一次真实漂移之后写的**：`drive.sh` 断言 `unknown_session`，
 内核返回 `no_session`，文档也写着 `unknown_session`——**两边都没有报错**。
 它第一次诚实运行就抓出两处真冲突：`stale_epoch` 与 `recovery_required`
 在文档里是 ✅，而它们**不可能靠原样重发恢复**。
+
+★ **同一个教训在 P2 里又出现了一次，这次是在代码内部**：`Manifest.Validate` 对未知许可证
+返回 `bad_request`，而 `SolveLicense` 对同一事实返回 `license_conflict`。两道门、一个事实、
+两个码——客户端的重试循环会在一条路径上工作、另一条上不工作。修法是让两边都调用
+**同一个构造点**（`store/license.go` 的 `UnknownLicenseRefusal`），并加一条测试钉住
+"一个事实只有一个码"。
 
 ### 工具链：自包含，且可重建
 

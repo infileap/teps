@@ -185,6 +185,54 @@ r=$(req '{"t":"session.retry","v":1,"key":"s3-r3","body":{"session":"s3","strate
 expect "换策略立即放行" "$r" '"state":"retrying"'
 
 echo
+echo "—— 技能店：内容寻址，canary 先行 ——"
+pub1='{"t":"skill.publish","v":1,"key":"p1","body":{"manifest":{"skill_id":"read.file","version":"1.0.0","kind":"code","verify_assert":["exit == 0"],"evidence":"E1","license":"MIT","provenance":{"source":"handwritten"},"env":{"interpreter":"builtin"}},"files":{"main.go":"package main\n"}}}'
+r=$(req "$pub1")
+expect "注册成功，落在 canary" "$r" '"channel":"canary"'
+expect "许可证闭包被算出（MIT = permissive = 0）" "$r" '"class":0'
+expect "八步流水线走到了 package" "$r" '"name":"package"'
+skref=$(printf '%s' "$r" | sed -n 's/.*"ref":"\([0-9a-f]\{64\}\)".*/\1/p')
+if [ -n "$skref" ]; then
+  printf '  ok    skill_ref 是 64 位内容哈希\n'
+else
+  printf '  FAIL  没拿到 skill_ref\n'
+  fails=$((fails + 1))
+fi
+
+r=$(req "$pub1")
+expect "同内容重注册得到同一个 ref（去重）" "$r" "\"ref\":\"$skref\""
+
+r=$(req "{\"t\":\"skill.resolve\",\"v\":1,\"body\":{\"ref\":\"$skref\"}}")
+expect "resolve 读回清单" "$r" '"skill_id":"read.file"'
+expect "resolve 读回载荷索引" "$r" '"files":["main.go"]'
+
+echo
+echo "—— 技能店：三道门各拒一次，且都带回诊断 ——"
+r=$(req '{"t":"skill.publish","v":1,"key":"p2","body":{"manifest":{"skill_id":"bad.lic","version":"1","kind":"code","verify_assert":["x"],"evidence":"E1","license":"WTFPL","provenance":{"source":"x"},"env":{"interpreter":"builtin"}},"files":{"a":"x"}}}')
+expect "未知许可证被拒（未知不等于宽松）" "$r" 'license_conflict'
+r=$(req '{"t":"skill.publish","v":1,"key":"p3","body":{"manifest":{"skill_id":"bad.path","version":"1","kind":"code","verify_assert":["x"],"evidence":"E1","license":"MIT","provenance":{"source":"x"},"env":{"interpreter":"builtin"}},"files":{"../evil":"x"}}}')
+expect "越界载荷路径被拒" "$r" 'bad_request'
+r=$(req '{"t":"skill.publish","v":1,"key":"p4","body":{"manifest":{"skill_id":"bad.net","version":"1","kind":"code","verify_assert":["x"],"evidence":"E1","license":"MIT","provenance":{"source":"x"},"env":{"interpreter":"builtin","network":true}},"files":{"a":"x"}}}')
+expect "运行期联网被拒（不可复现）" "$r" 'bad_request'
+expect "被拒时也带回已经走过的步骤" "$r" '"steps"'
+r=$(req '{"t":"skill.resolve","v":1,"body":{"ref":"../../etc/passwd"}}')
+expect "非哈希的 ref 被拒" "$r" 'bad_request'
+
+echo
+echo "—— 技能店：证据等级是固化闸门 ——"
+r=$(req '{"t":"skill.publish","v":1,"key":"p5","body":{"manifest":{"skill_id":"raw.guess","version":"1","kind":"code","verify_assert":["x"],"evidence":"E0","license":"MIT","provenance":{"source":"model"},"env":{"interpreter":"builtin"}},"files":{"a":"x"}}}')
+expect "E0 可以进 canary（生成不等于可用）" "$r" '"channel":"canary"'
+r=$(req '{"t":"skill.promote","v":1,"key":"pr0","body":{"name":"raw.guess","from":"canary","to":"stable"}}')
+expect "E0 不许固化到 stable" "$r" 'bad_request'
+expect "拒绝理由点明了证据等级" "$r" 'E0'
+r=$(req '{"t":"skill.promote","v":1,"key":"pr1","body":{"name":"read.file","from":"canary","to":"stable"}}')
+expect "E1 可以提升到 stable" "$r" '"channel":"stable"'
+r=$(req '{"t":"skill.list","v":1,"body":{"name":"read.file"}}')
+expect "stable 与 canary 指向同一个 ref" "$r" "\"stable\":\"$skref\""
+r=$(req '{"t":"skill.promote","v":1,"key":"pr2","body":{"name":"read.file","from":"canary"}}')
+expect "from/to 没有默认值" "$r" 'bad_request'
+
+echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null
@@ -204,6 +252,14 @@ expect "s2 仍记得停滞" "$r" '"stalled":true'
 r=$(req '{"t":"session.status","v":1,"body":{"session":"s3"}}')
 expect "s3 仍记得三次尝试与各自的策略" "$r" '"same","same","other"'
 expect "s3 仍停在 retrying" "$r" '"state":"retrying"'
+
+echo
+echo "—— 技能店跨重启：指针在盘上，不在内存里 ——"
+r=$(req '{"t":"skill.list","v":1,"body":{"name":"read.file"}}')
+expect "stable 指针跨重启仍在" "$r" "\"stable\":\"$skref\""
+expect "canary 指针跨重启仍在" "$r" "\"canary\":\"$skref\""
+r=$(req "{\"t\":\"skill.resolve\",\"v\":1,\"body\":{\"ref\":\"$skref\"}}")
+expect "内容仍在 CAS 里可读" "$r" '"skill_id":"read.file"'
 
 echo
 echo "—— bye ——"

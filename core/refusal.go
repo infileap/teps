@@ -38,17 +38,17 @@ const (
 
 // retryable is the whole point of the vocabulary: one table, one reading.
 var retryable = map[string]bool{
-	CodeClientAuthority:  false,
-	CodeNoSession:        false,
-	CodeStaleEpoch:       false,
-	CodeBudgetExhausted:  false,
-	CodeBacklogFull:      true,
-	CodeTaintedInput:     false,
-	CodeQuotaExhausted:   false,
-	CodeLicenseConflict:  false,
-	CodeLeaseHeld:        true,
-	CodeShadowNested:     false,
-	CodeFrameTooLarge:    false,
+	CodeClientAuthority: false,
+	CodeNoSession:       false,
+	CodeStaleEpoch:      false,
+	CodeBudgetExhausted: false,
+	CodeBacklogFull:     true,
+	CodeTaintedInput:    false,
+	CodeQuotaExhausted:  false,
+	CodeLicenseConflict: false,
+	CodeLeaseHeld:       true,
+	CodeShadowNested:    false,
+	CodeFrameTooLarge:   false,
 	// A chain that does not match will not match on the next attempt either.
 	// A retry flag must never promise a retry that cannot succeed, so this is
 	// false even though it is the most "recoverable-looking" code here.

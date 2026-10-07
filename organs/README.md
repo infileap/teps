@@ -46,7 +46,7 @@
 | 上下文合成器 | ⬜ 规格已定 | [../docs/CONTRACT.md](../docs/CONTRACT.md) |
 | 核验器 | ⬜ 未写 | 见上文"关键推论" |
 | 记忆 / 索引 | ⬜ 未写 | — |
-| 技能店 | ⬜ 规格已定 | [../store/README.md](../store/README.md) |
+| 技能店 | ✅ **已实现**（P2，但落在 `store/` 不在 `organs/`） | [../store/README.md](../store/README.md) |
 | 算力池注册表 | ⬜ 未写 | — |
 | HTTP 传输 | ✅ 已实现 | [../adapters/shell](../adapters/shell) |
 | 脚本宿主监督 | ⬜ 未写 | — |

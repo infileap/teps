@@ -230,9 +230,9 @@ func (s *server) handleSession(f core.Frame, out *core.Frame) bool {
 		after, _ := st.get(body.Session)
 		out.Seq, out.Rev = e.Seq, e.Seq
 		out.Body = mustJSON(map[string]any{
-			"session":   body.Session,
-			"state":     string(after.State),
-			"attempts":  after.Attempts,
+			"session":              body.Session,
+			"state":                string(after.State),
+			"attempts":             after.Attempts,
 			"must_change_strategy": after.Flags().MustChangeStrategy,
 		})
 

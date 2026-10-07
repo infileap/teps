@@ -20,10 +20,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
 	"sansheng/core"
+	"sansheng/store"
 )
 
 // scannerMax is deliberately larger than the protocol cap: a frame that is too
@@ -34,10 +36,12 @@ type server struct {
 	log      *core.Log
 	acct     *core.Account
 	sessions *sessionStore
+	skills   *store.Store
 }
 
 func main() {
 	dir := flag.String("dir", "", "directory holding the chain")
+	storeDir := flag.String("store", "", "skill store directory (default <dir>/skills)")
 	addr := flag.String("http", "", "listen address, e.g. 127.0.0.1:0")
 	ms := flag.Int64("ms", 60000, "initial budget: milliseconds")
 	tokens := flag.Int64("tokens", 1000000, "initial budget: tokens")
@@ -62,10 +66,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	sdir := *storeDir
+	if sdir == "" {
+		sdir = filepath.Join(*dir, "skills")
+	}
+	sk, err := store.OpenStore(sdir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "shell adapter: "+err.Error())
+		os.Exit(1)
+	}
+
 	s := &server{
 		log:      lg,
 		acct:     core.NewAccount(core.Budget{MS: *ms, Tokens: *tokens, Money: *money}),
 		sessions: sessions,
+		skills:   sk,
 	}
 
 	if *addr != "" {
@@ -140,6 +155,12 @@ func (s *server) handle(f core.Frame) core.Frame {
 
 	if strings.HasPrefix(f.T, "session.") {
 		if s.handleSession(f, &out) {
+			return out
+		}
+	}
+
+	if strings.HasPrefix(f.T, "skill.") {
+		if s.handleSkill(f, &out) {
 			return out
 		}
 	}
