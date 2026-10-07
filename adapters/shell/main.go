@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"sansheng/core"
@@ -30,8 +31,9 @@ import (
 const scannerMax = 8 << 20
 
 type server struct {
-	log  *core.Log
-	acct *core.Account
+	log      *core.Log
+	acct     *core.Account
+	sessions *sessionStore
 }
 
 func main() {
@@ -54,9 +56,16 @@ func main() {
 	}
 	defer lg.Close()
 
+	sessions, ref := newSessionStore(lg)
+	if ref != nil {
+		fmt.Fprintln(os.Stderr, "shell adapter: "+ref.Error())
+		os.Exit(1)
+	}
+
 	s := &server{
-		log:  lg,
-		acct: core.NewAccount(core.Budget{MS: *ms, Tokens: *tokens, Money: *money}),
+		log:      lg,
+		acct:     core.NewAccount(core.Budget{MS: *ms, Tokens: *tokens, Money: *money}),
+		sessions: sessions,
 	}
 
 	if *addr != "" {
@@ -128,6 +137,12 @@ func (s *server) httpHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handle(f core.Frame) core.Frame {
 	out := core.Frame{T: f.T, V: core.ProtocolVersion, ID: f.ID}
+
+	if strings.HasPrefix(f.T, "session.") {
+		if s.handleSession(f, &out) {
+			return out
+		}
+	}
 
 	switch f.T {
 	case "hello":

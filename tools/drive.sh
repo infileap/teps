@@ -127,6 +127,64 @@ r=$(req '{"t":"put","v":1,"key":"k1","body":{"task":"a"}}')
 expect "同键跨重启仍幂等" "$r" "\"head\":\"$head1\""
 
 echo
+echo "—— 会话：状态机记在链上，不在适配器内存里 ——"
+r=$(req '{"t":"session.open","v":1,"key":"s-open","body":{"session":"s1"}}')
+expect "新会话处于 ready" "$r" '"state":"ready"'
+r=$(req '{"t":"session.status","v":1,"body":{"session":"nope"}}')
+expect "不存在的会话 → no_session" "$r" 'no_session'
+r=$(req '{"t":"session.event","v":1,"key":"s1-open","body":{"session":"s1","event":"open"}}')
+expect "ready --open--> routing" "$r" '"state":"routing"'
+
+echo
+echo "—— 非法迁移：拒绝，且一个字节都不写进链 ——"
+before=$(req '{"t":"status","v":1}')
+r=$(req '{"t":"session.event","v":1,"key":"s1-pass","body":{"session":"s1","event":"pass"}}')
+expect "routing 不接受 pass" "$r" 'bad_request'
+after=$(req '{"t":"status","v":1}')
+if [ "$before" = "$after" ]; then
+  printf '  ok    被拒的迁移没有动链\n'
+else
+  printf '  FAIL  被拒的迁移动了链\n        before: %s\n        after:  %s\n' "$before" "$after"
+  fails=$((fails + 1))
+fi
+
+r=$(req '{"t":"session.event","v":1,"key":"s1-route","body":{"session":"s1","event":"route","strategy":"alpha"}}')
+expect "routing --route--> executing" "$r" '"state":"executing"'
+r=$(req '{"t":"session.event","v":1,"key":"s1-finish","body":{"session":"s1","event":"finish"}}')
+expect "executing --finish--> verifying" "$r" '"state":"verifying"'
+r=$(req '{"t":"session.event","v":1,"key":"s1-done","body":{"session":"s1","event":"pass"}}')
+expect "verifying --pass--> done" "$r" '"state":"done"'
+r=$(req '{"t":"session.status","v":1,"body":{"session":"s1"}}')
+expect "轨迹完整" "$r" '"ready","routing","executing","verifying","done"'
+expect "终态不可再走" "$r" '"terminal":true'
+
+echo
+echo "—— 停滞守卫：连续 3 步低增益，纯计数 ——"
+req '{"t":"session.open","v":1,"key":"s2-open","body":{"session":"s2"}}' >/dev/null
+for i in 1 2; do
+  r=$(req "{\"t\":\"session.observe\",\"v\":1,\"key\":\"s2-o$i\",\"body\":{\"session\":\"s2\",\"gain\":0.01,\"action\":\"h$i\"}}")
+done
+expect "两步还不算停滞" "$r" '"stalled":false'
+r=$(req '{"t":"session.observe","v":1,"key":"s2-o3","body":{"session":"s2","gain":0.01,"action":"h3"}}')
+expect "第三步判定停滞" "$r" '"stalled":true'
+
+echo
+echo "—— 同策略重试：只允许一次，第二次必须换 ——"
+req '{"t":"session.open","v":1,"key":"s3-open","body":{"session":"s3"}}' >/dev/null
+req '{"t":"session.event","v":1,"key":"s3-e1","body":{"session":"s3","event":"open"}}' >/dev/null
+req '{"t":"session.event","v":1,"key":"s3-e2","body":{"session":"s3","event":"route","strategy":"same"}}' >/dev/null
+r=$(req '{"t":"session.event","v":1,"key":"s3-e3","body":{"session":"s3","event":"finish"}}')
+expect "s3 到 verifying" "$r" '"state":"verifying"'
+r=$(req '{"t":"session.retry","v":1,"key":"s3-r1","body":{"session":"s3","strategy":"same"}}')
+expect "第一次同策略重试放行" "$r" '"state":"retrying"'
+req '{"t":"session.event","v":1,"key":"s3-e4","body":{"session":"s3","event":"rerun"}}' >/dev/null
+req '{"t":"session.event","v":1,"key":"s3-e5","body":{"session":"s3","event":"finish"}}' >/dev/null
+r=$(req '{"t":"session.retry","v":1,"key":"s3-r2","body":{"session":"s3","strategy":"same"}}')
+expect "第二次同策略重试被拒" "$r" 'bad_request'
+r=$(req '{"t":"session.retry","v":1,"key":"s3-r3","body":{"session":"s3","strategy":"other"}}')
+expect "换策略立即放行" "$r" '"state":"retrying"'
+
+echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null
@@ -135,6 +193,17 @@ r=$(req '{"t":"spend","v":1,"body":{"ms":5,"tokens":5,"money":5}}')
 expect "刚好用完" "$r" '"left"'
 r=$(req '{"t":"spend","v":1,"body":{"ms":1,"tokens":0,"money":0}}')
 expect "再用一点就拒绝" "$r" 'budget_exhausted'
+
+echo
+echo "—— 会话跨重启：从链上重放出来，不是从内存里 ——"
+r=$(req '{"t":"session.status","v":1,"body":{"session":"s1"}}')
+expect "s1 仍是 done" "$r" '"state":"done"'
+expect "s1 轨迹仍完整" "$r" '"ready","routing","executing","verifying","done"'
+r=$(req '{"t":"session.status","v":1,"body":{"session":"s2"}}')
+expect "s2 仍记得停滞" "$r" '"stalled":true'
+r=$(req '{"t":"session.status","v":1,"body":{"session":"s3"}}')
+expect "s3 仍记得三次尝试与各自的策略" "$r" '"same","same","other"'
+expect "s3 仍停在 retrying" "$r" '"state":"retrying"'
 
 echo
 echo "—— bye ——"

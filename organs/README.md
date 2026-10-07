@@ -37,6 +37,35 @@
 外设之间不直接调用；它们通过内核的日志与协议交换状态。
 **这条是"器官可摘换"的全部保证**——一旦两个外设互相 import，它们就长在一起了。
 
-## 当前状态：**设计，未实现。**
+## 当前状态
 
-每个外设的规格在 `../docs/`，没有一行代码。
+| 外设 | 状态 | 位置 / 规格 |
+|---|---|---|
+| **会话状态机 + 停滞守卫** | ✅ **已实现**（纯函数，20 个测试） | `session/` |
+| 仲裁器（opex + capex） | ⬜ 规格已定 | [../docs/ARBITER.md](../docs/ARBITER.md) |
+| 上下文合成器 | ⬜ 规格已定 | [../docs/CONTRACT.md](../docs/CONTRACT.md) |
+| 核验器 | ⬜ 未写 | 见上文"关键推论" |
+| 记忆 / 索引 | ⬜ 未写 | — |
+| 技能店 | ⬜ 规格已定 | [../store/README.md](../store/README.md) |
+| 算力池注册表 | ⬜ 未写 | — |
+| HTTP 传输 | ✅ 已实现 | [../adapters/shell](../adapters/shell) |
+| 脚本宿主监督 | ⬜ 未写 | — |
+
+### `session/` —— 唯一实现了的器官
+
+`state.go` 是一张 `map[State]map[Event]State` 转移表；`guards.go` 是四个纯计数判据
+（停滞 / 循环 / 浪费 / 同策略重试）；`machine.go` 把它们组装成一个值。
+
+**它的"纯"是性质，不是声称**：`clone()` 逐个复制每个 slice，
+`TestStepDoesNotAliasTheReceiver` 与 `TestObserveAndRecordAttemptDoNotAliasTheReceiver`
+让"不别名"成为一条**会失败**的断言，而不是一句注释。
+
+**穷尽性是手写的——因为 Go 的 `match` 不强制穷尽**（Rust 会，这是当初比较两种语言时
+记下的那条差异）。`TestEveryPairIsAccountedFor` 枚举全部 165 个 `(state, event)` 对，
+把允许边与一份手写清单逐字对比；`TestEveryStateIsReachable` 用 BFS 抓孤儿状态。
+**10 个变异测试**（删边、改阈值、改比较符、改结算方式）全部被抓住。
+
+**它不知道自己在哪运行。** `session/` 不 import `core`、不碰文件、不做 I/O——
+所以在 shell 适配器里它是从日志重放出来的，将来在 dsh 适配器里也一样。
+**这条是"外设可摘换"的第一个真实样本，不是口号。**
+

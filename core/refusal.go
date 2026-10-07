@@ -49,7 +49,10 @@ var retryable = map[string]bool{
 	CodeLeaseHeld:        true,
 	CodeShadowNested:     false,
 	CodeFrameTooLarge:    false,
-	CodeRecoveryRequired: true,
+	// A chain that does not match will not match on the next attempt either.
+	// A retry flag must never promise a retry that cannot succeed, so this is
+	// false even though it is the most "recoverable-looking" code here.
+	CodeRecoveryRequired: false,
 	CodeBadRequest:       false,
 }
 
