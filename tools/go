@@ -1,0 +1,24 @@
+#!/bin/sh
+# 项目内自包含 Go 工具链包装器。
+#
+# 为什么需要它，而不是直接 `go build`：
+#   本机 $HOME 与 /usr/local 都是只读的（沙箱 + sudo 被 no_new_privs 挡住），
+#   而 Go 默认把 GOCACHE 和 GOPATH 放在 $HOME 下 —— 不重定向的话 `go build` 会直接失败。
+#   把 GOROOT/GOPATH/GOCACHE 全部钉在 .toolchain/ 内，工具链就完全自包含、可随项目整体搬走。
+#
+# 用法：tools/go build ./...     tools/go test ./...     tools/go vet ./...
+set -e
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+GOROOT="$root/.toolchain/go"
+if [ ! -x "$GOROOT/bin/go" ]; then
+    echo "tools/go: 工具链不存在。先跑 tools/install_go.sh" >&2
+    exit 1
+fi
+
+export GOROOT
+export GOPATH="$root/.toolchain/gopath"
+export GOCACHE="$root/.toolchain/gocache"
+export PATH="$GOROOT/bin:$PATH"
+
+exec "$GOROOT/bin/go" "$@"

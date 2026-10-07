@@ -91,6 +91,8 @@ store/      技能店（内容寻址）
 adapters/   http · shell · dsh · mcp             可删
 docs/       规格
 tools/      check_kernel.py                      四条守卫，可跑
+            go · install_go.sh                   自包含工具链：包装器 + 重建
+.toolchain/ go1.27.1                             gitignore，可重建
 ```
 
 ## 规格
@@ -99,7 +101,8 @@ tools/      check_kernel.py                      四条守卫，可跑
 |---|---|
 | [docs/KERNEL.md](docs/KERNEL.md) | ★ 微内核边界：进核判据、四概念、出核清单 |
 | [docs/ARBITER.md](docs/ARBITER.md) | ★ capex 仲裁：为什么"永远临时应付"是设计缺陷 |
-| [docs/CONTRACT.md](docs/CONTRACT.md) | 七公理 · 帧格式 · 消息集 · 拒绝码 · 四个 ABI |
+| [docs/CONTRACT.md](docs/CONTRACT.md) | 八公理 A1–A8 · 帧格式 · 消息集 · 拒绝码 · 四个 ABI |
+| [docs/PROVENANCE.md](docs/PROVENANCE.md) | 选型证据审查：为什么模型层不能作依据 |
 
 ---
 
@@ -114,13 +117,29 @@ tools/      check_kernel.py                      四条守卫，可跑
 | 四个 ABI + 执行记录 | ✅ 已定 |
 | capex 仲裁 | ✅ 已定 |
 | 四条守卫 | ✅ **可跑，已验**（含 camelCase 泄漏的注入测试） |
+| **Go 工具链** | ✅ **go1.27.1 已装**（项目内自包含、sha256 校验、可重建） |
 | Go 内核实现 | ⬜ **未写一行**（`core/` 只有包文档） |
 | 外设实现 | ⬜ 未写一行 |
 | 宿主适配器 | ⬜ 未写一行 |
 
-⚠️ **本机没有安装 Go 工具链**（`go: command not found`）。
-四条守卫只做文本分析，因此**此刻就能跑**；但 `go build` 在此之前无法执行。
-P0 的第一个前置条件是装 Go。
+### 工具链：自包含，且可重建
+
+本机 **`sudo` 不可用**——沙箱设了 `no new privileges`，`/usr/local` 只读，
+`/var/cache/apt` 属主是 `nobody:nogroup`。⇒ **系统级安装这条路是死的。**
+
+所以工具链落在项目内，且**版本与 sha256 钉死**：
+
+```sh
+tools/install_go.sh      # 重建（幂等：已是同版本则跳过）
+tools/go build ./...     # 用包装器调用，它负责设好 GOROOT/GOPATH/GOCACHE
+```
+
+**为什么必须有包装器**：`$HOME` 也是只读的，而 Go 默认把 `GOCACHE` 与 `GOPATH`
+放在 `$HOME` 下——不重定向的话 `go build` **直接失败**。
+三者全部钉在 `.toolchain/` 内，工具链因此完全自包含、可随项目整体搬走。
+
+已装：**go1.27.1 linux/amd64**（sha256 `63d339f0…8445`，282 MB，`.toolchain/` 已 gitignore）。
+`build` / `vet` / `test` 均已实测通过。
 
 ## 语言：Go（已定案）
 
