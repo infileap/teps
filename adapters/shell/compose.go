@@ -48,6 +48,11 @@ type composeBody struct {
 		MaxAttempts   int           `json:"max_attempts"`
 		MaxIterations int           `json:"max_iterations"`
 	} `json:"composition"`
+	// Ref names a *published* composition. It is the reason composition is
+	// recursive rather than one level deep: a composition that has been
+	// registered is an ordinary skill with an ordinary content address, so it
+	// can be a child of another composition.
+	Ref       string          `json:"ref"`
 	Attempt   string          `json:"attempt"`
 	TaskClass string          `json:"task_class"`
 	Input     json.RawMessage `json:"input"`
@@ -135,13 +140,55 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 		return true
 	}
 
-	comp := executor.Composition{
-		Op:            req.Composition.Op,
-		Children:      req.Composition.Children,
-		MaxAttempts:   req.Composition.MaxAttempts,
-		MaxIterations: req.Composition.MaxIterations,
+	spec := req.Composition
+	// identity is what the posterior is grouped by. An inline composition has
+	// no ref, so it can only be grouped by shape — a real limitation, since two
+	// unrelated serial compositions then share one posterior.
+	identity := composeSkillName(req.Composition.Op)
+	if req.Ref != "" {
+		if len(req.Composition.Children) != 0 {
+			out.Err = core.Refuse(core.CodeBadRequest,
+				"pass either ref or an inline composition, not both: with both present there is no way to tell which one ran")
+			return true
+		}
+		_, man, refusal := s.skills.Resolve(req.Ref)
+		if refusal != nil {
+			out.Err = refusal
+			return true
+		}
+		if man.Kind != store.KindCompose || man.Compose == nil {
+			out.Err = core.Refuse(core.CodeBadRequest,
+				"ref "+req.Ref+" is kind="+string(man.Kind)+" and carries no graph: skill.compose runs a graph, and this ref has none")
+			return true
+		}
+		spec.Op = string(man.Compose.Op)
+		spec.Children = man.Compose.Children
+		spec.Wires = nil
+		for _, w := range man.Compose.Wires {
+			spec.Wires = append(spec.Wires, composeWire{From: w.From, To: w.To})
+		}
+		spec.MaxAttempts = man.Compose.MaxAttempts
+		spec.MaxIterations = man.Compose.MaxIterations
+		// A published composition has its own ref, so its posterior is grouped
+		// by *this* composition rather than by its shape.
+		identity = req.Ref
 	}
-	for _, w := range req.Composition.Wires {
+
+	// A composition is a skill, so it can be a child. Expand any child that is
+	// itself a composition into its own children, recursively.
+	children, refusal := s.expandChildren(spec.Children, 0)
+	if refusal != nil {
+		out.Err = refusal
+		return true
+	}
+
+	comp := executor.Composition{
+		Op:            spec.Op,
+		Children:      children,
+		MaxAttempts:   spec.MaxAttempts,
+		MaxIterations: spec.MaxIterations,
+	}
+	for _, w := range spec.Wires {
 		comp.Wires = append(comp.Wires, executor.Wire{From: w.From, To: w.To})
 	}
 	graph, refusal := executor.PlanComposition(comp)
@@ -186,7 +233,7 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 
 	// The composition's intent, before anything runs.
 	seq, head, open, refusal := s.observe(req.Attempt+keyIntent, observeBody{
-		Attempt: req.Attempt, Skill: composeSkillName(graph.Op), TaskClass: req.TaskClass,
+		Attempt: req.Attempt, Skill: identity, TaskClass: req.TaskClass,
 		Strategy: strategyCompose,
 	})
 	if refusal != nil {
@@ -310,4 +357,56 @@ func payloadNames(pkg *store.Package) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// maxComposeDepth bounds how deep an expansion may go.
+//
+// Content addressing already makes a cycle impossible: a manifest carries its
+// children's *package hashes*, so a self-reference would need its own hash to be
+// known before it exists — a fixed point that does not exist. An indirect cycle
+// fails for the same reason at every step.
+//
+// So this bound is a resource account, not a correctness one. Each level
+// multiplies the work, and refusing is a better failure than exhausting the
+// machine.
+const maxComposeDepth = 8
+
+// expandChildren replaces a child that is itself a composition with its own
+// children, recursively.
+//
+// Only a **serial** composition can stand in for a single step. A parallel one's
+// output is a collection rather than a stream, and splicing a collection into a
+// stream is exactly the silent data loss the wire check exists to prevent. So it
+// is refused by name instead of approximated.
+func (s *server) expandChildren(refs []string, depth int) ([]string, *core.Refusal) {
+	if depth > maxComposeDepth {
+		return nil, core.Refuse(core.CodeBadRequest,
+			"composition nested deeper than "+strconv.Itoa(maxComposeDepth)+
+				" levels: this bound is a resource account, not a cycle check (a cycle is already impossible, because a manifest carries its children's hashes)")
+	}
+	out := make([]string, 0, len(refs))
+	for i, ref := range refs {
+		_, man, refusal := s.skills.Resolve(ref)
+		if refusal != nil {
+			return nil, core.Refuse(refusal.Code,
+				"child "+strconv.Itoa(i)+" cannot be resolved: "+refusal.Reason)
+		}
+		if man.Kind != store.KindCompose || man.Compose == nil {
+			out = append(out, ref)
+			continue
+		}
+		if man.Compose.Op != store.OpSerial {
+			return nil, core.Refuse(core.CodeBadRequest,
+				"child "+strconv.Itoa(i)+" is a "+string(man.Compose.Op)+
+					" composition: only a serial one can stand in for a single step, because a "+
+					string(man.Compose.Op)+
+					" composition produces a collection, and flattening a collection into a stream is silent data loss")
+		}
+		sub, refusal := s.expandChildren(man.Compose.Children, depth+1)
+		if refusal != nil {
+			return nil, refusal
+		}
+		out = append(out, sub...)
+	}
+	return out, nil
 }

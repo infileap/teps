@@ -76,3 +76,38 @@ manifest 哈希只覆盖「声明了什么」，是**内部地址**；package �
 `store` 直接 `import "sansheng/core"`，不另造一套码。第二套词汇会与第一套漂移，
 而漂移是静默的——本项目已经为此付过一次学费（`tools/check_contract.py` 的来历）。
 
+
+---
+
+## `kind:"compose"` —— 组合是一种**结构**，不是执行形态
+
+组合自己不跑进程。它的孩子各自按自己声明的形态跑，**组合的形态是连接它们的图**。
+这就是它是六种 kind 里**唯一**既没有解释器、也没有载荷、也没有自己断言的那一种，
+而这三点都是**拒绝**而不是忽略：
+
+| 字段 | 组合必须怎样 | 拒绝理由 |
+|---|---|---|
+| `env.interpreter` | **必须为空** | `declares no interpreter: it runs no process of its own, so this field would never be read` |
+| `files` | **必须为空** | `carries no files: its graph is its payload, and these N would be bytes nothing runs` |
+| `verify_assert` | **必须为空** | `declares no verify_assert: a composition produces no observation of its own` |
+| `deps` | **必须非空**，且**每个孩子都在里面** | `compose child N is not in deps: a composition must declare its closure` |
+
+**为什么 `verify_assert` 是拒绝而不是「随便填」**：收下一个没人读的字段，就是收下一条
+没人核对的主张。让它真正有意义要拿组合自己的断言去对**它的最终可观测**（串行时 = 最后一步的
+stdout）——那还没实现，所以现在这个字段就是装饰，而装饰不该被接受。
+
+### ★ 内容寻址把无环性**白送了**
+
+manifest 装的是孩子的**包哈希**。一个组合要引用自己，就得让**自己的哈希先于自己确定**——
+那是一个不存在的固定点。间接环每一步同理。
+
+**所以 `maxComposeDepth = 8` 是资源账，不是正确性账。** 这条区分写进了那条拒绝理由里，
+免得日后有人把它当成环检测，并因此以为改大它就会出环。
+
+### ★ 两个哈希，两个职责（这一节把上一轮的结论用在了组合上）
+
+- **manifest 哈希** = 技能**声明**了什么
+- **package 哈希** = 整个**制品**（声明 + 载荷 + 解析出的许可证闭包）= `skill_ref`
+
+refs 指向 package，`deps` 存 package 哈希。组合因此和任何别的技能**一样**：
+它有一个内容地址，所以它可以被 ref 引用、可以被当成另一个组合的孩子、可以有自己的后验。

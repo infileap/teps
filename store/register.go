@@ -93,7 +93,20 @@ const maxPayload = 8 << 20
 // Same boundary as ValidHash and ValidName, for the same reason: these strings
 // arrive from the wire, and a package that joins them into paths is a package
 // that unpacks wherever the sender says.
-func checkPayload(files map[string][]byte) *core.Refusal {
+func checkPayload(files map[string][]byte, kind Kind) *core.Refusal {
+	if kind == KindCompose {
+		// A composition's payload is its graph, and the graph lives in the
+		// manifest. Files here would be bytes that nothing ever runs — so they
+		// are refused rather than ignored, because an ignored field is a claim
+		// nobody checked.
+		if len(files) != 0 {
+			return &core.Refusal{
+				Code:   core.CodeBadRequest,
+				Reason: "kind=compose carries no files: its graph is its payload, and these " + itoa(len(files)) + " would be bytes nothing runs",
+			}
+		}
+		return nil
+	}
 	if len(files) == 0 {
 		return &core.Refusal{Code: core.CodeBadRequest, Reason: "a skill needs at least one file"}
 	}
@@ -179,7 +192,7 @@ func (s *Store) Register(reg Registration) (*Result, *core.Refusal) {
 	})
 
 	// 4. payload, checked before anything is written
-	if ref := checkPayload(reg.Files); ref != nil {
+	if ref := checkPayload(reg.Files, reg.Manifest.Kind); ref != nil {
 		return fail("payload", ref)
 	}
 	names := make([]string, 0, len(reg.Files))

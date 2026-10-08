@@ -532,6 +532,54 @@ r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cc4\",\"body\":{\"attempt\":
 expect "★ 确凿失败的孩子让整个组合失败" "$r" '"outcome":"failed"'
 expect "组合的理由点名是哪一个孩子" "$r" '"reason":"child 0'
 
+echo
+echo "—— 组合作为一种技能：它有自己的 ref，所以可以再被组合 ——"
+xmanC() { # xmanC <skill_id> <op> <children-json> <deps-json>
+  printf '{"skill_id":"%s","version":"1.0.0","kind":"compose","evidence":"E0","license":"MIT","provenance":{"source":"handwritten"},"deps":%s,"compose":{"op":"%s","children":%s}}' "$1" "$4" "$2" "$3"
+}
+cPair=$(xpub cp1 "$(xmanC comb.pair serial "[\"$cA\",\"$cB\"]" "[\"$cA\",\"$cB\"]")" '{}')
+if [ -n "$cPair" ]; then
+  printf '  ok    ★ 组合也能被注册，并且拿到一个普通的 ref\n'
+else
+  printf '  FAIL  组合没能注册\n'; fails=$((fails + 1))
+fi
+
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cp2\",\"body\":{\"ref\":\"$cPair\",\"attempt\":\"c-pair\",\"task_class\":\"task_exec\",\"input\":{\"n\":1}}}")
+expect "★ 按 ref 跑一个已发布的组合" "$r" '"outcome":"ok"'
+expect "两个叶子各自被独立判定" "$r" '"index":1'
+r=$(req '{"t":"arbiter.state","v":1,"body":{}}')
+expect "★ 组合的后验按它自己的 ref 分组" "$r" "\"skill\":\"$cPair\""
+if printf '%s' "$r" | grep -q '"skill":"compose:'; then
+  printf '  FAIL  后验里出现了按形状分组的键\n'
+  fails=$((fails + 1))
+else
+  printf '  ok    后验里没有按形状分组的键（那个键只在给不出 ref 时才会出现）\n'
+fi
+
+cChain=$(xpub cp3 "$(xmanC comb.chain serial "[\"$cPair\",\"$cC\"]" "[\"$cPair\",\"$cC\"]")" '{}')
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cp4\",\"body\":{\"ref\":\"$cChain\",\"attempt\":\"c-chain\",\"task_class\":\"task_exec\",\"input\":{\"n\":1}}}")
+expect "★ 递归：孩子本身是组合，被展开成三个叶子" "$r" '"index":2'
+expect "★ 展开后的第三个叶子是 comb.never，于是整体失败" "$r" '"outcome":"failed"'
+expect "★ 失败归因到展开后的位置" "$r" 'child 2'
+
+cPar=$(xpub cp5 "$(xmanC comb.par parallel "[\"$cA\",\"$cB\"]" "[\"$cA\",\"$cB\"]")" '{}')
+cBad=$(xpub cp6 "$(xmanC comb.bad serial "[\"$cPar\",\"$cA\"]" "[\"$cPar\",\"$cA\"]")" '{}')
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cp7\",\"body\":{\"ref\":\"$cBad\",\"attempt\":\"c-bad\",\"task_class\":\"task_exec\",\"input\":{\"n\":1}}}")
+expect "★ 非串行的组合不能当作单步：集合不是流" "$r" 'silent data loss'
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cp8\",\"body\":{\"ref\":\"$cPair\",\"composition\":{\"op\":\"serial\",\"children\":[\"$cA\"]},\"attempt\":\"c-both\",\"task_class\":\"task_exec\",\"input\":{}}}")
+expect "★ ref 与内联组合不能同时给" "$r" 'not both'
+
+echo
+echo "—— 组合声明里的三道门 ——"
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp9\",\"body\":{\"manifest\":{\"skill_id\":\"comb.owner\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"license\":\"MIT\",\"provenance\":{\"source\":\"x\"},\"deps\":[\"$cA\"],\"env\":{\"interpreter\":\"/bin/sh\"},\"compose\":{\"op\":\"serial\",\"children\":[\"$cA\"]}},\"files\":{}}}")
+expect "★ 组合不许声明解释器（那是没人读的字段）" "$r" 'declares no interpreter'
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp10\",\"body\":{\"manifest\":{\"skill_id\":\"comb.orphan\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"license\":\"MIT\",\"provenance\":{\"source\":\"x\"},\"deps\":[\"$cA\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$cA\",\"$cB\"]}},\"files\":{}}}")
+expect "★ 组合必须声明它调用的东西（闭包）" "$r" 'is not in deps'
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp11\",\"body\":{\"manifest\":{\"skill_id\":\"comb.files\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"license\":\"MIT\",\"provenance\":{\"source\":\"x\"},\"deps\":[\"$cA\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$cA\"]}},\"files\":{\"run.sh\":\"echo hi\n\"}}}")
+expect "★ 组合不许带不会被运行的载荷" "$r" 'carries no files'
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp12\",\"body\":{\"manifest\":{\"skill_id\":\"comb.liar\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"verify_assert\":[\"exit == 0\"],\"license\":\"MIT\",\"provenance\":{\"source\":\"x\"},\"deps\":[\"$cA\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$cA\"]}},\"files\":{}}}")
+expect "★ 组合不许声明自己无从对证的断言" "$r" 'no observation of its own'
+
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null

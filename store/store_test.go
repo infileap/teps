@@ -539,3 +539,192 @@ func TestPromoteRefusesUnverifiedWork(t *testing.T) {
 		t.Fatalf("stable must hold a hash, got %q", got)
 	}
 }
+
+// ---------- 组合作为一种技能 ----------
+
+func h64(c byte) string { return strings.Repeat(string(c), 64) }
+
+func composeOf(children ...string) *Manifest {
+	m := goodManifest()
+	m.SkillID = "comb.pair"
+	m.Kind = KindCompose
+	m.Env = Env{}  // 组合不跑进程，所以没有解释器可声明
+	m.Verify = nil // 组合没有自己的观测，断言无可对证
+	m.Deps = children
+	m.Compose = &Composition{Op: OpSerial, Children: children}
+	return m
+}
+
+func TestComposeManifestFailsClosed(t *testing.T) {
+	cases := []struct {
+		name string
+		make func() *Manifest
+		want string
+	}{
+		{"kind=compose 没有 compose 声明", func() *Manifest {
+			m := composeOf(h64('a'))
+			m.Compose = nil
+			return m
+		}, "kind=compose requires a compose declaration"},
+		{"非 compose 的 kind 带着一张没人走的图", func() *Manifest {
+			m := goodManifest()
+			m.Compose = &Composition{Op: OpSerial, Children: []string{h64('a')}}
+			return m
+		}, "only meaningful on kind=compose"},
+		{"孩子没进 deps", func() *Manifest {
+			m := composeOf(h64('a'), h64('b'))
+			m.Deps = []string{h64('a')}
+			return m
+		}, "is not in deps"},
+		{"组合了空", func() *Manifest {
+			m := composeOf()
+			m.Deps = nil
+			return m
+		}, "needs at least one child"},
+		{"组合声明了一个不会被读的解释器", func() *Manifest {
+			m := composeOf(h64('a'))
+			m.Env = Env{Interpreter: "builtin"}
+			return m
+		}, "declares no interpreter"},
+		{"组合声明了一条自己无从对证的断言", func() *Manifest {
+			m := composeOf(h64('a'))
+			m.Verify = []string{"exit == 0"}
+			return m
+		}, "no observation of its own"},
+	}
+	for _, c := range cases {
+		ref := c.make().Validate()
+		if ref == nil {
+			t.Fatalf("%s: must be refused", c.name)
+		}
+		if !strings.Contains(ref.Reason, c.want) {
+			t.Fatalf("%s: want a reason containing %q, got %q", c.name, c.want, ref.Reason)
+		}
+	}
+}
+
+// 组合是唯一不需要解释器的 kind：它不跑任何进程，跑的是它连起来的那张图。
+func TestOnlyACompositionMayOmitTheInterpreter(t *testing.T) {
+	m := composeOf(h64('a'))
+	if ref := m.Validate(); ref != nil {
+		t.Fatalf("a composition declares no interpreter and that is correct, got %v", ref)
+	}
+	leaf := goodManifest()
+	leaf.Env = Env{}
+	if ref := leaf.Validate(); ref == nil {
+		t.Fatal("every other kind must declare an interpreter: a bare name would be resolved against the server's own PATH")
+	}
+}
+
+// regLeaf 注册一个普通的脚本技能，返回它的 ref。
+func regLeaf(t *testing.T, s *Store, id string) string {
+	t.Helper()
+	m := goodManifest()
+	m.SkillID = id
+	res, ref := s.Register(regWith(m, map[string][]byte{"run.sh": []byte("echo -n " + id)}))
+	if ref != nil {
+		t.Fatalf("registering %s: %v", id, ref)
+	}
+	return res.Ref
+}
+
+func TestACompositionRegistersResolvesAndIsJustAnotherRef(t *testing.T) {
+	s := tmpStore(t)
+	a := regLeaf(t, s, "one")
+	b := regLeaf(t, s, "two")
+
+	m := composeOf(a, b)
+	res, ref := s.Register(regWith(m, map[string][]byte{}))
+	if ref != nil {
+		t.Fatalf("a composition of two registered skills must register, got %v", ref)
+	}
+	if !ValidHash(res.Ref) {
+		t.Fatalf("a composition gets an ordinary content address, got %q", res.Ref)
+	}
+	if res.Ref == a || res.Ref == b {
+		t.Fatal("the composition's ref must differ from its children's")
+	}
+	pkg, back, ref := s.Resolve(res.Ref)
+	if ref != nil {
+		t.Fatalf("a composition must resolve like anything else, got %v", ref)
+	}
+	if back.Kind != KindCompose {
+		t.Fatalf("want kind=compose, got %s", back.Kind)
+	}
+	// 许可证闭包沿 deps 传播：两个 MIT 孩子 ⇒ 整堆仍是 permissive。
+	if pkg.License.Class != Permissive {
+		t.Fatalf("a composition's licence closure is its children's, want permissive, got %s", pkg.License.Class)
+	}
+	if len(pkg.Files) != 0 {
+		t.Fatalf("a composition has no payload of its own, got %v", pkg.Files)
+	}
+}
+
+// ★ 组合不可能引用自己，而且**不需要任何环检测**。
+//
+// 一个 manifest 装的是它孩子的**包哈希**。要引用自己，它的哈希就得先于它自己
+// 被确定——那是一个不存在的固定点。间接环同理：每一步都要求对方的哈希已知。
+// 内容寻址把无环性白送了。深度上限因此只是资源账，不是正确性账。
+func TestACompositionCannotReferenceItself(t *testing.T) {
+	s := tmpStore(t)
+	a := regLeaf(t, s, "one")
+
+	// 想引用自己，就得先知道自己的包哈希。不知道，所以写不出来；
+	// 能写出来的只是「引用了某个不在店里的东西」，而那会被拒。
+	m := composeOf(a, h64('f'))
+	_, ref := s.Register(regWith(m, map[string][]byte{}))
+	if ref == nil {
+		t.Fatal("a child that is not in the store must be refused")
+	}
+	if !strings.Contains(ref.Reason, "not a skill_ref in this store") {
+		t.Fatalf("the refusal must say the child is missing, got %q", ref.Reason)
+	}
+}
+
+// ★ 组合的可靠性是孩子可靠性的乘积，而且组合**本身**也有一个后验——
+// 因为它现在有自己的 ref 了。
+func TestACompositionHasItsOwnRefSoItHasItsOwnReliability(t *testing.T) {
+	s := tmpStore(t)
+	a := regLeaf(t, s, "one")
+	b := regLeaf(t, s, "two")
+	first, ref := s.Register(regWith(composeOf(a, b), map[string][]byte{}))
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	// 同样的形状、同样的孩子顺序 ⇒ 同一个 ref，因此共用同一个后验。
+	again, ref2 := s.Register(regWith(composeOf(a, b), map[string][]byte{}))
+	if ref2 != nil {
+		t.Fatal(ref2)
+	}
+	if first.Ref != again.Ref {
+		t.Fatal("the same composition must have the same address")
+	}
+	// 换一个孩子 ⇒ 不同的 ref ⇒ 不同的后验。这正是按形状分组做不到的事。
+	other := regLeaf(t, s, "three")
+	perm, ref3 := s.Register(regWith(composeOf(b, a), map[string][]byte{}))
+	if ref3 != nil {
+		t.Fatal(ref3)
+	}
+	if perm.Ref == first.Ref {
+		t.Fatal("children order is part of the graph, so A;B and B;A are different skills")
+	}
+	third, ref4 := s.Register(regWith(composeOf(a, other), map[string][]byte{}))
+	if ref4 != nil {
+		t.Fatal(ref4)
+	}
+	if third.Ref == first.Ref {
+		t.Fatal("a different child is a different composition")
+	}
+}
+
+func TestACompositionCarriesNoFiles(t *testing.T) {
+	s := tmpStore(t)
+	a := regLeaf(t, s, "one")
+	_, ref := s.Register(regWith(composeOf(a), map[string][]byte{"run.sh": []byte("echo hi")}))
+	if ref == nil {
+		t.Fatal("a composition's payload is its graph; files here would be bytes nothing runs")
+	}
+	if !strings.Contains(ref.Reason, "carries no files") {
+		t.Fatalf("the refusal must say what the files would have been, got %q", ref.Reason)
+	}
+}

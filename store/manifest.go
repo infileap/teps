@@ -21,11 +21,19 @@ const (
 	KindLLMAPI    Kind = "llm_api"   // outbound HTTP
 	KindRLPolicy  Kind = "rl_policy" // inlined decision policy
 	KindHuman     Kind = "human"     // async; never on the hot path
+	// KindCompose is not an execution form at all: it is a *structure*.
+	//
+	// A composition runs no process of its own. Its children each execute in
+	// their own declared form, and the composition's form is the graph that
+	// connects them. That is why it is the one kind with no interpreter and no
+	// payload: there is nothing for a sandbox to run.
+	KindCompose Kind = "compose"
 )
 
 var kinds = map[Kind]bool{
 	KindAlgorithm: true, KindCode: true, KindScript: true,
 	KindLLMAPI: true, KindRLPolicy: true, KindHuman: true,
+	KindCompose: true,
 }
 
 // Evidence is the trust level of a claim, and it travels **with** the claim.
@@ -117,7 +125,18 @@ func (m *Manifest) Validate() *core.Refusal {
 	if !evidence.Known(m.Evidence) {
 		return bad("unknown evidence level: " + string(m.Evidence))
 	}
-	if len(m.Verify) == 0 {
+	if m.Kind == KindCompose && len(m.Verify) != 0 {
+		// A composition runs no process, so there is no observation of *its own*
+		// for an assertion to be checked against. Accepting one would be
+		// accepting a claim nothing reads.
+		//
+		// The follow-up that would make this field meaningful: check the
+		// composition's assertion against its final observable, which for a
+		// serial composition is the last step's stdout. That is not implemented
+		// yet, and until it is, an assertion here would be decoration.
+		return bad("kind=compose declares no verify_assert: a composition produces no observation of its own, and the children already carry theirs")
+	}
+	if m.Kind != KindCompose && len(m.Verify) == 0 {
 		// Without an assertion there is nothing to verify against, and an
 		// unverifiable skill can only ever report its own success.
 		return bad("verify_assert is required: an unverifiable skill can only self-report")
@@ -137,8 +156,17 @@ func (m *Manifest) Validate() *core.Refusal {
 			return bad("deps must be content hashes, not version numbers: " + d)
 		}
 	}
-	if m.Env.Interpreter == "" {
+	if m.Kind != KindCompose && m.Env.Interpreter == "" {
+		// A composition runs no process, so it has no interpreter to declare.
+		// Every other kind does: exec.Command resolves a bare name against the
+		// *server's* PATH, so an undeclared interpreter means the same ref runs
+		// a different program on a different machine.
 		return bad("env.interpreter is required")
+	}
+	if m.Kind == KindCompose && m.Env.Interpreter != "" {
+		// Same rule as the payload: a composition runs no process, so an
+		// interpreter here is a claim nothing checks.
+		return bad("kind=compose declares no interpreter: it runs no process of its own, so this field would never be read")
 	}
 	if m.Env.Network {
 		return bad("env.network must be false: a skill that fetches at runtime is not reproducible")
@@ -146,12 +174,50 @@ func (m *Manifest) Validate() *core.Refusal {
 	if m.Provenance.Source == "" {
 		return bad("provenance.source is required")
 	}
+	if m.Kind == KindCompose && m.Compose == nil {
+		return bad("kind=compose requires a compose declaration: the kind says how a skill runs, and this one runs as a graph")
+	}
 	if m.Compose != nil {
 		if ref := m.Compose.validate(); ref != nil {
 			return ref
 		}
+		if m.Kind != KindCompose {
+			return bad("a compose declaration is only meaningful on kind=compose: on kind=" + string(m.Kind) + " it would be a graph nothing ever walks")
+		}
+		// Every child must be declared as a dependency. A composition whose
+		// closure does not name what it calls cannot be checked for licences,
+		// and an unchecked licence closure is how a GPL file gets shipped in a
+		// proprietary bundle.
+		declared := map[string]bool{}
+		for _, d := range m.Deps {
+			declared[d] = true
+		}
+		for i, child := range m.Compose.Children {
+			if !declared[child] {
+				return bad("compose child " + itoa(i) + " is not in deps: a composition must declare its closure, and " + child + " is missing")
+			}
+		}
+	}
+	if m.Kind == KindCompose && len(m.Deps) == 0 {
+		return bad("kind=compose needs deps: a composition of nothing would succeed by having done nothing")
 	}
 	return nil
+}
+
+// itoa is strconv.Itoa without the import, so this file's import list stays a
+// statement about what the manifest actually needs.
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b [20]byte
+	pos := len(b)
+	for i > 0 {
+		pos--
+		b[pos] = byte('0' + i%10)
+		i /= 10
+	}
+	return string(b[pos:])
 }
 
 // ManifestHash is the manifest's content address: its environment, its deps and
