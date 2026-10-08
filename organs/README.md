@@ -44,12 +44,13 @@
 | **会话状态机 + 停滞守卫** | ✅ **已实现**（纯函数，20 个测试） | `session/` |
 | **仲裁器（opex + capex）** | ✅ **已实现**（纯函数，8 个变异全被抓住） | `arbiter/` + [../docs/ARBITER.md](../docs/ARBITER.md) |
 | 上下文合成器 | ✅ **已实现**（纯函数，21 个测试） | `composer/` |
-| 核验器 | ⬜ 未写 | 见上文"关键推论" |
+| **核验器** | ✅ **已实现**（纯函数，21 个测试，4 个变异全被抓住） | `executor/verify.go` |
+| **执行器（规划）** | ✅ **已实现**（纯函数，只算跑什么，不跑） | `executor/plan.go` |
 | 记忆 / 索引 | ✅ **已实现**（纯函数，15 个测试） | `memory/` |
 | 技能店 | ✅ **已实现**（P2，但落在 `store/` 不在 `organs/`） | [../store/README.md](../store/README.md) |
 | 算力池注册表 | ⬜ 未写 | — |
 | HTTP 传输 | ✅ 已实现 | [../adapters/shell](../adapters/shell) |
-| 脚本宿主监督 | ⬜ 未写 | — |
+| 脚本宿主监督 | ⬜ 未写（超时已随执行器落地，熔断未做） | — |
 
 ### `session/` —— 第一个实现了的器官
 
@@ -98,3 +99,45 @@
 `memory`、`composer`、`arbiter` 都只依赖 `core` 与 `evidence`，彼此不认识。
 在适配器里它们是**同一条链上各自投影自己的记录**（`rec:"session"` / `"memory"` /
 `"execution"`），而不是一个调另一个。**把三个器官接起来的那个决定，留给了调度方。**
+
+### `executor/` —— 判定不是执行者自己的事
+
+`plan.go` 从 manifest 的投影（`Declaration`）算出**要跑什么**：argv、入口、stdin、时限、断言。
+它**拒绝**它跑不了或不许跑的声明——比如 `budget.ms` 为 0 的，理由是逐字的
+「an execution with no declared deadline is an unbounded one」。
+
+`verify.go` 的 `Judge(asserts []string, obs Observed) Judgement` —— **签名本身就是纪律**：
+入参里没有「成功了吗」这个位置，执行者没有地方把它自己的意见放进来。
+`Observed` 全是别人产生的事实：退出码、是否被时限杀掉、是否根本没启动、收到多少字节、花了多久。
+`verified_by` 恒为 `verify_assert`。
+
+**判不了就说判不了**（`VerdictUnknown`），而 `Outcome()` 对它返回 `false`
+⇒ 适配器**不写 resolution**，链上留下一条永远开着的 intent。
+那不是失败，那是**诚实的第三态**：写 `failed` 是猜，写 `ok` 是骗。经 curl 成立，逐字：
+
+```
+"outcome":"unknown","resolution":null
+reason":"cannot be judged: 我大概成功了吧（an assertion must start with a field name…）；
+ this attempt is left open on the chain on purpose: an open intent IS the honest third state,
+ and writing any of the five outcomes here would be a lie"
+```
+
+**证据只由真实执行提升**：`Elevate` 只认 `Verdict==ok` 且声明等级恰为 E0，且**只给 E1**；
+落地方式是「同一份 payload 以 `evidence=E1` 重新 Register」→ 新 ref、新 manifest hash、
+canary 指针移到新 ref —— **不碰 `Promote` 的 E0 闸门**。自报成功不算证据，它还是 E0。
+
+| 约束 | 断言（都在 `drive.sh` 里） |
+|---|---|
+| 执行者不许自证 | `★ 执行者自报成功：退出码 0` / `★ 核验器仍判失败：声明里那条没做到` |
+| 判不了不写结论 | `★ 判不了就不写 resolution（链上留空）` |
+| 证据只能真实提升 | `★ 一次真实的成功执行把证据从 E0 提到 E1` / `★ 自报成功不算证据：它还是 E0` |
+| 拒绝是值 | `★ 没有声明预算的执行不许开始（A7）` / `★ 被拒的执行在链上一个字节都没写，预算也一分没花` |
+
+**能力边界是显式的**：只实现 `script`（唯一能 spawn 且 `env.network=false` 的形态）。
+`algorithm`（出进程就不是同一次执行）、`code`（ABI 带源码不带二进制）、`llm_api`（要联网）、
+`rl_policy`（没有策略运行时，只剩自报）、`human`（人的一步是声称不是可核验执行）
+—— 五种**都显式拒绝**，理由各不相同。**说清跑不了什么，比假装都能跑更接近可信。**
+
+**四个变异全被抓住**（把「确凿为假」判成 ok；判不了回落到 ok；预算为 0 也放行；
+判不了也硬写 resolution）—— 这四条恰恰是这个组件存在的理由，所以它们有牙这件事是被证明的，
+不是被声称的。

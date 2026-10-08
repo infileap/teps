@@ -358,6 +358,116 @@ expect "收支相抵不算理由" "$r" '"fix":false'
 r=$(req '{"t":"arbiter.fix","v":1,"body":{"calls":100,"at":"E9"}}')
 expect "未知证据等级不给数字" "$r" 'bad_request'
 
+echo
+echo "—— 执行器：技能真的被跑起来，成功与否由核验器说 ——"
+# 前两个技能的声明一模一样（同样的 budget、同样的两条 verify_assert），
+# 只有脚本内容不同：一个真的产出了声明里要的那个词，一个只是自己说自己成功。
+xman() { # xman <skill_id> <verify_assert-json> <budget_ms>
+  printf '{"skill_id":"%s","version":"1.0.0","kind":"script","verify_assert":%s,"budget":{"ms":%s},"evidence":"E0","idempotent":true,"license":"MIT","provenance":{"source":"handwritten"},"env":{"interpreter":"/bin/sh"}}' "$1" "$2" "$3"
+}
+xpub() { # xpub <key> <manifest> <files> -> skill_ref
+  req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"$1\",\"body\":{\"manifest\":$2,\"files\":$3}}" |
+    sed -n 's/.*"ref":"\([0-9a-f]\{64\}\)".*/\1/p'
+}
+xok=$(xpub x1 "$(xman runner.ok '["exit == 0","stdout contains \"RUNNER-OK\""]' 2000)" '{"run.sh":"printf RUNNER-OK\n"}')
+xlie=$(xpub x2 "$(xman lie.self '["exit == 0","stdout contains \"RUNNER-OK\""]' 1500)" '{"run.sh":"printf FAIL; exit 0\n"}')
+xslow=$(xpub x3 "$(xman slow.one '["exit == 0"]' 300)" '{"run.sh":"sleep 5\n"}')
+xvague=$(xpub x4 "$(xman vague.one '["我大概成功了吧"]' 500)" '{"run.sh":"exit 0\n"}')
+xnobud=$(xpub x5 "$(xman no.budget '["exit == 0"]' 0)" '{"run.sh":"exit 0\n"}')
+xamb=$(xpub x6 "$(xman two.files '["exit == 0"]' 1000)" '{"a.sh":"exit 0\n","b.sh":"exit 0\n"}')
+xecho=$(xpub x7 "$(xman echo.stdin '["exit == 0"]' 1000)" '{"run.sh":"cat\n"}')
+if [ -n "$xok" ] && [ -n "$xlie" ] && [ -n "$xslow" ] && [ -n "$xvague" ] &&
+  [ -n "$xnobud" ] && [ -n "$xamb" ] && [ -n "$xecho" ]; then
+  printf '  ok    七个技能已注册（E0，canary）\n'
+else
+  printf '  FAIL  技能注册没拿到 ref：%s %s %s %s %s %s %s\n' "$xok" "$xlie" "$xslow" "$xvague" "$xnobud" "$xamb" "$xecho"
+  fails=$((fails + 1))
+fi
+
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xi1\",\"body\":{\"ref\":\"$xok\",\"attempt\":\"x-ok\",\"task_class\":\"task_exec\",\"elevate\":true}}")
+expect "★ 注册的技能真的被跑起来，核验器判通过" "$r" '"outcome":"ok"'
+expect "判定者是核验器，不是执行器" "$r" '"verified_by":"verify_assert"'
+expect "执行器看到的事实被如实报告（退出码）" "$r" '"exit":0'
+expect "两条声明被逐条判定为真" "$r" '"assert":"exit == 0","result":"true"'
+iseq=$(printf '%s' "$r" | sed -n 's/.*"intent":{"seq":\([0-9]*\).*/\1/p')
+rseq=$(printf '%s' "$r" | sed -n 's/.*"resolution":{"seq":\([0-9]*\).*/\1/p')
+if [ -n "$iseq" ] && [ -n "$rseq" ] && [ "$rseq" -eq $((iseq + 1)) ]; then
+  printf '  ok    ★ intent 先上链、resolution 紧接其后（seq %s→%s），中间没有别的写\n' "$iseq" "$rseq"
+else
+  printf '  FAIL  intent/resolution 不成对：seq=%s/%s\n' "$iseq" "$rseq"
+  fails=$((fails + 1))
+fi
+xelev=$(printf '%s' "$r" | sed -n 's/.*"ref":"\([0-9a-f]\{64\}\)".*/\1/p')
+expect "★ 一次真实的成功执行把证据从 E0 提到 E1" "$r" '"level":"E1","from":"E0","to":"E1"'
+
+r=$(req '{"t":"skill.promote","v":1,"body":{"name":"runner.ok","from":"canary","to":"stable"}}')
+expect "★ 提级后的新 ref 才进得了 stable" "$r" "\"ref\":\"$xelev\""
+expect "canary 指针也落在新 ref 上" "$r" '"channel":"stable"'
+
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xi2\",\"body\":{\"ref\":\"$xlie\",\"attempt\":\"x-lie\",\"task_class\":\"task_exec\"}}")
+expect "★ 执行者自报成功：退出码 0" "$r" '"exit":0'
+expect "★ 核验器仍判失败：声明里那条没做到" "$r" '"outcome":"failed"'
+expect "失败的理由指名道姓（哪条断言为假）" "$r" 'a declared assertion is false'
+expect "失败同样是核验器署名的判定" "$r" '"verified_by":"verify_assert"'
+r=$(req '{"t":"skill.promote","v":1,"body":{"name":"lie.self","from":"canary","to":"stable"}}')
+expect "★ 自报成功不算证据：它还是 E0" "$r" 'evidence is E0'
+expect "★ E0 进不了 stable" "$r" 'unverified work must not be frozen'
+
+rslow=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xi3\",\"body\":{\"ref\":\"$xslow\",\"attempt\":\"x-slow\",\"task_class\":\"task_exec\"}}")
+expect "★ 超出声明预算的进程被杀掉，判超时" "$rslow" '"outcome":"timeout"'
+expect "超时是核验器看时间判的，不是脚本自报的" "$rslow" '"timed_out":true'
+# 这一处读的是「当前开着的 intent 数」，用来证明下面那一次没有闭合。
+ob1=$(printf '%s' "$rslow" | sed -n 's/.*"open":\([0-9]*\).*/\1/p')
+
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xi4\",\"body\":{\"ref\":\"$xvague\",\"attempt\":\"x-vague\",\"task_class\":\"task_exec\"}}")
+expect "★ 声明读不懂时只说判不了，绝不说成功" "$r" '"outcome":"unknown"'
+expect "★ 判不了就不写 resolution（链上留空）" "$r" '"resolution":null'
+ob2=$(printf '%s' "$r" | sed -n 's/.*"open":\([0-9]*\).*/\1/p')
+if [ -n "$ob1" ] && [ -n "$ob2" ] && [ "$ob2" -eq $((ob1 + 1)) ]; then
+  printf '  ok    ★ 判不了的那次没写 resolution，开着的 intent 从 %s 变成 %s，等人显式裁决（另一个是仲裁器段故意留下的）\n' "$ob1" "$ob2"
+else
+  printf '  FAIL  开着的 intent 数没有正好加一：%s → %s\n' "$ob1" "$ob2"
+  fails=$((fails + 1))
+fi
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xi4b\",\"body\":{\"ref\":\"$xvague\",\"attempt\":\"x-vague\",\"task_class\":\"task_exec\"}}")
+expect "★ 判不了的 attempt 不许换个说法重跑" "$r" 'has an intent on the chain and no resolution'
+
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xi1\",\"body\":{\"ref\":\"$xok\",\"attempt\":\"x-ok\",\"task_class\":\"task_exec\"}}")
+expect "★ 同一 attempt 重发：回放既有结论，不跑第二遍" "$r" '"replayed":true'
+expect "回放出来的是同一条 resolution" "$r" "\"resolution\":{\"seq\":$rseq"
+
+# 同一个输入两种写法，进程看见的必须是同一串字节（否则「同样的输入」不成立）。
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xe1\",\"body\":{\"ref\":\"$xecho\",\"attempt\":\"x-e1\",\"task_class\":\"task_exec\",\"input\":{\"b\":1,\"a\":2}}}")
+o1=$(printf '%s' "$r" | sed -n 's/.*"stdout":"\(.*\)","stderr":.*/\1/p')
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xe2\",\"body\":{\"ref\":\"$xecho\",\"attempt\":\"x-e2\",\"task_class\":\"task_exec\",\"input\":{\"a\":2,\"b\":1}}}")
+o2=$(printf '%s' "$r" | sed -n 's/.*"stdout":"\(.*\)","stderr":.*/\1/p')
+if [ -n "$o1" ] && [ "$o1" = "$o2" ]; then
+  printf '  ok    ★ 同一个输入的两种键序，喂给进程的字节完全相同：%s\n' "$o1"
+else
+  printf '  FAIL  同一个输入的两种写法喂进去的字节不同：%s vs %s\n' "$o1" "$o2"
+  fails=$((fails + 1))
+fi
+
+# 五种跑不了的声明：全都是执行之前就被拒，因此链上一个字节都不该动、预算一分不花。
+stat1=$(req '{"t":"status","v":1}')
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xi5\",\"body\":{\"ref\":\"$skref\",\"attempt\":\"x-code\",\"task_class\":\"task_exec\"}}")
+expect "kind=code 不会被假装跑过（没有构建步骤）" "$r" 'needs a build step'
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xi6\",\"body\":{\"ref\":\"$xnobud\",\"attempt\":\"x-nobud\",\"task_class\":\"task_exec\"}}")
+expect "★ 没有声明预算的执行不许开始（A7）" "$r" 'budget.ms must be positive'
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xi7\",\"body\":{\"ref\":\"$xamb\",\"attempt\":\"x-amb\",\"task_class\":\"task_exec\"}}")
+expect "★ 两个文件而没有唯一入口就不许执行" "$r" 'no single entrypoint'
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xi8\",\"body\":{\"ref\":\"$xok\",\"task_class\":\"task_exec\"}}")
+expect "没有 attempt id 的执行被拒（否则永远无法裁决）" "$r" 'bad_request'
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xi9\",\"body\":{\"ref\":\"$xok\",\"attempt\":\"x-noclass\",\"task_class\":\"\"}}")
+expect "没有 task_class 的执行被拒（按类学习要有类）" "$r" 'bad_request'
+stat2=$(req '{"t":"status","v":1}')
+if [ "$stat1" = "$stat2" ]; then
+  printf '  ok    ★ 被拒的执行在链上一个字节都没写，预算也一分没花\n'
+else
+  printf '  FAIL  被拒的执行动了链或花了预算：\n        before: %s\n        after:  %s\n' "$stat1" "$stat2"
+  fails=$((fails + 1))
+fi
+
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null

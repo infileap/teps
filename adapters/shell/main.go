@@ -175,6 +175,14 @@ func (s *server) handle(f core.Frame) core.Frame {
 		}
 	}
 
+	// skill.invoke must be claimed before handleSkill: the skill store owns
+	// skill.publish/resolve/list/promote and would answer this one with
+	// "unknown frame type". The dispatcher stays the only place that knows
+	// which handler owns which frame type.
+	if s.handleExecute(f, &out) {
+		return out
+	}
+
 	if strings.HasPrefix(f.T, "skill.") {
 		if s.handleSkill(f, &out) {
 			return out

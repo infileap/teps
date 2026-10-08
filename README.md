@@ -89,7 +89,9 @@ core/       Frame · Log · Budget · Refusal      459 行 · 6 类型 · 零依
 evidence/   证据阶梯 E0–E4                          唯一一处定义，store 与 memory 都从这里取
 organs/     session（状态机 + 停滞守卫，已实现）
             composer（上下文合成器，已实现）· memory（双时间轴，已实现）
-            仲裁 · 核验 · 算力池                  其余外设，纯函数为主
+            arbiter（升级仲裁 + Beta 自校准，已实现）
+            executor（规划 + 核验：判定不看执行者的意见，已实现）
+            算力池                                其余外设，纯函数为主
 store/      cas（内容寻址）· manifest（Skill ABI）· license（闭包代数）
             refs（可变的那一半）· compose（组合代数）· register（八步流水线）
 adapters/   shell（参考传输：stdio + HTTP，拥有内核）
@@ -117,7 +119,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 
 ---
 
-## 当前状态：**P0–P5 已落地**
+## 当前状态：**P0–P5 已落地，执行器已落地**
 
 诚实地写清楚，免得后来者读成"已经做完了"：
 
@@ -138,7 +140,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | **P2 技能店：注册流水线** | ✅ **`store/register.go`——八步，`ref` 最后才动** |
 | **P2 技能店：可变的一半** | ✅ **`store/refs.go`——先写历史再移指针** |
 | **P2 组合代数** | ✅ **`store/compose.go`——可靠性是乘积；剪枝要报告丢掉了什么** |
-| **自由判据** | ✅ **`tools/drive.sh` 103 项断言全过，只用 curl** |
+| **自由判据** | ✅ **`tools/drive.sh` 134 项断言全过，只用 curl** |
 | **P3 证据阶梯** | ✅ **`evidence/`——唯一一处定义；未知等级传播，不被排序** |
 | **P3 上下文合成器** | ✅ **`organs/composer/`——按 score/单位长度背包；年表段不许被重排** |
 | **P3 记忆** | ✅ **`organs/memory/`——双时间轴；写入不可变；E0 写得下但默认看不见** |
@@ -150,13 +152,15 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | **P5 MCP 翻译器** | ✅ **`adapters/mcp/`——一个工具，不 import 内核，拒绝原样交回** |
 | **P5 适配器按协议命名** | ✅ **没有 `adapters/dsh/`：DSH 走 MCP，所以 mcp 就是它** |
 | **P5 适配器边界守卫** | ✅ **参考传输必须 import，翻译器必须不 import；两个方向都有注入测试** |
-| 执行器（让技能真的跑起来） | ⏳ 子智能体在做 |
+| **执行器 + 独立核验器** | ✅ **`organs/executor/` 纯函数 + `adapters/shell/execute.go` 脏半边；21 个测试，4 个变异全被抓住** |
+| **执行者不许自证** | ✅ **`Judge` 的入参里没有「成功了吗」这个位置；判不了就不写 resolution** |
+| **证据只由真实执行提升** | ✅ **E0→E1，且不碰 `Promote` 的 E0 闸门** |
 
 ### 证据（七条命令，可复跑）
 
 ```sh
-tools/go test ./...                # 八个包，131 个测试
-bash tools/drive.sh                # 103/103，全程只有 curl
+tools/go test ./...                # 八个包，152 个测试
+bash tools/drive.sh                # 134/134，全程只有 curl
 bash tools/drive_mcp.sh            # 21/21，全程只有 printf 的 JSON-RPC
 bash tools/check_format.sh         # gofmt 干净
 python3 tools/check_kernel.py      # 四条内核守卫
@@ -211,6 +215,8 @@ bash tools/drive.sh   # 找那一行：技能腐烂后第 N 次失败起被自�
 | `check_format.sh` | 混进 diff 的几百行重排 | 第一次运行就判出 `core/refusal.go` 与 `adapters/shell/session.go` 是脏的 |
 | `organs/session` 的穷尽测试 | 状态机漏边、阈值漂移 | 10 个变异（删边、改阈值、改比较符）全部被抓住 |
 | `store` 的双门一致性测试 | 同一事实被两道门判成两个码 | 把 `Validate` 改回 `bad_request` → `one fact, two codes` |
+| `organs/arbiter` 的证伪点 | 「系统自己发现」变成一句声称 | 8 个变异（去掉遗忘、去掉探索、去掉 margin、毒化概率）全部被抓住 |
+| `organs/executor` 的四条纪律 | 执行者自证、判不了默认成功、无时限也放行 | 4 个变异全部被抓住（各 1–6 条 FAIL） |
 
 ★ **`check_contract.py` 是在一次真实漂移之后写的**：`drive.sh` 断言 `unknown_session`，
 内核返回 `no_session`，文档也写着 `unknown_session`——**两边都没有报错**。
