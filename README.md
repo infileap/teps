@@ -92,12 +92,16 @@ organs/     session（状态机 + 停滞守卫，已实现）
             仲裁 · 核验 · 算力池                  其余外设，纯函数为主
 store/      cas（内容寻址）· manifest（Skill ABI）· license（闭包代数）
             refs（可变的那一半）· compose（组合代数）· register（八步流水线）
-adapters/   shell（stdio + HTTP，已实现）· http · dsh · mcp   可删
+adapters/   shell（参考传输：stdio + HTTP，拥有内核）
+            mcp（翻译器：JSON-RPC over stdio，不 import 内核）
+            没有 dsh/ —— DSH 走 MCP，所以 mcp 就是它
 docs/       规格
 tools/      check_kernel.py                      四条内核守卫，可跑
             check_contract.py                    文档 ↔ 代码的拒绝码不许漂移
+            check_adapters.py                    翻译器不许 import 内核
             check_format.sh                      gofmt 干净，别让 diff 里混进重排
             drive.sh                             ★ 自由判据：只有 curl 驱动全流程
+            drive_mcp.sh                         ★ 自由判据：只有 printf 的 JSON-RPC
             go · install_go.sh                   自包含工具链：包装器 + 重建
 .toolchain/ go1.27.1                             gitignore，可重建
 ```
@@ -113,7 +117,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 
 ---
 
-## 当前状态：**P0–P4 已落地，P5 未开始**
+## 当前状态：**P0–P5 已落地**
 
 诚实地写清楚，免得后来者读成"已经做完了"：
 
@@ -123,7 +127,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | 协议契约（公理/帧/消息/拒绝码） | ✅ 已定 |
 | 四个 ABI + 执行记录 | ✅ 已定 |
 | capex 仲裁 | ✅ 已定 |
-| 四条内核守卫 + 契约守卫 + 格式守卫 | ✅ **可跑，已验**（领域词泄漏、文档漂移、格式漂移各有注入测试） |
+| 四条内核守卫 + 契约守卫 + 格式守卫 + 适配器守卫 | ✅ **可跑，已验**（领域词泄漏、文档漂移、格式漂移、适配器边界各有注入测试） |
 | **Go 工具链** | ✅ **go1.27.1 已装**（项目内自包含、sha256 校验、可重建） |
 | **P0 内核** | ✅ **四概念已写成类型**（459 行 / 6 公开类型 / 领域词 0） |
 | **P0 shell 适配器** | ✅ **stdio + HTTP，curl 可驱动** |
@@ -143,16 +147,21 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | **P4 后验自校准** | ✅ **带指数遗忘的折叠：技能腐烂后 17 次失败内被自动弃用** |
 | **P4 capex 固化闸门** | ✅ **同一笔节省，E1 拒绝固化而 E4 固化** |
 | **P4 执行记录落在链上** | ✅ **intent/resolution 拆两条；执行者不许自证** |
-| 宿主适配器 dsh / mcp（P5） | ⬜ 未写 |
+| **P5 MCP 翻译器** | ✅ **`adapters/mcp/`——一个工具，不 import 内核，拒绝原样交回** |
+| **P5 适配器按协议命名** | ✅ **没有 `adapters/dsh/`：DSH 走 MCP，所以 mcp 就是它** |
+| **P5 适配器边界守卫** | ✅ **参考传输必须 import，翻译器必须不 import；两个方向都有注入测试** |
+| 执行器（让技能真的跑起来） | ⏳ 子智能体在做 |
 
-### 证据（五条命令，可复跑）
+### 证据（七条命令，可复跑）
 
 ```sh
-tools/go test ./...              # 八个包，131 个测试
-bash tools/drive.sh              # 103/103，全程只有 curl
-bash tools/check_format.sh       # gofmt 干净
-python3 tools/check_kernel.py    # 四条内核守卫
-python3 tools/check_contract.py  # 文档与代码的拒绝码不许漂移
+tools/go test ./...                # 八个包，131 个测试
+bash tools/drive.sh                # 103/103，全程只有 curl
+bash tools/drive_mcp.sh            # 21/21，全程只有 printf 的 JSON-RPC
+bash tools/check_format.sh         # gofmt 干净
+python3 tools/check_kernel.py      # 四条内核守卫
+python3 tools/check_contract.py    # 文档与代码的拒绝码不许漂移
+python3 tools/check_adapters.py    # 翻译器不许 import 内核
 ```
 
 守卫读数：**459 / 3000 行 · 0 / 0 依赖 · 6 / 12 公开类型 · 0 / 0 领域词**。
