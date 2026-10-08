@@ -115,8 +115,14 @@ type observeBody struct {
 	Cost      float64 `json:"cost"`
 }
 
-// handleExecute 认领 skill.invoke。
+// handleExecute 认领 skill.invoke 与 skill.compose。
+//
+// 两个 op 共用一个入口：它们共用同一套 attempt 记账、同一本预算、同一条链。
+// 分成两个分派点就是把「同一次尝试」的记账写两遍，而写两遍的东西会漂移。
 func (s *server) handleExecute(f core.Frame, out *core.Frame) bool {
+	if s.handleSkillCompose(f, out) {
+		return true
+	}
 	if f.T != "skill.invoke" {
 		return false
 	}

@@ -475,6 +475,63 @@ else
   fails=$((fails + 1))
 fi
 
+echo
+echo "—— 组合：串行把上一步的输出接成下一步的输入 ——"
+# 三个孩子里，第二个只在真的读到 TAIL 时才印 CHAINED。
+# 于是「第二步判 ok」这一条同时证明了接线是通的。
+cA=$(xpub c1 "$(xman comb.first '["exit == 0"]' 2000)" '{"run.sh":"cat; echo -n TAIL\n"}')
+cB=$(xpub c2 "$(xman comb.second '["exit == 0","stdout contains \"CHAINED\""]' 2000)" '{"run.sh":"grep -q TAIL && echo -n CHAINED || echo -n SOLO\n"}')
+cC=$(xpub c3 "$(xman comb.never '["exit == 7"]' 1000)" '{"run.sh":"exit 0\n"}')
+if [ -n "$cA" ] && [ -n "$cB" ] && [ -n "$cC" ]; then
+  printf '  ok    三个组合用的技能已注册\n'
+else
+  printf '  FAIL  组合用的技能注册失败：%s %s %s\n' "$cA" "$cB" "$cC"
+  fails=$((fails + 1))
+fi
+
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cc1\",\"body\":{\"attempt\":\"c-ser\",\"task_class\":\"task_exec\",\"composition\":{\"op\":\"serial\",\"children\":[\"$cA\",\"$cB\"]},\"input\":{\"n\":1}}}")
+expect "★ 串行组合跑起来了" "$r" '"op":"serial"'
+expect "★ 第一步判定 ok" "$r" "{\"index\":0,\"ref\":\"$cA\",\"attempt\":\"c-ser#0\",\"outcome\":\"ok\""
+expect "★ 第二步也 ok —— 这一条同时证明它读到了第一步的输出" "$r" "{\"index\":1,\"ref\":\"$cB\",\"attempt\":\"c-ser#1\",\"outcome\":\"ok\""
+expect "总判定由核验器署名（组合不重新求值孩子的断言）" "$r" '"verified_by":"verify_assert"'
+expect "组合的意图先上链" "$r" '"intent":{"seq"'
+expect "组合的结论也上链了" "$r" '"resolution":{"seq"'
+
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cc2\",\"body\":{\"attempt\":\"c-par\",\"task_class\":\"task_exec\",\"composition\":{\"op\":\"parallel\",\"children\":[\"$cA\",\"$cB\"]},\"input\":{\"n\":1}}}")
+expect "★ 并行时第二个孩子拿不到第一个的输出，于是判失败" "$r" "{\"index\":1,\"ref\":\"$cB\",\"attempt\":\"c-par#1\",\"outcome\":\"failed\""
+expect "★ 一个孩子确凿失败，组合就是失败（不藏进 unknown）" "$r" '"reason":"child 1'
+
+reasons=""
+for op in select conditional retry loop; do
+  r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"body\":{\"attempt\":\"c-$op\",\"task_class\":\"task_exec\",\"composition\":{\"op\":\"$op\",\"children\":[\"$cA\"]}}}")
+  rs=$(printf '%s' "$r" | sed -n 's/.*"reason":"\([^"]*\)".*/\1/p')
+  reasons="$reasons$rs
+"
+done
+n=$(printf '%s' "$reasons" | sed '/^$/d' | sort -u | wc -l | tr -d ' ')
+if [ "$n" -eq 4 ]; then
+  printf '  ok    ★ 四个未实现的算子各给各的理由（不是一句「不支持」）\n'
+else
+  printf '  FAIL  四个算子的理由只有 %s 种不同\n' "$n"
+  fails=$((fails + 1))
+fi
+
+before=$(req '{"t":"status","v":1}' | sed -n 's/.*"seq":\([0-9]*\).*/\1/p')
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"body\":{\"attempt\":\"c-miss\",\"task_class\":\"task_exec\",\"composition\":{\"op\":\"serial\",\"children\":[\"$cA\",\"0000000000000000000000000000000000000000000000000000000000000000\"]}}}")
+expect "★ 有孩子解析不了，整个组合在跑之前就被拒" "$r" 'child 1 cannot be resolved'
+after=$(req '{"t":"status","v":1}' | sed -n 's/.*"seq":\([0-9]*\).*/\1/p')
+expect "★ 一条都没上链：前面那个孩子没被白跑" "$after" "$before"
+
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"body\":{\"attempt\":\"c-wire\",\"task_class\":\"task_exec\",\"composition\":{\"op\":\"serial\",\"children\":[\"$cA\",\"$cB\"],\"wires\":[{\"from\":\"0:out\",\"to\":\"out\"}]}}}")
+expect "★ 不去兑现的接线被拒，而不是被忽略" "$r" 'dropping data silently'
+
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cc3\",\"body\":{\"attempt\":\"c-ser\",\"task_class\":\"task_exec\",\"composition\":{\"op\":\"serial\",\"children\":[\"$cA\",\"$cB\"]},\"input\":{\"n\":1}}}")
+expect "★ 复用同一个 attempt 是回放，不是跑第二遍" "$r" '"replayed":true'
+
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cc4\",\"body\":{\"attempt\":\"c-fail\",\"task_class\":\"task_exec\",\"composition\":{\"op\":\"serial\",\"children\":[\"$cC\",\"$cB\"]},\"input\":{\"n\":1}}}")
+expect "★ 确凿失败的孩子让整个组合失败" "$r" '"outcome":"failed"'
+expect "组合的理由点名是哪一个孩子" "$r" '"reason":"child 0'
+
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null

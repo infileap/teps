@@ -41,6 +41,13 @@ type Declaration struct {
 	BudgetMS int64
 	// Input 是调用方给的原始输入 JSON（可为空）。
 	Input []byte
+	// Raw 表示 Input 已经是送去标准输入的那串字节，不要再当 JSON 规范化。
+	//
+	// 组合的串行步就靠它：上一步的 stdout 是**任意字节**，不是 API 输入。
+	// 拿 JSON 规范化器去处理它（json.Decoder 只读第一个值就停，剩下的当尾随数据忽略）
+	// 会把第一个值之后的一切**静默丢掉**——一个缺了尾巴的输入，
+	// 会让下游给出一个看起来正常的错答案。这种错最难查，因为它不报错。
+	Raw bool
 }
 
 // Plan 是「要跑什么」的全部答案。
@@ -57,10 +64,16 @@ type Plan struct {
 	TimeoutMS   int64    `json:"timeout_ms"`
 	Assert      []string `json:"verify_assert"`
 	StdinBytes  int      `json:"stdin_bytes"`
-	// Stdin 是送进子进程标准输入的那串字节：调用方输入的 canonical JSON 加一个换行。
+	// Stdin 是送进子进程标准输入的那串字节，末尾补一个换行。
 	// 规范化发生在这里而不是适配器里，是为了让「同样的输入给同样的输出」
 	// 连「子进程到底看见哪串字节」都包含在内。
+	//
+	// Raw 输入（组合的串行步）不做规范化：那是上游的原始字节。
 	Stdin []byte `json:"-"`
+	// StdinCanonical 说明这串 stdin 是不是被规范化过。
+	// 报告出来，是因为「输入被重新排版过」和「输入原样送达」是两件不同的事，
+	// 而下游看到的行为会因此不同。
+	StdinCanonical bool `json:"stdin_canonical"`
 }
 
 // Plan 从声明算出一次执行，或者拒绝。
@@ -132,13 +145,18 @@ func NewPlan(d Declaration) (Plan, *core.Refusal) {
 	p.Entrypoint = entry
 	p.Argv = []string{p.Interpreter, p.Entrypoint}
 
-	// 6. 标准输入 = 调用方输入的 canonical JSON。
-	stdin, refusal := core.Canonical(d.Input)
-	if refusal != nil {
-		return p, refusal
+	// 6. 标准输入。API 输入要规范化；串行步的输入是上游的原始字节，不许碰。
+	stdin := d.Input
+	if !d.Raw {
+		canon, refusal := core.Canonical(d.Input)
+		if refusal != nil {
+			return p, refusal
+		}
+		stdin = canon
 	}
-	p.Stdin = append(stdin, '\n')
+	p.Stdin = append(append([]byte(nil), stdin...), '\n')
 	p.StdinBytes = len(p.Stdin)
+	p.StdinCanonical = !d.Raw
 	return p, nil
 }
 

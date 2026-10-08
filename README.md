@@ -140,7 +140,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | **P2 技能店：注册流水线** | ✅ **`store/register.go`——八步，`ref` 最后才动** |
 | **P2 技能店：可变的一半** | ✅ **`store/refs.go`——先写历史再移指针** |
 | **P2 组合代数** | ✅ **`store/compose.go`——可靠性是乘积；剪枝要报告丢掉了什么** |
-| **自由判据** | ✅ **`tools/drive.sh` 136 项断言全过，只用 curl** |
+| **自由判据** | ✅ **`tools/drive.sh` 152 项断言全过，只用 curl** |
 | **P3 证据阶梯** | ✅ **`evidence/`——唯一一处定义；未知等级传播，不被排序** |
 | **P3 上下文合成器** | ✅ **`organs/composer/`——按 score/单位长度背包；年表段不许被重排** |
 | **P3 记忆** | ✅ **`organs/memory/`——双时间轴；写入不可变；E0 写得下但默认看不见** |
@@ -156,12 +156,14 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | **执行者不许自证** | ✅ **`Judge` 的入参里没有「成功了吗」这个位置；判不了就不写 resolution** |
 | **证据只由真实执行提升** | ✅ **E0→E1，且不碰 `Promote` 的 E0 闸门** |
 | **组合（执行图）** | ✅ **`organs/executor/compose.go`——serial/parallel 算成执行图；另外四个算子各自说明缺什么；9 个变异全被抓住** |
+| **组合接进适配器** | ✅ **`skill.compose` 按图 spawn、串行步的 stdout 接下一步的 stdin；16 项断言，4 个变异全被抓住** |
+| **组合跑通了** ★ | ✅ 第一次由 curl 跑出**未经人手编写**的执行：两个孩子都没有的行为（`CHAINED`）出现了。⏳ 组合**本身仍不可注册**（没有自己的 ref），所以还不能递归组合——可靠性只能按**形状**分组 |
 
 ### 证据（七条命令，可复跑）
 
 ```sh
-tools/go test ./...                # 八个包，175 个测试
-bash tools/drive.sh                # 136/136，全程只有 curl
+tools/go test ./...                # 八个包，179 个测试
+bash tools/drive.sh                # 152/152，全程只有 curl
 bash tools/drive_mcp.sh            # 21/21，全程只有 printf 的 JSON-RPC
 bash tools/check_format.sh         # gofmt 干净
 python3 tools/check_kernel.py      # 四条内核守卫

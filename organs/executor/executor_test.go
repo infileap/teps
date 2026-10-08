@@ -367,3 +367,58 @@ func TestElevationIsOnlyEverOneStep(t *testing.T) {
 		}
 	}
 }
+
+// ---------- 标准输入：API 输入要规范化，串行步的输入不许碰 ----------
+
+func TestCanonicalInputIsRetypesetAndSaysSo(t *testing.T) {
+	p := mustPlan(t, scriptDecl())
+	if string(p.Stdin) != `{"a":2,"b":1}`+"\n" {
+		t.Fatalf("an API input must reach the child canonicalised, got %q", p.Stdin)
+	}
+	if !p.StdinCanonical {
+		t.Fatal("the plan must disclose that it canonicalised the input")
+	}
+}
+
+// ★ 这一条是「被截断的观测不许用来判假」在**输入侧**的孪生规则。
+//
+// json.Decoder 只读第一个 JSON 值就停，剩下的当尾随数据忽略。所以拿规范化器
+// 去处理上游进程的原始输出，会把第一个值之后的一切**静默丢掉**——
+// 下游于是看到一份缺了尾巴的输入，并给出一个看起来正常的错答案。
+//
+// 这个测试刻意断言「尾巴确实会消失」：它记的是失效模式本身。
+// 哪天换掉规范化器，它会红，那时这条规则就可以重写了。
+func TestCanonicalisingRawUpstreamOutputWouldSilentlyDropTheTail(t *testing.T) {
+	d := scriptDecl()
+	d.Input = []byte(`{"n":1}TAIL`)
+	got := mustPlan(t, d)
+	if string(got.Stdin) != "{\"n\":1}\n" {
+		t.Fatalf("this test documents the failure mode; expected the tail to vanish, got %q", got.Stdin)
+	}
+	if strings.Contains(string(got.Stdin), "TAIL") {
+		t.Fatal("if the tail survived here, the failure mode this rule guards against is gone and the rule should be revisited")
+	}
+}
+
+func TestARawChainedInputIsPassedThroughByteForByte(t *testing.T) {
+	d := scriptDecl()
+	d.Input = []byte(`{"n":1}TAIL`)
+	d.Raw = true
+	got := mustPlan(t, d)
+	if string(got.Stdin) != "{\"n\":1}TAIL\n" {
+		t.Fatalf("a chained step's input is another process's output and must arrive unchanged, got %q", got.Stdin)
+	}
+	if got.StdinCanonical {
+		t.Fatal("a raw input was not canonicalised and the plan must not claim it was")
+	}
+}
+
+func TestARawInputIsNotValidatedAsJSON(t *testing.T) {
+	d := scriptDecl()
+	d.Input = []byte("not json at all\n")
+	d.Raw = true
+	got := mustPlan(t, d)
+	if string(got.Stdin) != "not json at all\n\n" {
+		t.Fatalf("raw bytes must not be parsed as JSON, got %q", got.Stdin)
+	}
+}
