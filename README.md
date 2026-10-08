@@ -155,11 +155,12 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | **执行器 + 独立核验器** | ✅ **`organs/executor/` 纯函数 + `adapters/shell/execute.go` 脏半边；21 个测试，4 个变异全被抓住** |
 | **执行者不许自证** | ✅ **`Judge` 的入参里没有「成功了吗」这个位置；判不了就不写 resolution** |
 | **证据只由真实执行提升** | ✅ **E0→E1，且不碰 `Promote` 的 E0 闸门** |
+| **组合（执行图）** | ✅ **`organs/executor/compose.go`——serial/parallel 算成执行图；另外四个算子各自说明缺什么；9 个变异全被抓住** |
 
 ### 证据（七条命令，可复跑）
 
 ```sh
-tools/go test ./...                # 八个包，152 个测试
+tools/go test ./...                # 八个包，175 个测试
 bash tools/drive.sh                # 136/136，全程只有 curl
 bash tools/drive_mcp.sh            # 21/21，全程只有 printf 的 JSON-RPC
 bash tools/check_format.sh         # gofmt 干净
