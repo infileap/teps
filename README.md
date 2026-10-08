@@ -140,7 +140,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | **P2 技能店：注册流水线** | ✅ **`store/register.go`——八步，`ref` 最后才动** |
 | **P2 技能店：可变的一半** | ✅ **`store/refs.go`——先写历史再移指针** |
 | **P2 组合代数** | ✅ **`store/compose.go`——可靠性是乘积；剪枝要报告丢掉了什么** |
-| **自由判据** | ✅ **`tools/drive.sh` 134 项断言全过，只用 curl** |
+| **自由判据** | ✅ **`tools/drive.sh` 136 项断言全过，只用 curl** |
 | **P3 证据阶梯** | ✅ **`evidence/`——唯一一处定义；未知等级传播，不被排序** |
 | **P3 上下文合成器** | ✅ **`organs/composer/`——按 score/单位长度背包；年表段不许被重排** |
 | **P3 记忆** | ✅ **`organs/memory/`——双时间轴；写入不可变；E0 写得下但默认看不见** |
@@ -160,7 +160,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 
 ```sh
 tools/go test ./...                # 八个包，152 个测试
-bash tools/drive.sh                # 134/134，全程只有 curl
+bash tools/drive.sh                # 136/136，全程只有 curl
 bash tools/drive_mcp.sh            # 21/21，全程只有 printf 的 JSON-RPC
 bash tools/check_format.sh         # gofmt 干净
 python3 tools/check_kernel.py      # 四条内核守卫

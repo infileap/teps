@@ -178,6 +178,18 @@ func (s *server) arbiterObserve(f core.Frame, out *core.Frame) {
 		no := false
 		rec.OK = &no
 		rec.Verified = body.Verified
+	case "unknown":
+		// "unknown" is what a reader infers from a missing resolution; it is not
+		// a value anyone writes. Writing it would make it terminal — "this
+		// attempt is concluded, and the conclusion is that we do not know" —
+		// when the honest record is an intent that stays open and can still be
+		// resolved by a human, by a second verifier, or by a re-run.
+		//
+		// A written unknown closes a door. An open intent leaves one open.
+		s.decisions.unlock()
+		out.Err = core.Refuse(core.CodeBadRequest,
+			"unknown is a derived reading, not a written outcome: leave the intent open instead")
+		return
 	default:
 		s.decisions.unlock()
 		out.Err = core.Refuse(core.CodeBadRequest, "unknown outcome: "+body.Outcome)

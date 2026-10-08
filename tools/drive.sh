@@ -307,12 +307,19 @@ r=$(req '{"t":"arbiter.observe","v":1,"key":"a5","body":{"skill":"read.file","ta
 expect "★ 没有 attempt id 的观测被拒" "$r" 'bad_request'
 r=$(req '{"t":"arbiter.observe","v":1,"key":"a6","body":{"attempt":"t4","skill":"read.file","task_class":"task_exec","outcome":"nonsense","verified_by":"v"}}')
 expect "未知结果被拒" "$r" 'bad_request'
+# t5 is opened first on purpose. Without an open attempt, a refusal here could
+# have come from the "no open attempt to resolve" door instead, and a test that
+# only checks the code cannot tell the two doors apart.
+r=$(req '{"t":"arbiter.observe","v":1,"key":"a6a","body":{"attempt":"t5","skill":"read.file","task_class":"task_exec"}}')
+expect "为 t5 写入意图（否则下面那道门认不出是谁拒的）" "$r" '"open":'
+r=$(req '{"t":"arbiter.observe","v":1,"key":"a6b","body":{"attempt":"t5","skill":"read.file","task_class":"task_exec","outcome":"unknown","verified_by":"v"}}')
+expect "★ unknown 是读出来的，不是写上去的" "$r" 'derived reading, not a written outcome'
 r=$(req '{"t":"arbiter.state","v":1,"body":{"skill":"read.file","task_class":"task_exec"}}')
 # The unquoted form is the point: a number rendered as text stops being a
 # number. One verified ok on a Beta(1,1) prior is 2/3, so 0.6 is also the
 # arithmetic, not a magic threshold.
 expect "后验被报告，且是数字不是字符串" "$r" '"mean":0.6'
-expect "被拒的四次一条都没上链" "$r" '"observations":1'
+expect "★ 被拒的观测一条都没上链" "$r" '"observations":1'
 
 echo
 echo "—— 仲裁器：技能腐烂，没人通知它 ——"

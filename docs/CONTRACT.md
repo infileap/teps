@@ -190,18 +190,31 @@ decide  → 占 grant
 
 // apply 之后写
 {"rec": "resolution", "of": "<intent head 哈希>",
- "outcome": "ok|error|timeout|refused|degraded|unknown",
+ "outcome": "ok|error|timeout|refused|degraded",
  "verified_by": "verifier", "verify_assert": ...,
  "gain": ..., "actual": {...}}
 ```
 
 **重放规则：**
 
-> **`intent` 之后没有同名 `resolution` ⇒ `outcome = "unknown"`，
+> **`intent` 之后没有同名 `resolution` ⇒ 读作 `unknown`，
 > 必须显式裁决，不许默认成 `ok`。**
 
 `unknown` 是**诚实的第三态**。把它并入 `ok` 会制造假成功；
 并入 `error` 会惩罚一次可能真的成功的执行。**两者都是撒谎。**
+
+★ **`unknown` 是读出来的，不是写上去的。** 它曾经被列在上面那个 outcome 枚举里，
+那是个错误——如果它是可以写的一个值，它就成了一条**终局**记录：
+「这次尝试已了结，结论是我们不知道」。而留一条**开着的 intent** 说的是另一件事：
+「这次尝试未了结」，它**仍然可被处置**——人可以后来裁决它，第二个核验器可以重判它，
+它可以被重跑。
+
+> **写下的 `unknown` 关上一扇门；开着的 intent 留着一扇门。**
+> 同一个词，一个是终点，一个是待办。
+
+因此 `adapters/shell/decision.go` 的 switch **拒收** `outcome:"unknown"`
+（回 `bad_request`，理由逐字说明它是派生量），并且**从不产出**它。
+「判不了」的落地方式是**不写 resolution**。
 
 ### 两个不可信字段要改名
 
