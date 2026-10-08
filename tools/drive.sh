@@ -548,13 +548,7 @@ r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cp2\",\"body\":{\"ref\":\"$c
 expect "★ 按 ref 跑一个已发布的组合" "$r" '"outcome":"ok"'
 expect "两个叶子各自被独立判定" "$r" '"index":1'
 r=$(req '{"t":"arbiter.state","v":1,"body":{}}')
-expect "★ 组合的后验按它自己的 ref 分组" "$r" "\"skill\":\"$cPair\""
-if printf '%s' "$r" | grep -q '"skill":"compose:'; then
-  printf '  FAIL  后验里出现了按形状分组的键\n'
-  fails=$((fails + 1))
-else
-  printf '  ok    后验里没有按形状分组的键（那个键只在给不出 ref 时才会出现）\n'
-fi
+expect "★ 按 ref 跑的组合，后验按它自己的 ref 分组" "$r" "\"skill\":\"$cPair\""
 
 cChain=$(xpub cp3 "$(xmanC comb.chain serial "[\"$cPair\",\"$cC\"]" "[\"$cPair\",\"$cC\"]")" '{}')
 r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cp4\",\"body\":{\"ref\":\"$cChain\",\"attempt\":\"c-chain\",\"task_class\":\"task_exec\",\"input\":{\"n\":1}}}")

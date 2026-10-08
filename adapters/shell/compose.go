@@ -327,8 +327,11 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 	res.VerifiedBy = total.VerifiedBy
 	res.Reason = total.Reason
 	if outcome, write := total.Verdict.Outcome(); write {
+		// identity, not composeSkillName: the intent and the resolution must name
+		// the same thing, or the posterior is opened under one key and closed
+		// under another — and only the resolution is what the table counts.
 		seq, head, open, refusal := s.observe(req.Attempt+keyResolution, observeBody{
-			Attempt: req.Attempt, Skill: composeSkillName(graph.Op), TaskClass: req.TaskClass,
+			Attempt: req.Attempt, Skill: identity, TaskClass: req.TaskClass,
 			Strategy: strategyCompose, Outcome: outcome, Verified: total.VerifiedBy,
 		})
 		if refusal != nil {
