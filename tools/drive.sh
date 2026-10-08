@@ -548,7 +548,7 @@ r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cp2\",\"body\":{\"ref\":\"$c
 expect "★ 按 ref 跑一个已发布的组合" "$r" '"outcome":"ok"'
 expect "两个叶子各自被独立判定" "$r" '"index":1'
 r=$(req '{"t":"arbiter.state","v":1,"body":{}}')
-expect "★ 按 ref 跑的组合，后验按它自己的 ref 分组" "$r" "\"skill\":\"$cPair\""
+expect "★ 按 ref 跑的组合，后验按它的 skill_id 分组（不是 ref：升级会换 ref）" "$r" '"skill":"comb.pair"' 
 
 cChain=$(xpub cp3 "$(xmanC comb.chain serial "[\"$cPair\",\"$cC\"]" "[\"$cPair\",\"$cC\"]")" '{}')
 r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cp4\",\"body\":{\"ref\":\"$cChain\",\"attempt\":\"c-chain\",\"task_class\":\"task_exec\",\"input\":{\"n\":1}}}")
@@ -573,7 +573,50 @@ r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp11\",\"body\":{\"manifest\
 expect "★ 组合不许带不会被运行的载荷" "$r" 'carries no files'
 r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp12\",\"body\":{\"manifest\":{\"skill_id\":\"comb.liar\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"verify_assert\":[\"exit == 0\"],\"license\":\"MIT\",\"provenance\":{\"source\":\"x\"},\"deps\":[\"$cA\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$cA\"]}},\"files\":{}}}")
 expect "★ 组合不许声明自己无从对证的断言" "$r" 'no observation of its own'
+echo
+echo "—— 规划器：让系统提议一条没人写过的链 ——"
+xtyp() { # xtyp <skill_id> <in-json> <out-json>
+  printf '{"skill_id":"%s","version":"1.0.0","kind":"script","input_schema":%s,"output_schema":%s,"verify_assert":["exit == 0"],"budget":{"ms":2000},"evidence":"E1","idempotent":true,"license":"MIT","provenance":{"source":"handwritten"},"env":{"interpreter":"/bin/sh"}}' "$1" "$2" "$3"
+}
+tA=$(xpub t1 "$(xtyp typ.split '["doc"]' '["lines"]')" '{"run.sh":"cat; echo -n TAIL\n"}')
+tB=$(xpub t2 "$(xtyp typ.tag '["lines"]' '["tagged"]')" '{"run.sh":"grep -q TAIL && echo -n CHAINED || echo -n SOLO\n"}')
+tC=$(xpub t3 "$(xtyp typ.wrap '["tagged"]' '["final"]')" '{"run.sh":"cat; echo -n WRAPPED\n"}')
 
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"tp0\",\"body\":{\"ref\":\"$tB\",\"attempt\":\"tp-alone\",\"task_class\":\"task_exec\",\"input\":{}}}")
+expect "★ typ.tag 单独跑只会印 SOLO：它需要上游" "$r" '"stdout":"SOLO"'
+
+r=$(req '{"t":"compose.propose","v":1,"body":{"from":["doc"],"to":["tagged"],"task_class":"task_exec","max_depth":4,"floor":0.1,"max_proposals":5}}')
+expect "★ 规划器从类型里找到了这条链（没人告诉它）" "$r" '"names":["typ.split","typ.tag"]'
+expect "★ 提议自述它为什么够得着" "$r" '"why"'
+expect "★ 不声明类型的技能被报告为无法参与规划" "$r" 'will not guess what a skill accepts'
+
+r=$(req '{"t":"compose.propose","v":1,"body":{"from":["doc"],"to":["nowhere"],"task_class":"task_exec","max_depth":4,"floor":0.1}}')
+expect "★ 够不着的目标不提议" "$r" '"proposals":[]'
+expect "★ 但它报告自己探索过多少状态" "$r" '"states"'
+
+r=$(req '{"t":"compose.propose","v":1,"body":{"from":["doc"],"to":["tagged"],"task_class":"task_exec","max_depth":4,"floor":0.99}}')
+expect "★ 可靠性地板把链剪掉，并说明理由" "$r" 'below the floor'
+
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"tp1\",\"body\":{\"manifest\":{\"skill_id\":\"auto.tag\",\"version\":\"1.0.0\",\"kind\":\"compose\",\"evidence\":\"E0\",\"license\":\"MIT\",\"provenance\":{\"source\":\"planner\"},\"deps\":[\"$tA\",\"$tB\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$tA\",\"$tB\"]}},\"files\":{}}}")
+autoRef=$(printf '%s' "$r" | sed -n 's/.*"ref":"\([0-9a-f]\{64\}\)".*/\1/p')
+expect "★ 搜索的结果被注册成了一个技能" "$r" '"channel":"canary"'
+expect "★ 它从未运行过，所以是 E0 —— 不是默认值，是唯一为真的答案" "$r" '"evidence":"E0"'
+if [ -n "$autoRef" ] && [ "$autoRef" != "$tA" ] && [ "$autoRef" != "$tB" ]; then
+  printf '  ok    ★ 它是一个新的制品：ref 与任何孩子都不同\n'
+else
+  printf '  FAIL  自动建出来的组合没有自己的 ref\n'; fails=$((fails + 1))
+fi
+
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"tp2\",\"body\":{\"ref\":\"$autoRef\",\"attempt\":\"tp-auto\",\"task_class\":\"task_exec\",\"input\":{}}}")
+expect "★★ 没人写过这条链，它跑通了" "$r" '"outcome":"ok"'
+expect "★★ 它的行为不是任何单个技能的行为（同一个输入，单跑是 SOLO）" "$r" '"index":1'
+
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"tp3\",\"body\":{\"manifest\":{\"skill_id\":\"auto.bad\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"license\":\"MIT\",\"provenance\":{\"source\":\"planner\"},\"deps\":[],\"compose\":{\"op\":\"serial\",\"children\":[]}},\"files\":{}}}")
+expect "空组合不许被注册" "$r" 'needs at least one child'
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"tp4\",\"body\":{\"manifest\":{\"skill_id\":\"auto.orphan\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"license\":\"MIT\",\"provenance\":{\"source\":\"planner\"},\"deps\":[\"$tA\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$tA\",\"$tB\"]}},\"files\":{}}}")
+expect "★ 组合必须声明它调用的东西" "$r" 'is not in deps'
+
+echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null

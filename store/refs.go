@@ -179,3 +179,25 @@ func (r *Refs) Channels(name string) ([]string, error) {
 	sort.Strings(out)
 	return out, nil
 }
+
+// Names lists every ref name the store knows.
+//
+// A name with no pointer yet is still listed: a canary-only skill is a skill,
+// and a catalog that hides it would disagree with what skill.list shows.
+func (r *Refs) Names() ([]string, *core.Refusal) {
+	ents, err := os.ReadDir(r.root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, core.Refuse(core.CodeBadRequest, "the refs directory could not be read: "+err.Error())
+	}
+	var out []string
+	for _, e := range ents {
+		if e.IsDir() && ValidName(e.Name()) {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}

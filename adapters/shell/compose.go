@@ -96,7 +96,16 @@ func composeSkillName(op string) string { return "compose:" + op }
 
 // handleSkillCompose claims skill.compose.
 func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
-	if f.T != "skill.compose" {
+	switch f.T {
+	case "compose.propose":
+		if s.skills == nil {
+			out.Err = core.Refuse(core.CodeBadRequest, "no skill store is attached")
+			return true
+		}
+		s.handlePropose(f, out)
+		return true
+	case "skill.compose":
+	default:
 		return false
 	}
 	if s.skills == nil {
@@ -141,9 +150,23 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 	}
 
 	spec := req.Composition
-	// identity is what the posterior is grouped by. An inline composition has
-	// no ref, so it can only be grouped by shape — a real limitation, since two
-	// unrelated serial compositions then share one posterior.
+	// identity is what the posterior is grouped by, and it is a **name**, not a
+	// ref — the same rule skill.invoke follows.
+	//
+	// Keying by ref looks more precise and is worse: elevation re-registers the
+	// same payload as evidence=E1, which produces a *new* ref. A ref-keyed
+	// posterior would therefore reset exactly when a skill was promoted, and the
+	// runs that justified the promotion would be the ones erased. The chain
+	// still records the ref on every observation, so "which implementation was
+	// this" stays answerable; the posterior answers a different question, which
+	// is "how does this capability behave".
+	//
+	// The cost is real and worth naming: two unrelated implementations that
+	// share a skill_id share one posterior. That is a naming problem, and the
+	// audit trail is where it shows up.
+	//
+	// An inline composition has no name of its own, so it can only be grouped by
+	// shape — two unrelated serial compositions then share one posterior.
 	identity := composeSkillName(req.Composition.Op)
 	if req.Ref != "" {
 		if len(req.Composition.Children) != 0 {
@@ -169,9 +192,9 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 		}
 		spec.MaxAttempts = man.Compose.MaxAttempts
 		spec.MaxIterations = man.Compose.MaxIterations
-		// A published composition has its own ref, so its posterior is grouped
-		// by *this* composition rather than by its shape.
-		identity = req.Ref
+		// Grouped by the composition's own name, exactly as skill.invoke groups
+		// by skill_id — see the note on `identity` below.
+		identity = man.SkillID
 	}
 
 	// A composition is a skill, so it can be a child. Expand any child that is

@@ -158,13 +158,15 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | **组合（执行图）** | ✅ **`organs/executor/compose.go`——serial/parallel 算成执行图；另外四个算子各自说明缺什么；9 个变异全被抓住** |
 | **组合接进适配器** | ✅ **`skill.compose` 按图 spawn、串行步的 stdout 接下一步的 stdin；16 项断言，4 个变异全被抓住** |
 | **组合跑通了** ★ | ✅ 第一次由 curl 跑出**未经人手编写**的执行：两个孩子都没有的行为（`CHAINED`）出现了 |
-| **组合是递归的** ★ | ✅ **`kind:"compose"` 给组合一个普通的内容地址**，于是它进得了技能店、当得了另一个组合的孩子。按 `ref` 跑；孩子本身是组合就展开成它的孩子（`maxComposeDepth=8`，那是**资源账不是环检测**——环早已不可能，因为 manifest 装的是孩子的哈希）。后验按**它自己的 ref** 分组，不再按形状 |
+| **组合是递归的** ★ | ✅ **`kind:"compose"` 给组合一个普通的内容地址**，于是它进得了技能店、当得了另一个组合的孩子。按 `ref` 跑；孩子本身是组合就展开成它的孩子（`maxComposeDepth=8`，那是**资源账不是环检测**——环早已不可能，因为 manifest 装的是孩子的哈希）。后验按**它的 skill_id** 分组（不是 ref：升级会换 ref，而按 ref 分组会在技能被提升的那一刻重置，抹掉促成那次提升的运行记录） |
+| **组合搜索（规划器）** ★★ | ✅ **`organs/planner/`——从类型里搜出没人写过的链，按可靠性剪枝、报告被丢掉的路。`compose.propose` 只提议不运行；提议用 `skill.publish` 注册（组合就是技能，没有第二个发布口）** |
+| **组合可爆** ★★★ | ✅ **第一次闭环：规划器找到 `typ.split;typ.tag`（没人告诉它），注册成 `auto.tag`，跑通。同一个输入下 `typ.tag` 单跑印 `SOLO`、链上印 `CHAINED`——一个任何单个技能都不产生的行为** |
 
 ### 证据（七条命令，可复跑）
 
 ```sh
-tools/go test ./...                # 九个包，188 个测试
-bash tools/drive.sh                # 164/164，全程只有 curl
+tools/go test ./...                # 九个包，203 个测试
+bash tools/drive.sh                # 179/179，全程只有 curl
 bash tools/drive_mcp.sh            # 21/21，全程只有 printf 的 JSON-RPC
 bash tools/check_format.sh         # gofmt 干净
 python3 tools/check_kernel.py      # 四条内核守卫

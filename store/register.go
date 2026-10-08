@@ -309,3 +309,41 @@ func asRefusal(err error) *core.Refusal {
 	}
 	return &core.Refusal{Code: core.CodeBadRequest, Reason: err.Error()}
 }
+
+// CatalogEntry is one skill as the store knows it.
+type CatalogEntry struct {
+	Name     string
+	Ref      string
+	Channel  string
+	Manifest *Manifest
+}
+
+// Catalog lists every skill in the store.
+//
+// The stable pointer answers first, because that is what a caller would get.
+// A canary-only skill is still listed: hiding it would make the catalog
+// disagree with what skill.list shows.
+func (s *Store) Catalog() ([]CatalogEntry, *core.Refusal) {
+	names, ref := s.Refs.Names()
+	if ref != nil {
+		return nil, ref
+	}
+	out := make([]CatalogEntry, 0, len(names))
+	for _, name := range names {
+		e := CatalogEntry{Name: name}
+		if h, r := s.Refs.Get(name, ChannelStable); r == nil && h != "" {
+			e.Ref, e.Channel = h, ChannelStable
+		} else if h, r := s.Refs.Get(name, ChannelCanary); r == nil && h != "" {
+			e.Ref, e.Channel = h, ChannelCanary
+		} else {
+			continue
+		}
+		_, man, r := s.Resolve(e.Ref)
+		if r != nil {
+			continue
+		}
+		e.Manifest = man
+		out = append(out, e)
+	}
+	return out, nil
+}
