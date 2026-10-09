@@ -39,6 +39,7 @@ type server struct {
 	memory    *memoryStore
 	skills    *store.Store
 	decisions *decisionStore
+	reflexes  *reflexStore
 }
 
 func main() {
@@ -90,6 +91,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	rfx, ref := newReflexStore(lg)
+	if ref != nil {
+		fmt.Fprintln(os.Stderr, "shell adapter: "+ref.Reason)
+		os.Exit(1)
+	}
+
 	s := &server{
 		log:       lg,
 		acct:      core.NewAccount(core.Budget{MS: *ms, Tokens: *tokens, Money: *money}),
@@ -97,6 +104,7 @@ func main() {
 		memory:    mem,
 		skills:    sk,
 		decisions: dec,
+		reflexes:  rfx,
 	}
 
 	if *addr != "" {
@@ -193,6 +201,9 @@ func (s *server) handle(f core.Frame) core.Frame {
 		return out
 	}
 
+	if s.handleReflex(f, &out) {
+		return out
+	}
 	if s.handleDecision(f, &out) {
 		return out
 	}

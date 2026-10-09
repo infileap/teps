@@ -46,7 +46,16 @@ import (
 const (
 	// InitialStrength is where a newly observed rule starts: below the fire
 	// threshold, so one observation is never enough to answer with.
-	InitialStrength = 0.5
+	// 0.3, not 0.5, and the difference is a property the layer promises.
+	//
+	// An observation both creates a rule and applies its outcome, so the
+	// starting strength is already one step along: 0.3 + ReinforceStep = 0.5,
+	// still below the threshold. **One success is therefore never enough to
+	// start answering** — a rule has to be seen working twice. At 0.5 the first
+	// success landed on 0.7 and fired, which contradicted the paragraph above
+	// while every unit test still passed, because the test had the wrong
+	// constant baked into its expectation.
+	InitialStrength = 0.3
 
 	// FireThreshold is the strength a rule must reach before it answers.
 	FireThreshold = 0.6

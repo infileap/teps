@@ -59,13 +59,40 @@ func TestAFreshRuleDoesNotFire(t *testing.T) {
 	}
 }
 
-func TestOneSuccessMakesItFire(t *testing.T) {
+// ★ One success is deliberately NOT enough.
+//
+// An observation both creates a rule and applies its outcome, so a fresh rule
+// already carries one step: 0.3 + 0.2 = 0.5, below the 0.6 threshold. The layer
+// answers only after seeing the same thing work twice.
+//
+// This test used to assert the opposite, and it passed — because it had the
+// wrong constant written into its expectation. A test that encodes a constant
+// cannot catch that constant being wrong; drive.sh caught it instead, where the
+// expectation is derived from what the layer promises rather than from the code.
+// fired is the shortest sequence that reaches the threshold: a rule starts at
+// 0.3 and needs two successes to pass 0.6.
+func fired(t *testing.T, id, stimulus, action string) Rule {
+	t.Helper()
+	return Reinforce(Reinforce(mustNew(t, id, stimulus, action)))
+}
+
+func TestOneSuccessIsNotEnoughToFire(t *testing.T) {
 	r := Reinforce(mustNew(t, "r1", "what time is it", "clock.now"))
-	if !Fires(r) {
-		t.Fatalf("one success should be enough to start answering, strength %v", r.Strength)
+	if Fires(r) {
+		t.Fatalf("one success must not be enough to start answering, strength %v", r.Strength)
 	}
 	if r.Fires != 1 {
-		t.Fatalf("a firing must be counted, got %d", r.Fires)
+		t.Fatalf("the success must still be counted, got %d", r.Fires)
+	}
+}
+
+func TestTwoSuccessesMakeItFire(t *testing.T) {
+	r := Reinforce(Reinforce(mustNew(t, "r1", "what time is it", "clock.now")))
+	if !Fires(r) {
+		t.Fatalf("two successes should start answering, strength %v", r.Strength)
+	}
+	if r.Fires != 2 {
+		t.Fatalf("two firings must be counted, got %d", r.Fires)
 	}
 }
 
@@ -110,7 +137,7 @@ func TestStrengthSaturatesAtBothEnds(t *testing.T) {
 
 // ★ 消退不是删除：掉到阈值以下就不答了，但它还在，一次成功就能回来。
 func TestDecayExtinguishesWithoutForgetting(t *testing.T) {
-	r := Reinforce(mustNew(t, "r1", "what time is it", "clock.now"))
+	r := fired(t, "r1", "what time is it", "clock.now")
 	if !Fires(r) {
 		t.Fatal("precondition: the rule fires before decaying")
 	}
@@ -134,7 +161,7 @@ func TestDecayingZeroPeriodsChangesNothing(t *testing.T) {
 }
 
 func TestMatchIsExactAfterNormalisation(t *testing.T) {
-	r := Reinforce(mustNew(t, "r1", "what time is it", "clock.now"))
+	r := fired(t, "r1", "what time is it", "clock.now")
 	if _, ok := Match("What  TIME is it?", []Rule{r}); !ok {
 		t.Fatal("the same stimulus in different punctuation and case must match")
 	}
@@ -152,8 +179,8 @@ func TestMatchIgnoresRulesThatDoNotFire(t *testing.T) {
 }
 
 func TestMatchPicksTheStrongest(t *testing.T) {
-	weak := Reinforce(mustNew(t, "r1", "what time is it", "clock.weak"))
-	strong := Reinforce(Reinforce(Reinforce(mustNew(t, "r2", "what time is it", "clock.strong"))))
+	weak := fired(t, "r1", "what time is it", "clock.weak")
+	strong := Reinforce(fired(t, "r2", "what time is it", "clock.strong"))
 	got, ok := Match("what time is it", []Rule{weak, strong})
 	if !ok || got.ID != "r2" {
 		t.Fatalf("the stronger association must win, got %q", got.ID)
@@ -161,8 +188,8 @@ func TestMatchPicksTheStrongest(t *testing.T) {
 }
 
 func TestMatchBreaksTiesByID(t *testing.T) {
-	a := Reinforce(mustNew(t, "aaa", "what time is it", "clock.a"))
-	b := Reinforce(mustNew(t, "bbb", "what time is it", "clock.b"))
+	a := fired(t, "aaa", "what time is it", "clock.a")
+	b := fired(t, "bbb", "what time is it", "clock.b")
 	for _, order := range [][]Rule{{a, b}, {b, a}} {
 		got, ok := Match("what time is it", order)
 		if !ok || got.ID != "aaa" {
@@ -172,7 +199,7 @@ func TestMatchBreaksTiesByID(t *testing.T) {
 }
 
 func TestAnEmptyStimulusNeverMatches(t *testing.T) {
-	r := Reinforce(mustNew(t, "r1", "what time is it", "clock.now"))
+	r := fired(t, "r1", "what time is it", "clock.now")
 	if _, ok := Match("???", []Rule{r}); ok {
 		t.Fatal("a stimulus that normalises to nothing must not match anything")
 	}

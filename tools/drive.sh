@@ -632,6 +632,57 @@ r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"tp4\",\"body\":{\"manifest\"
 expect "★ 组合必须声明它调用的东西" "$r" 'is not in deps'
 
 echo
+echo
+echo "—— 反射层：唯一一层零上下文的回答 ——"
+r=$(req '{"t":"reflex.observe","v":1,"key":"f1","body":{"rule_id":"time.now","stimulus":"What time is it?","action":"clock.now","outcome":"ok"}}')
+expect "第一次观测上链" "$r" '"rules":1'
+r=$(req '{"t":"reflex.match","v":1,"body":{"stimulus":"What  TIME is it?"}}')
+expect "★ 一次观测还不够回答（建立）" "$r" '"matched":false'
+r=$(req '{"t":"reflex.match","v":1,"body":{"stimulus":"what time is it"}}')
+expect "★ 零上下文：这条路不带任何预算" "$r" '"context_tokens":0'
+r=$(req '{"t":"reflex.match","v":1,"body":{"stimulus":"what time is it in tokyo"}}')
+expect "★ 相近但不是同一个刺激，不触发" "$r" '"matched":false'
+
+r=$(req '{"t":"reflex.observe","v":1,"key":"f2","body":{"rule_id":"time.now","outcome":"ok"}}')
+expect "第二次成功上链" "$r" '"rules":1'
+r=$(req '{"t":"reflex.match","v":1,"body":{"stimulus":"what time is it"}}')
+expect "★ 第二次成功之后开始回答" "$r" '"matched":true'
+expect "★ 命中的是那条规则与它要做的动作" "$r" '"action":"clock.now"'
+
+r=$(req '{"t":"reflex.observe","v":1,"key":"f3","body":{"rule_id":"time.now","outcome":"failed"}}')
+r=$(req '{"t":"reflex.match","v":1,"body":{"stimulus":"what time is it"}}')
+expect "★ 一次失败就让它停（误触发比漏触发贵）" "$r" '"matched":false'
+
+r=$(req '{"t":"reflex.observe","v":1,"key":"f4","body":{"rule_id":"time.now","outcome":"ok"}}')
+r=$(req '{"t":"reflex.match","v":1,"body":{"stimulus":"what time is it"}}')
+expect "★ 一次成功补不回一次失败（0.3+0.2=0.5 仍在阈值下）" "$r" '"matched":false'
+r=$(req '{"t":"reflex.observe","v":1,"key":"f5","body":{"rule_id":"time.now","outcome":"ok"}}')
+r=$(req '{"t":"reflex.match","v":1,"body":{"stimulus":"what time is it"}}')
+expect "★ 再一次成功才回来" "$r" '"matched":true'
+
+r=$(req '{"t":"reflex.observe","v":1,"key":"f6","body":{"rule_id":"time.now","outcome":"idle"}}')
+r=$(req '{"t":"reflex.observe","v":1,"key":"f7","body":{"rule_id":"time.now","outcome":"idle"}}')
+r=$(req '{"t":"reflex.match","v":1,"body":{"stimulus":"what time is it"}}')
+expect "★ 两个空闲周期之后消退（不用删除）" "$r" '"matched":false'
+r=$(req '{"t":"reflex.state","v":1,"body":{}}')
+expect "★ 消退被记成「消退过」而不是「从没触发过」" "$r" '"extinguished":1'
+r=$(req '{"t":"reflex.observe","v":1,"key":"f8","body":{"rule_id":"time.now","outcome":"ok"}}')
+r=$(req '{"t":"reflex.match","v":1,"body":{"stimulus":"what time is it"}}')
+expect "★ 消退不是遗忘：一次成功就回来" "$r" '"matched":true'
+
+r=$(req '{"t":"reflex.observe","v":1,"key":"f9","body":{"rule_id":"new.rule","stimulus":"   ","action":"x","outcome":"ok"}}')
+expect "空刺激不是通用规则，是打字错误" "$r" 'typo'
+r=$(req '{"t":"reflex.observe","v":1,"key":"f10","body":{"outcome":"ok"}}')
+expect "没有 rule_id 的观测被拒" "$r" 'rule_id'
+r=$(req '{"t":"reflex.observe","v":1,"key":"f11","body":{"rule_id":"time.now","outcome":"nonsense"}}')
+expect "未知结果被拒" "$r" 'unknown reflex outcome'
+
+echo "—— 反射层跨重启：规则表是链的投影 ——"
+r=$(req '{"t":"reflex.state","v":1,"body":{}}')
+expect "跨重启规则仍在" "$r" '"id":"time.now"'
+expect "跨重启强度不变（它是链折出来的）" "$r" '"strength":0.7'
+expect "★ 跨重启仍然会回答" "$r" '"firing":1'
+
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null
