@@ -682,7 +682,45 @@ r=$(req '{"t":"reflex.state","v":1,"body":{}}')
 expect "跨重启规则仍在" "$r" '"id":"time.now"'
 expect "跨重启强度不变（它是链折出来的）" "$r" '"strength":0.7'
 expect "★ 跨重启仍然会回答" "$r" '"firing":1'
+echo
+echo "—— 任务入口：率现在有分母了 ——"
+r=$(req '{"t":"task.intake","v":1,"key":"tk1","body":{"task_id":"t1","stimulus":"What  TIME is it?"}}')
+expect "第一次到达被记录" "$r" '"task_id":"t1"'
+expect "★ 反射层接下了它（零上下文）" "$r" '"layer":"reflex"'
+expect "★ 零上下文的代价是 0" "$r" '"context_tokens":0'
+expect "★ 记下了是哪一层答的" "$r" '"by":"reflex"'
+expect "★ 记下了它要做什么" "$r" '"action":"clock.now"'
 
+r=$(req '{"t":"task.intake","v":1,"key":"tk2","body":{"task_id":"t2","stimulus":"what time is it"}}')
+expect "第二次到达也走反射层" "$r" '"layer":"reflex"'
+
+r=$(req '{"t":"task.intake","v":1,"key":"tk3","body":{"task_id":"t3","stimulus":"summarise this repository"}}')
+expect "★ 接不下的时候落到完整路径" "$r" '"fall_through":true'
+expect "★ 落下去的理由说清了它为什么要上下文" "$r" 'needs a composed context'
+
+r=$(req '{"t":"task.intake","v":1,"key":"tk4","body":{"stimulus":"x"}}')
+expect "没有 task_id 的到达被拒" "$r" 'bad_request'
+expect "★ 拒绝说清了为什么不能重复计数" "$r" 'count it twice'
+r=$(req '{"t":"task.intake","v":1,"key":"tk5","body":{"task_id":"t5"}}')
+expect "没有刺激的到达被拒" "$r" 'nothing to route'
+
+r=$(req '{"t":"task.stats","v":1,"body":{}}')
+expect "★ 总数是三次到达" "$r" '"total":3'
+expect "★ 反射层两次" "$r" '"reflex":2'
+expect "★ 完整路径一次" "$r" '"full":1'
+expect "★★ 拦截率现在是一个真的数（2/3）" "$r" '"intercept_rate":0.6667'
+expect "★★ 率带着它的作用域（没有分母的率就是一句没人能核对的话）" "$r" '"scope":"tasks that arrived at this intake"'
+
+echo
+echo "—— 任务入口跨重启：统计是链的投影 ——"
+r=$(req '{"t":"task.stats","v":1,"body":{}}')
+expect "跨重启总数仍在" "$r" '"total":3'
+expect "跨重启率不变" "$r" '"intercept_rate":0.6667'
+r=$(req '{"t":"task.intake","v":1,"key":"tk6","body":{"task_id":"t6","stimulus":"what time is it"}}')
+expect "重启后新的到达仍然走反射层" "$r" '"layer":"reflex"'
+expect "★ 分母跟着涨到 4" "$r" '"total":4'
+
+echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null
