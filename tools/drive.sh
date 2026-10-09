@@ -720,6 +720,41 @@ r=$(req '{"t":"task.intake","v":1,"key":"tk6","body":{"task_id":"t6","stimulus":
 expect "重启后新的到达仍然走反射层" "$r" '"layer":"reflex"'
 expect "★ 分母跟着涨到 4" "$r" '"total":4'
 
+echoecho
+echo "—— 蒸馏：把一次成功变成一条规则（没人写过它）——"
+r=$(req '{"t":"task.intake","v":1,"key":"ds1","body":{"task_id":"d1","stimulus":"translate this paragraph"}}')
+expect "一个从没见过的刺激：先落到完整路径" "$r" '"layer":"full"'
+
+r=$(req '{"t":"distill.apply","v":1,"key":"ds2","body":{"task_id":"d1","stimulus":"translate this paragraph","layer":"full","outcome":"ok","action":"translate.run"}}')
+expect "★ 成功的经验可以被蒸馏" "$r" '"kind":"reflex"'
+expect "★ 蒸馏出来的是一条**候选**，不是一条规则" "$r" '"fires":false'
+expect "★ 候选的强度是 0.5，还在阈值之下" "$r" '"strength":0.5'
+expect "★ 它明说自己只是被建立、没有被确认" "$r" 'established, not confirmed'
+
+r=$(req '{"t":"task.intake","v":1,"key":"ds3","body":{"task_id":"d2","stimulus":"translate this paragraph"}}')
+expect "★ 第一次蒸馏之后，同一个刺激仍然落下去（一次成功不够）" "$r" '"layer":"full"'
+
+r=$(req '{"t":"distill.apply","v":1,"key":"ds4","body":{"task_id":"d2","stimulus":"translate this paragraph","layer":"full","outcome":"ok","action":"translate.run"}}')
+expect "★ 第二次确认之后它才够强" "$r" '"strength":0.7'
+expect "★ 现在它会回答了" "$r" '"fires":true'
+
+r=$(req '{"t":"task.intake","v":1,"key":"ds5","body":{"task_id":"d3","stimulus":"translate this paragraph"}}')
+expect "★★ 同一个刺激，这一次是反射层答的" "$r" '"layer":"reflex"'
+expect "★★ 零上下文，而这条规则没有任何人写过" "$r" '"context_tokens":0'
+expect "★★ 它记下了这条规则的来源" "$r" '"action":"translate.run"'
+
+r=$(req '{"t":"distill.apply","v":1,"key":"ds6","body":{"task_id":"d3","stimulus":"translate this paragraph","layer":"full","outcome":"failed","action":"translate.run"}}')
+expect "★ 失败不能被蒸馏（失败教的是回避）" "$r" 'only a verified success'
+r=$(req '{"t":"distill.apply","v":1,"key":"ds7","body":{"task_id":"d4","stimulus":"translate this paragraph","layer":"reflex","outcome":"ok","action":"translate.run"}}')
+expect "★ 已经零上下文答过的不能再蒸馏（会把同一次成功数两遍）" "$r" 'twice'
+r=$(req '{"t":"distill.apply","v":1,"key":"ds8","body":{"task_id":"d5","stimulus":"x","layer":"full","outcome":"","action":"a"}}')
+expect "★ 没人记录过它成没成 —— 那也要说出来" "$r" 'nobody recorded'
+
+r=$(req '{"t":"task.stats","v":1,"body":{}}')
+expect "★ 新的刺激先让率下降（学会之前要先付学费）" "$r" '"intercept_rate":0.5714'
+expect "★ 分母是 7 次到达" "$r" '"total":7'
+expect "★ 反射层 4 次" "$r" '"reflex":4'
+
 echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null

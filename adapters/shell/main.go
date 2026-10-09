@@ -209,6 +209,9 @@ func (s *server) handle(f core.Frame) core.Frame {
 		return out
 	}
 
+	if s.handleDistill(f, &out) {
+		return out
+	}
 	if s.handleIntake(f, &out) {
 		return out
 	}
