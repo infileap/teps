@@ -726,6 +726,8 @@ r=$(req '{"t":"task.intake","v":1,"key":"ds1","body":{"task_id":"d1","stimulus":
 expect "一个从没见过的刺激：先落到完整路径" "$r" '"layer":"full"'
 
 r=$(req '{"t":"distill.apply","v":1,"key":"ds2","body":{"task_id":"d1","stimulus":"translate this paragraph","layer":"full","outcome":"ok","action":"translate.run"}}')
+drule=$(printf '%s' "$r" | sed -n 's/.*"rule_id":"\(d-[0-9a-f]*\)".*/\1/p')
+if [ -n "$drule" ]; then printf '  ok    规则 id 由规范化后的刺激派生\n'; else printf '  FAIL  没拿到 rule_id\n'; fails=$((fails + 1)); fi
 expect "★ 成功的经验可以被蒸馏" "$r" '"kind":"reflex"'
 expect "★ 蒸馏出来的是一条**候选**，不是一条规则" "$r" '"fires":false'
 expect "★ 候选的强度是 0.5，还在阈值之下" "$r" '"strength":0.5'
@@ -742,6 +744,9 @@ r=$(req '{"t":"task.intake","v":1,"key":"ds5","body":{"task_id":"d3","stimulus":
 expect "★★ 同一个刺激，这一次是反射层答的" "$r" '"layer":"reflex"'
 expect "★★ 零上下文，而这条规则没有任何人写过" "$r" '"context_tokens":0'
 expect "★★ 它记下了这条规则的来源" "$r" '"action":"translate.run"'
+
+r=$(req '{"t":"distill.apply","v":1,"key":"ds9","body":{"task_id":"d6","stimulus":"Translate  THIS paragraph?","layer":"full","outcome":"ok","action":"translate.run"}}')
+expect "★★ 同一个刺激的两种写法落到同一行（否则一次经验被拆成两半强度）" "$r" "\"rule_id\":\"$drule\""
 
 r=$(req '{"t":"distill.apply","v":1,"key":"ds6","body":{"task_id":"d3","stimulus":"translate this paragraph","layer":"full","outcome":"failed","action":"translate.run"}}')
 expect "★ 失败不能被蒸馏（失败教的是回避）" "$r" 'only a verified success'
