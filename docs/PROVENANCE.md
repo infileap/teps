@@ -62,3 +62,27 @@
 
 ⚠️ 本文档的核对结论**引用了外部链接的标题**，而不是逐篇精读全文。
 若要把某个模型正式纳入选型，**必须先本地复现，而不是先补引用。**
+
+---
+
+## 第二批：一份新设计文档里的 2026 系统名（**未核实**）
+
+同一份对话的后续推演（用户提供，见本项目会话记录）在「2026 最新突破」与
+「权重更新难」两节里列了 **30 多个系统名**：
+
+AION Hard Bypass · ASCENT · MOPD · AGNN · MMP · SlimInfer · DualPath · KnapSpec ·
+SPEE · EDGE · Lotus · OxyGent · JoyAgent · Infinite-Parameter LLM · SOLA ·
+Parameter Updater Experts · ESSA · In-Place TTT · 决策论 TTT · TTT-Discover ·
+PaRSP · RectLoRA · SLoRA · Meta-UCF · DS-LoRA · RB-LoRA ·
+Titans Fast-Weight Neural Memory Adapter · δ-mem · SuperBake
+（另提 Kimi K3 · Nemotron 3 · Titans++ · HELM）
+
+**核对状态：未核实。** `web_search` 在本环境返回 `HTTP 402 Insufficient Balance`，
+所以**不是「查过没有」，是「查不了」**。
+
+**形态与第一批相同**：具体到可以引用的名字 + 一个出处都没有。这不是说它们一定是假的，
+而是说**「未核实」和「已核实」必须长得不一样**——否则下一次有人引用这份清单时，
+没人知道它从来没被核对过。
+
+**另有一条独立的判断**：即使这些系统全部为真，这两节也**不改变本项目的任何一个决定**。
+它们的价值是背景，不是依据。
