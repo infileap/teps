@@ -74,10 +74,17 @@ func TestOneSuccessMakesItFire(t *testing.T) {
 // 漏触发只多走一次完整路径，那条路径仍然是对的；
 // 误触发是**在完全没有上下文的情况下自信地答错**。
 func TestAFailureCostsMoreThanASuccessGains(t *testing.T) {
+	// 直接断言常量。行为断言（下面那条）会因为浮点噪声而在对称实现下**通过**：
+	// 0.5-0.3 与 0.7-0.5 都不是精确的 0.2，一个比另一个大 2e-17。
+	// 第一次跑变异时它就是这么活下来的。
+	if WeakenStep <= ReinforceStep {
+		t.Fatalf("the layer must be biased against firing: a success gains %v, a failure costs %v", ReinforceStep, WeakenStep)
+	}
 	fresh := mustNew(t, "r1", "what time is it", "clock.now")
 	gained := Reinforce(fresh).Strength - fresh.Strength
 	lost := fresh.Strength - Weaken(fresh).Strength
-	if lost <= gained {
+	// 容差是刻意的：这条测的是「显著更贵」，不是「大 2e-17」。
+	if lost <= gained+1e-9 {
 		t.Fatalf("the layer must be biased against firing: a success gains %v, a failure costs %v", gained, lost)
 	}
 	if Weaken(fresh).Strength >= fresh.Strength {
