@@ -285,6 +285,21 @@ expect "被去掉的进了 dropped，不是消失" "$r" '"dropped":["d2"]'
 r=$(req '{"t":"compose.build","v":1,"body":{"class":"task_exec","budget":100,"candidates":[  {"id":"big","section":"retrieval","text":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","similarity":1,"evidence":"E2","recency":1,"task_relevance":1},  {"id":"small","section":"retrieval","text":"bbbbbbbbbb","similarity":0.5,"evidence":"E2","recency":1,"task_relevance":1}]}}')
 expect "★ 装不下的长候选不许挡住后面的短候选" "$r" '"kept":["small"]'
 
+echo
+echo "—— 必需的材料：缺了它就该拒绝，不是交出一份更小的上下文 ——"
+# task_exec 的 system 段占 15%，预算 100 ⇒ 15 token。
+r=$(req '{"t":"compose.build","v":1,"body":{"class":"task_exec","budget":100,"candidates":[{"id":"sys","section":"system","text":"the standing instructions for every turn in this session","required":true,"similarity":1,"evidence":"E2","recency":1,"task_relevance":1}]}}')
+expect "★ 必需的材料装不下就拒绝（缺了必需品不会报错，只会答得像对的）" "$r" 'budget_exhausted'
+expect "★ 拒绝要点名是谁装不下（在哪个段）" "$r" 'sys in section system'
+expect "★ 拒绝要给出那条预算有多大" "$r" 'that section'
+expect "★ 拒绝要说清替代办法（拆任务，不是扩窗）" "$r" 'Decompose the task'
+
+r=$(req '{"t":"compose.build","v":1,"body":{"class":"task_exec","budget":100,"candidates":[{"id":"sys","section":"system","text":"standing rule","required":true,"similarity":0.1,"evidence":"E2","recency":1,"task_relevance":1},{"id":"extra","section":"system","text":"a helpful extra note","similarity":1,"evidence":"E2","recency":1,"task_relevance":1}]}}')
+expect "★ 必需的材料分数更低，仍然占住位置" "$r" '"kept":["sys"]'
+
+r=$(req '{"t":"compose.build","v":1,"body":{"class":"task_exec","budget":100,"candidates":[{"id":"extra","section":"system","text":"a helpful extra note that is far too long for the share","similarity":1,"evidence":"E2","recency":1,"task_relevance":1}]}}')
+expect "负对照：非必需的材料装不下仍然只是被丢掉" "$r" '"dropped":["extra"]'
+
 r=$(req '{"t":"compose.build","v":1,"body":{"class":"nonsense","budget":10,"candidates":[]}}')
 expect "未知任务类被拒" "$r" 'bad_request'
 

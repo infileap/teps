@@ -175,6 +175,15 @@ type Candidate struct {
 	Recency       float64
 	TaskRelevance float64
 	Redundancy    float64
+
+	// Required marks material the caller says is not optional — the system
+	// prompt, the skill schema, the live state.
+	//
+	// It exists because of how this kind of failure behaves: a context that is
+	// missing its essentials does not fail loudly. It produces a plausible
+	// wrong answer, and nothing downstream can tell that it was assembled from
+	// an incomplete budget.
+	Required bool
 }
 
 // Score is the ranking function.
@@ -285,19 +294,29 @@ func Dedup(cands []Candidate, w Weights, maxDistance int) (kept, dropped []Candi
 	seen := make([]uint64, 0, len(sorted))
 	for _, c := range sorted {
 		fp := Fingerprint(c.Text)
-		dup := false
-		for _, s := range seen {
+		hit := -1
+		for i, s := range seen {
 			if Hamming(fp, s) <= maxDistance {
-				dup = true
+				hit = i
 				break
 			}
 		}
-		if dup {
-			dropped = append(dropped, c)
+		if hit < 0 {
+			kept = append(kept, c)
+			seen = append(seen, fp)
 			continue
 		}
-		kept = append(kept, c)
-		seen = append(seen, fp)
+		// A required candidate never loses a near-duplicate contest. Letting it
+		// lose would drop material the caller said was not optional, and the
+		// surviving text would read fine — which is exactly why it would go
+		// unnoticed.
+		if c.Required && !kept[hit].Required {
+			dropped = append(dropped, kept[hit])
+			kept[hit] = c
+			seen[hit] = fp
+			continue
+		}
+		dropped = append(dropped, c)
 	}
 	return kept, dropped
 }
@@ -323,7 +342,18 @@ func Pack(cands []Candidate, w Weights, budget int) (kept, dropped []Candidate) 
 		}
 		rows = append(rows, row{c: c, ratio: Score(c, w) / float64(l)})
 	}
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].ratio > rows[j].ratio })
+	// Required material is placed first, then the rest by score per unit length.
+	//
+	// Ordering matters here for the same reason it does in Dedup: without it a
+	// low-scoring essential can be crowded out by high-scoring optional
+	// material, and the result is a context that looks full and is missing the
+	// one thing it could not do without.
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].c.Required != rows[j].c.Required {
+			return rows[i].c.Required
+		}
+		return rows[i].ratio > rows[j].ratio
+	})
 
 	used := 0
 	for _, r := range rows {
@@ -417,6 +447,24 @@ func Compose(req Request) (Result, *core.Refusal) {
 		res.Kept = append(res.Kept, kept...)
 		for _, c := range kept {
 			res.Used += c.Len
+		}
+	}
+	// Required material that still does not fit is a refusal, not a smaller
+	// context.
+	//
+	// This is the one rule taken from the architecture note: 超了就拆，绝不扩窗.
+	// Growing the window would hide the problem; answering from an incomplete
+	// context would not hide it at all — it would dress it up.
+	for _, c := range res.Dropped {
+		if !c.Required {
+			continue
+		}
+		return Result{}, &core.Refusal{
+			Code: core.CodeBudgetExhausted,
+			Reason: "required material does not fit: " + c.ID + " in section " + c.Section +
+				" needs " + strconv.Itoa(c.Len) + " and that section's share is " +
+				strconv.Itoa(alloc[c.Section]) + ". Decompose the task rather than growing the window: " +
+				"a context missing its essentials does not fail loudly, it answers plausibly",
 		}
 	}
 	return res, nil

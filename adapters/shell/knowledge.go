@@ -211,6 +211,10 @@ type composeCandidate struct {
 	Recency       float64 `json:"recency"`
 	TaskRelevance float64 `json:"task_relevance"`
 	Redundancy    float64 `json:"redundancy"`
+	// Required is the caller saying this material is not optional. The composer
+	// will refuse rather than hand back a context that is missing it — see the
+	// note on Required in organs/composer.
+	Required bool `json:"required"`
 }
 
 func (s *server) handleCompose(f core.Frame, out *core.Frame) {
@@ -242,6 +246,7 @@ func (s *server) handleCompose(f core.Frame, out *core.Frame) {
 			ID: c.ID, Section: c.Section, Text: c.Text, Len: len(c.Text),
 			Similarity: c.Similarity, EvidenceRank: rank, Recency: c.Recency,
 			TaskRelevance: c.TaskRelevance, Redundancy: c.Redundancy,
+			Required: c.Required,
 		})
 	}
 	res, ref := composer.Compose(composer.Request{

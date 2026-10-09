@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"sansheng/core"
 )
 
 func cand(id, section, text string, score float64) Candidate {
@@ -351,5 +353,67 @@ func TestRedundancyIsTheOnlySubtractedTerm(t *testing.T) {
 	redundant := Candidate{ID: "redundant", Section: "retrieval", Len: 10, Similarity: 0.5, Redundancy: 0.9}
 	if Score(redundant, w) >= Score(clean, w) {
 		t.Fatal("a redundant candidate must score below an equally similar clean one")
+	}
+}
+
+// ---- 必需的材料 ----
+//
+// 这三条测的是同一件事的三个面：**缺了必需品的上下文不会报错，
+// 它会给一个看起来正常的错答案。** 所以必需的材料不许输给别的材料，
+// 而它真的装不下时必须拒绝，而不是交出一份更小的上下文。
+
+func TestRequiredMaterialIsPlacedBeforeOptionalMaterial(t *testing.T) {
+	// 同一段预算里，必需的那条分数更低——按分数它会输。
+	req := Candidate{ID: "sys", Section: "system", Text: "the standing instructions", Len: 12, Required: true, Similarity: 0.1}
+	opt := Candidate{ID: "extra", Section: "system", Text: "a helpful extra note", Len: 12, Similarity: 1.0}
+	got, ref := Compose(Request{Class: ClassTaskExec, Budget: 100, Candidates: []Candidate{opt, req}})
+	if ref != nil {
+		t.Fatalf("both fit once the required one is placed first, so this must not refuse: %v", ref)
+	}
+	if len(got.Kept) != 1 || got.Kept[0].ID != "sys" {
+		t.Fatalf("the required candidate must take the space, got %v", ids(got.Kept))
+	}
+}
+
+func TestARequiredCandidateWinsANearDuplicateContest(t *testing.T) {
+	// 文本完全相同（距离 0），必需的那条分数低。
+	text := "the user cannot log in and the error code is four zero one"
+	req := Candidate{ID: "must", Section: "retrieval", Text: text, Len: 20, Required: true, Similarity: 0.1}
+	opt := Candidate{ID: "nice", Section: "retrieval", Text: text, Len: 20, Similarity: 1.0}
+	kept, dropped := Dedup([]Candidate{opt, req}, DefaultWeights(), DefaultMaxDistance)
+	if len(kept) != 1 || kept[0].ID != "must" {
+		t.Fatalf("a required candidate must not lose a dedup contest, kept=%v dropped=%v", ids(kept), ids(dropped))
+	}
+}
+
+func TestRequiredMaterialThatDoesNotFitIsRefused(t *testing.T) {
+	// system 在 task_exec 里占 15%，预算 100 ⇒ 15 token。
+	req := Candidate{ID: "sys", Section: "system", Text: "the standing instructions", Len: 40, Required: true}
+	got, ref := Compose(Request{Class: ClassTaskExec, Budget: 100, Candidates: []Candidate{req}})
+	if ref == nil {
+		t.Fatalf("a context missing its essentials must be refused, got kept=%v", ids(got.Kept))
+	}
+	if ref.Code != core.CodeBudgetExhausted {
+		t.Fatalf("want budget_exhausted, got %s", ref.Code)
+	}
+	// 拒绝必须点名是谁装不下，以及那条预算有多少——否则调用者只能猜。
+	if !strings.Contains(ref.Reason, "sys") || !strings.Contains(ref.Reason, "15") {
+		t.Fatalf("the reason must name the candidate and the share, got %q", ref.Reason)
+	}
+	if !strings.Contains(ref.Reason, "Decompose the task") {
+		t.Fatalf("the reason must say what to do instead, got %q", ref.Reason)
+	}
+}
+
+// 负对照：**非必需**的材料装不下仍然只是被丢掉。
+// 否则上面那条测的会是「装不下就拒绝」这条更粗的规则。
+func TestOptionalMaterialThatDoesNotFitIsMerelyDropped(t *testing.T) {
+	opt := Candidate{ID: "extra", Section: "system", Text: "a helpful extra note", Len: 40}
+	got, ref := Compose(Request{Class: ClassTaskExec, Budget: 100, Candidates: []Candidate{opt}})
+	if ref != nil {
+		t.Fatalf("optional material that does not fit is dropped, not refused: %v", ref)
+	}
+	if len(got.Kept) != 0 || len(got.Dropped) != 1 {
+		t.Fatalf("want it dropped, got kept=%v dropped=%v", ids(got.Kept), ids(got.Dropped))
 	}
 }
