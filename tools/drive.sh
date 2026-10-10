@@ -1039,6 +1039,56 @@ r=$(req '{"t":"pool.state","v":1}')
 expect "释放后槽空出来" "$r" '"held_by":[]'
 
 echo
+echo "—— 准入：池第一次决定一次执行能不能跑 ——"
+r=$(req '{"t":"pool.register","v":1,"key":"pa1","body":{"id":"core.paid","kind":"local","money_per_ms":0.001,"capacity":2,"note":"a local core with a meter on it"}}')
+expect "第二个本机核（收费的）登记成功" "$r" '"id":"core.paid"'
+
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"pa2\",\"body\":{\"ref\":\"$xok\",\"attempt\":\"p-remote\",\"task_class\":\"task_exec\",\"resource\":\"gpu.far\"}}")
+expect "★ 点名远端资源被拒（这个组件只在本机 spawn）" "$r" 'cannot dispatch'
+expect "拒绝说清是哪一个做不到" "$r" 'gpu.far'
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"pa3\",\"body\":{\"ref\":\"$xok\",\"attempt\":\"p-nope\",\"task_class\":\"task_exec\",\"resource\":\"ghost.0\"}}")
+expect "点名不存在的资源被拒" "$r" 'no such resource'
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"pa4\",\"body\":{\"ref\":\"$xok\",\"attempt\":\"p-both\",\"task_class\":\"task_exec\",\"resource\":\"core.0\",\"pick\":true}}")
+expect "★ 又点名又让池挑，是两句矛盾的话" "$r" 'not both'
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"pa5\",\"body\":{\"ref\":\"$xok\",\"attempt\":\"p-none\",\"task_class\":\"task_exec\"}}")
+expect "不点名就照旧：没有容量被预留" "$r" '"resource":""'
+expect "并说明它跑在本来就在的机器上" "$r" 'no capacity was reserved'
+
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"pa6\",\"body\":{\"ref\":\"$xok\",\"attempt\":\"p-pick\",\"task_class\":\"task_exec\",\"pick\":true}}")
+expect "★ 让池挑：挑到免费的那个" "$r" '"resource":"core.0"'
+expect "★ 并报告它花了多少钱" "$r" '"cost_money":0'
+expect "执行仍然被核验器判定" "$r" '"outcome":"ok"'
+r=$(req '{"t":"pool.state","v":1}')
+expect "★ 跑完槽就还回去了（不靠调用方记得释放）" "$r" '"held_by":[]'
+
+r=$(req '{"t":"pool.lease","v":1,"key":"pa7","body":{"id":"core.0","holder":"blocker","ttl_ms":60000}}')
+expect "另一个持有者占住免费的那个" "$r" '"holder":"blocker"'
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"pa8\",\"body\":{\"ref\":\"$xok\",\"attempt\":\"p-busy\",\"task_class\":\"task_exec\",\"pick\":true}}")
+expect "★ 免费的那个忙了，于是挑到收费的那个" "$r" '"resource":"core.paid"'
+expect "★ 而且钱是从价格算出来的，不是调用方填的" "$r" '"cost_money":2'
+r=$(req '{"t":"pool.release","v":1,"key":"pa9","body":{"holder":"blocker"}}')
+expect "释放 blocker" "$r" '"holder":"blocker"'
+
+r=$(req '{"t":"pool.lease","v":1,"key":"pa10","body":{"id":"core.0","holder":"hog","ttl_ms":60000}}')
+expect "把免费的那个占住" "$r" '"holder":"hog"'
+r=$(req '{"t":"pool.lease","v":1,"key":"pa11","body":{"id":"core.paid","holder":"hog","ttl_ms":60000}}')
+expect "再把收费的两个槽都占住" "$r" '"holder":"hog"'
+r=$(req '{"t":"pool.lease","v":1,"key":"pa12","body":{"id":"core.paid","holder":"hog","ttl_ms":60000}}')
+expect "占满" "$r" '"holder":"hog"'
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"pa13\",\"body\":{\"ref\":\"$xok\",\"attempt\":\"p-full\",\"task_class\":\"task_exec\",\"pick\":true}}")
+expect "★ 一个槽都没有了，于是这次执行不发生" "$r" 'budget_exhausted'
+expect "★ 被拒的执行没有在链上留下已付费的痕迹" "$r" 'no resource can do this work'
+r=$(req '{"t":"pool.release","v":1,"key":"pa14","body":{"holder":"hog"}}')
+expect "释放 hog" "$r" '"holder":"hog"'
+
+echo
+echo "—— 准入的租约在链上，不在内存里 ——"
+r=$(req '{"t":"audit.tail","v":1,"body":{"limit":400}}')
+expect "★ 链上有这次尝试占槽的记录" "$r" '"holder":"p-pick"'
+expect "★ 也有它释放的记录" "$r" '"op":"release"'
+expect "租约记录里是绝对过期时间，不是 ttl" "$r" '"expires"'
+
+echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null

@@ -58,6 +58,10 @@ type invokeBody struct {
 	// 提级是一次**写**（要用同一份载荷再注册一次），
 	// 而写不能有默认值 —— 这与 skill.promote 要求显式 name/from/to 是同一条纪律。
 	Elevate bool `json:"elevate"`
+	// Resource 点名这次执行跑在哪个资源上。空 = 不点名，跑在本来就在的机器上。
+	Resource string `json:"resource"`
+	// Pick 让池从本机资源里挑最便宜的。与 Resource 同时给是矛盾的，会被拒。
+	Pick bool `json:"pick"`
 }
 
 // chainRef 是链上一条记录的位置。
@@ -84,23 +88,25 @@ type elevationBody struct {
 //   - observed 是核验器看到的**原始事实**，让人能自己复核判定；
 //   - checks 是逐条断言的判定结果，含判不了的与为什么判不了。
 type invokeResult struct {
-	Attempt    string             `json:"attempt"`
-	Skill      string             `json:"skill"`
-	TaskClass  string             `json:"task_class"`
-	Ref        string             `json:"ref"`
-	Kind       string             `json:"kind"`
-	Replayed   bool               `json:"replayed"`
-	Intent     *chainRef          `json:"intent"`
-	Resolution *chainRef          `json:"resolution"`
-	Outcome    string             `json:"outcome"`
-	VerifiedBy string             `json:"verified_by,omitempty"`
-	Reason     string             `json:"reason"`
-	LatencyMS  int64              `json:"latency_ms"`
-	Observed   *executor.Observed `json:"observed,omitempty"`
-	Plan       *executor.Plan     `json:"plan,omitempty"`
-	Checks     []executor.Check   `json:"checks,omitempty"`
-	Elevation  *elevationBody     `json:"elevation,omitempty"`
-	Open       int                `json:"open"`
+	Attempt    string    `json:"attempt"`
+	Skill      string    `json:"skill"`
+	TaskClass  string    `json:"task_class"`
+	Ref        string    `json:"ref"`
+	Kind       string    `json:"kind"`
+	Replayed   bool      `json:"replayed"`
+	Intent     *chainRef `json:"intent"`
+	Resolution *chainRef `json:"resolution"`
+	Outcome    string    `json:"outcome"`
+	VerifiedBy string    `json:"verified_by,omitempty"`
+	Reason     string    `json:"reason"`
+	LatencyMS  int64     `json:"latency_ms"`
+	// Pool 报告这次执行被准许在哪里跑、花了多少。缺席 = 没有资源被点名。
+	Pool      map[string]any     `json:"pool,omitempty"`
+	Observed  *executor.Observed `json:"observed,omitempty"`
+	Plan      *executor.Plan     `json:"plan,omitempty"`
+	Checks    []executor.Check   `json:"checks,omitempty"`
+	Elevation *elevationBody     `json:"elevation,omitempty"`
+	Open      int                `json:"open"`
 }
 
 // observeBody 是 arbiter.observe 的请求形状。intent 就是 outcome 为空的那一次。
@@ -195,9 +201,31 @@ func (s *server) handleExecute(f core.Frame, out *core.Frame) bool {
 		return true
 	}
 
+	// 点名一个资源又让池去挑，是两句互相矛盾的话：一句说「就是它」，
+	// 另一句说「随便哪个都行」。挑一个执行比猜调用方想说什么便宜。
+	if req.Resource != "" && req.Pick {
+		out.Err = core.Refuse(core.CodeBadRequest,
+			"pass either a resource or pick, not both: naming one and asking the pool to choose are two different instructions")
+		return true
+	}
+
+	// 准入：先占住容量，再花钱，最后才 spawn。顺序是有意的 ——
+	// 占不到槽的执行不该先扣掉预算，否则一次被拒绝的尝试会留下已付费的痕迹。
+	adm, refusal := s.admit(req.Attempt, req.Resource, req.Pick,
+		core.Budget{MS: plan.TimeoutMS, Tokens: 0}, plan.TimeoutMS+leaseSlack)
+	if refusal != nil {
+		out.Err = refusal
+		return true
+	}
+	if adm.Holder != "" {
+		defer s.discharge(req.Attempt)
+	}
+
 	// A7：预算在动作之前声明。执行前就按 manifest 声明的预算扣账，
 	// 超时不退还 —— 时间是花掉了的，退还是另一种记账方式，不是这一条。
-	if refusal := s.acct.Spend(core.Budget{MS: plan.TimeoutMS}); refusal != nil {
+	// 钱那一维是池算出来的：资源的价格决定这次执行花多少钱，
+	// 而不是调用方在 cost 字段里随手填一个数。
+	if refusal := s.acct.Spend(core.Budget{MS: plan.TimeoutMS, Money: adm.Money}); refusal != nil {
 		out.Err = refusal
 		return true
 	}
@@ -229,6 +257,7 @@ func (s *server) handleExecute(f core.Frame, out *core.Frame) bool {
 		Reason:     j.Reason,
 		LatencyMS:  obs.LatencyMS,
 		Observed:   &obs,
+		Pool:       poolSummary(adm),
 		Plan:       &plan,
 		Checks:     j.Checks,
 		Open:       open,
