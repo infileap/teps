@@ -26,7 +26,9 @@ ADAPTERS = os.path.join(ROOT, "adapters")
 CONTRACT = os.path.join(ROOT, "docs", "CONTRACT.md")
 
 # strings.HasPrefix(f.T, "session.") —— 前缀族
-PREFIX_RE = re.compile(r'HasPrefix\(f\.T,\s*"([a-z]+\.)"\)')
+# 前缀名允许数字与下划线：第一版只认 [a-z]+，于是把 reflex. 改成 reflex2. 之后
+# 守卫**根本看不见这个前缀族**，注入测试里那个方向因此漏网。
+PREFIX_RE = re.compile(r'HasPrefix\(f\.T,\s*"([a-z][a-z0-9_]*\.)"\)')
 # case "session.open": 以及 case "memory.write", "memory.supersede": —— 具体帧。
 # 多值 case 必须一起抓：只抓单值形式会漏掉 memory.write/supersede，
 # 而漏掉的那两个正好是「写入不可变」这条公理的入口。
