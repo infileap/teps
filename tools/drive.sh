@@ -1024,12 +1024,15 @@ r=$(req '{"t":"pool.lease","v":1,"key":"pl10","body":{"id":"gpu.far","holder":"j
 expect "短租约拿到槽" "$r" '"holder":"job.doomed"'
 r=$(req '{"t":"pool.state","v":1}')
 expect "活着时它占着槽" "$r" '"job.doomed"'
+expect "★ 聚合 used 把活着的那条算进去" "$r" '"used":2'
 sleep 0.15
 r=$(req '{"t":"pool.state","v":1}')
 case "$r" in
   *'job.doomed'*) printf '  FAIL  ★ 过期租约必须把容量还回来\n'; fails=$((fails + 1)) ;;
   *) printf '  ok    ★ 过期租约把容量还回来了（持有者死了没人释放，池不会因此变小）\n' ;;
 esac
+r=$(req '{"t":"pool.state","v":1}')
+expect "★ 聚合 used 不再数过期的那条" "$r" '"used":1'
 r=$(req '{"t":"pool.release","v":1,"key":"pl11","body":{"holder":"job.a"}}')
 expect "释放按持有者，不按资源" "$r" '"holder":"job.a"'
 r=$(req '{"t":"pool.state","v":1}')

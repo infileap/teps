@@ -175,7 +175,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 
 ```sh
 tools/go test ./...                # 十三个包，254 个测试
-bash tools/drive.sh                # 315/315，全程只有 curl
+bash tools/drive.sh                # 317/317，全程只有 curl
 bash tools/drive_mcp.sh            # 21/21，全程只有 printf 的 JSON-RPC
 bash tools/check_format.sh         # gofmt 干净
 python3 tools/check_kernel.py      # 四条内核守卫
