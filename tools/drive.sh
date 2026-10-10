@@ -760,7 +760,80 @@ expect "★ 新的刺激先让率下降（学会之前要先付学费）" "$r" '
 expect "★ 分母是 7 次到达" "$r" '"total":7'
 expect "★ 反射层 4 次" "$r" '"reflex":4'
 
+echoecho
+echo "—— 升级定价：问价不消耗，付价要凭那张报价 ——"
+off='[{"action":"skill","skill":"read.file","task_class":"task_exec","value":10,"cost":0.01,"latency":5,"latency_weight":0.1},{"action":"escalate","skill":"l3","task_class":"task_exec","value":10,"cost":1.5,"latency":200,"latency_weight":0.1,"pinned":0.9,"use_pinned":true}]'
+
+before=$(req '{"t":"status","v":1,"id":"e0"}' | sed -n 's/.*"seq":\([0-9]*\).*/\1/p')
+r=$(req "{\"t\":\"escalation.quote\",\"v\":1,\"id\":\"e1\",\"body\":{\"task_class\":\"task_exec\",\"offers\":$off}}")
+expect "估价成功，给出排名" "$r" '"ranked"'
+expect "★ 估价不花钱（spent 显式为 0）" "$r" '"spent":0'
+expect "估价给出一个报价 id" "$r" '"quote_id"'
+qid=$(printf '%s' "$r" | sed -n 's/.*"quote_id":"\([0-9a-f]\{64\}\)".*/\1/p')
+if [ -n "$qid" ]; then printf '  ok    报价 id 是 64 位内容哈希\n'; else printf '  FAIL  没拿到 quote_id\n'; fails=$((fails+1)); fi
+expect "估价选出更划算的那条" "$r" '"chosen":"skill"'
+after=$(req '{"t":"status","v":1,"id":"e2"}' | sed -n 's/.*"seq":\([0-9]*\).*/\1/p')
+if [ "$before" = "$after" ]; then
+  printf '  ok    ★★ 估价一个字节都没写进链（seq 仍是 %s）\n' "$after"
+else
+  printf '  FAIL  估价动了链：%s -> %s\n' "$before" "$after"; fails=$((fails+1))
+fi
+
 echo
+echo "—— 付价：必须凭一张还成立的报价 ——"
+r=$(req "{\"t\":\"escalation.decide\",\"v\":1,\"key\":\"d1\",\"id\":\"e3\",\"body\":{\"quote_id\":\"$qid\",\"action\":\"skill\",\"attempt\":\"esc1\",\"skill\":\"read.file\",\"task_class\":\"task_exec\",\"offers\":$off}}")
+expect "凭报价付价成功" "$r" '"grant_ms"'
+expect "付价写进链（有链头）" "$r" '"head"'
+expect "★ 报告扣了多少" "$r" '"grant_cost"'
+r=$(req "{\"t\":\"escalation.decide\",\"v\":1,\"id\":\"e4\",\"body\":{\"action\":\"skill\",\"attempt\":\"esc2\",\"offers\":$off}}")
+expect "★ 没有报价 id 的决定被拒" "$r" 'needs the quote_id'
+r=$(req "{\"t\":\"escalation.decide\",\"v\":1,\"id\":\"e5\",\"body\":{\"quote_id\":\"$qid\",\"action\":\"teleport\",\"attempt\":\"esc3\",\"offers\":$off}}")
+expect "★ 没被报价过的动作被拒" "$r" 'was not among the quoted offers'
+
+echo
+echo "—— ★★ 价格一动，那张报价就作废 ——"
+# open 是全局未结尝试数，前面几段已经留了几个，所以只能断言增量。
+o0=$(req '{"t":"arbiter.state","v":1,"body":{"skill":"read.file","task_class":"task_exec"}}' | sed -n 's/.*"open":\([0-9]*\).*/\1/p')
+r=$(req '{"t":"arbiter.observe","v":1,"key":"e6","body":{"attempt":"esc-obs","skill":"read.file","task_class":"task_exec"}}')
+o1=$(printf '%s' "$r" | sed -n 's/.*"open":\([0-9]*\).*/\1/p')
+if [ "$o1" = "$((o0 + 1))" ]; then
+  printf '  ok    先写意图（只有意图没有结论也是一种事实，未结 %s -> %s）\n' "$o0" "$o1"
+else
+  printf '  FAIL  意图没有让未结数 +1：%s -> %s\n' "$o0" "$o1"; fails=$((fails+1))
+fi
+r=$(req '{"t":"arbiter.observe","v":1,"key":"e7","body":{"attempt":"esc-obs","skill":"read.file","task_class":"task_exec","outcome":"failed","verified_by":"verifier"}}')
+o2=$(printf '%s' "$r" | sed -n 's/.*"open":\([0-9]*\).*/\1/p')
+if [ "$o2" = "$o0" ]; then
+  printf '  ok    结论落下，未结数回到 %s（后验动了）\n' "$o2"
+else
+  printf '  FAIL  结论没有让未结数回到 %s：%s\n' "$o0" "$o2"; fails=$((fails+1))
+fi 
+r=$(req "{\"t\":\"escalation.decide\",\"v\":1,\"key\":\"d2\",\"id\":\"e8\",\"body\":{\"quote_id\":\"$qid\",\"action\":\"skill\",\"attempt\":\"esc4\",\"skill\":\"read.file\",\"task_class\":\"task_exec\",\"offers\":$off}}")
+expect "★★ 按旧价格行动被拒（报价作废）" "$r" 'the quote is stale'
+r=$(req "{\"t\":\"escalation.quote\",\"v\":1,\"id\":\"e9\",\"body\":{\"task_class\":\"task_exec\",\"offers\":$off}}")
+qid2=$(printf '%s' "$r" | sed -n 's/.*"quote_id":"\([0-9a-f]\{64\}\)".*/\1/p')
+if [ -n "$qid2" ] && [ "$qid2" != "$qid" ]; then
+  printf '  ok    ★★ 重新问价得到一个新的 id（价格真的变了）\n'
+else
+  printf '  FAIL  重新问价的 id 没变：%s\n' "$qid2"; fails=$((fails+1))
+fi
+r=$(req "{\"t\":\"escalation.decide\",\"v\":1,\"key\":\"d3\",\"id\":\"e10\",\"body\":{\"quote_id\":\"$qid2\",\"action\":\"skill\",\"attempt\":\"esc5\",\"skill\":\"read.file\",\"task_class\":\"task_exec\",\"offers\":$off}}")
+expect "凭新报价付价成功" "$r" '"grant_ms"'
+
+# 定价策略也是价格的一部分：同一组 offers 换一个 margin，就是另一张报价。
+# 少了这条，两个不同的策略会给出同一个 id，而在一个策略下做的决定
+# 会被另一个策略认下来。
+r=$(req "{\"t\":\"escalation.quote\",\"v\":1,\"id\":\"e11\",\"body\":{\"task_class\":\"task_exec\",\"margin\":5,\"offers\":$off}}")
+qidm=$(printf '%s' "$r" | sed -n 's/.*"quote_id\":\"\([0-9a-f]\{64\}\)\".*/\1/p')
+if [ -n "$qidm" ] && [ "$qidm" != "$qid2" ]; then
+  printf '  ok    ★★ 换一个 margin 就是另一张报价（定价策略也是价格的一部分）\n'
+else
+  printf '  FAIL  margin 变了报价 id 没变\n'; fails=$((fails+1))
+fi
+r=$(req "{\"t\":\"escalation.decide\",\"v\":1,\"id\":\"e12\",\"body\":{\"quote_id\":\"$qid2\",\"action\":\"skill\",\"attempt\":\"esc6\",\"margin\":5,\"offers\":$off}}")
+expect "★ 拿零 margin 的报价去按 margin=5 行动被拒" "$r" 'the quote is stale'
+
+
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null
