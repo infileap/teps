@@ -66,14 +66,14 @@
 |---|---|---|
 | （无前缀） | `hello` / `welcome` | `welcome` 带 `epoch`；服务端重启后客户端靠它察觉 ⇒ `stale_epoch` |
 | （无前缀） | `put` `spend` `status` `drain` `bye` | 参考传输的最小面 |
-| `session.` | `open` `event` `observe` `retry` `status` | 同会话**严格串行**；非法迁移在 append 之前就拒 |
-| `skill.` | `publish` `resolve` `list` `promote` `invoke` `compose` | `invoke` **钉死** `ref` 的内容哈希 |
-| `compose.` | `propose` | **只读**：按类型搜出一条链，不运行任何东西 |
-| `memory.` | `write` `supersede` `retrieve` | 写入后不可变，纠正只能 supersede |
-| `arbiter.` | `observe` `rank` `state` `fix` | 后验是**从链上折出来的投影**，不另存一份 |
-| `reflex.` | `observe` `match` `state` | 唯一一层零上下文的回答 |
-| `task.` | `intake` `stats` | 任务入口——**率的分母** |
-| `distill.` | `apply` | 一次成功的完整路径 → 一个可固化的提案 |
+| `session.` | `session.open` `session.event` `session.observe` `session.retry` `session.status` | 同会话**严格串行**；非法迁移在 append 之前就拒 |
+| `skill.` | `skill.publish` `skill.resolve` `skill.list` `skill.promote` `skill.invoke` `skill.compose` | `invoke` **钉死** `ref` 的内容哈希 |
+| `compose.` | `compose.propose` | **只读**：按类型搜出一条链，不运行任何东西 |
+| `memory.` | `memory.write` `memory.supersede` `memory.retrieve` | 写入后不可变，纠正只能 supersede |
+| `arbiter.` | `arbiter.observe` `arbiter.rank` `arbiter.state` `arbiter.fix` | 后验是**从链上折出来的投影**，不另存一份 |
+| `reflex.` | `reflex.observe` `reflex.match` `reflex.state` | 唯一一层零上下文的回答 |
+| `task.` | `task.intake` `task.stats` | 任务入口——**率的分母** |
+| `distill.` | `distill.apply` | 一次成功的完整路径 → 一个可固化的提案 |
 
 ### 契约承诺但**尚未实现**的帧
 

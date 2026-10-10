@@ -94,16 +94,11 @@ def main():
     families = {f[:-1] for f in live if f.endswith("*")}
     concrete = {f for f in live if not f.endswith("*")}
 
-    # 契约里出现过的帧，或者以某个已认领前缀开头的帧，都算「契约知道它」。
-    def known(frame):
-        if frame in doc:
-            return True
-        for fam in families:
-            if frame.startswith(fam):
-                return True
-        return False
-
-    missing_doc = sorted(f for f in concrete if not known(f))
+    # 具体帧必须**按名字**出现在契约里。
+    # 第一版让「前缀族被文档提过」替它下面的每一个帧背书，于是新增一个
+    # reflex.teleport 照样通过 —— 注入测试证明那条捷径把守卫的牙拔了。
+    # 前缀族只用于另一个方向：认领了整个前缀却一个字都没提。
+    missing_doc = sorted(f for f in concrete if f not in doc)
     missing_family = sorted(f for f in families if f not in doc and f.rstrip(".") not in doc)
 
     # 反向：契约里写了、但没有任何适配器认领它。
@@ -111,7 +106,6 @@ def main():
     undocumented_live = sorted(
         f for f in doc
         if f not in concrete
-        and not any(f.startswith(fam) for fam in families)
         and f not in pending
         and not f.endswith(".")
     )
