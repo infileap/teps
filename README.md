@@ -165,13 +165,14 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | **组合可爆** ★★★ | ✅ **第一次闭环：规划器找到 `typ.split;typ.tag`（没人告诉它），注册成 `auto.tag`，跑通。同一个输入下 `typ.tag` 单跑印 `SOLO`、链上印 `CHAINED`——一个任何单个技能都不产生的行为** || **组合可爆** ★★★ | ✅ **第一次闭环：规划器找到 `typ.split;typ.tag`（没人告诉它），注册成 `auto.tag`，跑通。同一个输入下 `typ.tag` 单跑印 `SOLO`、链上印 `CHAINED`——一个任何单个技能都不产生的行为** |
 | **反射层（零上下文的回答）** | ✅ **`organs/reflex/`——建立/可改/可消退；一次观测永远不够（从 0.3 起步，阈值 0.6），失败比成功贵。有一条测试直接读源码，断言它不 import 任何上下文管线** |
 | **任务入口（率的分母）** | ✅ **`organs/intake/`——率终于有了分母。没记层的到达也算进分母：丢掉它会靠忘记不顺利的那些来提高率** |
-| **经验蒸馏** | ✅ **`organs/distill/`——把一次成功变成一条候选规则。只有成功、且只有花了成本的成功可以蒸；已经零上下文答过的东西再蒸一次就是把同一次成功数两遍** |
+| **经验蒸馏** | ✅ **`organs/distill/`——把一次成功变成一条候选规则。只有成功、且只有花了成本的成功可以蒸；已经零上下文答过的东西再蒸一次就是把同一次成功数两遍** || **经验蒸馏** | ✅ **`organs/distill/`——把一次成功变成一条候选规则。只有成功、且只有花了成本的成功可以蒸；已经零上下文答过的东西再蒸一次就是把同一次成功数两遍** |
+| **升级定价（问价 / 付价）** | ✅ **`escalation.quote` 不写链、不扣预算；`escalation.decide` 占 grant，且必须带上它依据的 `quote_id`——价格一动那张报价就作废。契约里唯一一处「先问价不花钱」** |
 
 ### 证据（七条命令，可复跑）
 
 ```sh
 tools/go test ./...                # 十三个包，249 个测试
-bash tools/drive.sh                # 243/243，全程只有 curl
+bash tools/drive.sh                # 261/261，全程只有 curl
 bash tools/drive_mcp.sh            # 21/21，全程只有 printf 的 JSON-RPC
 bash tools/check_format.sh         # gofmt 干净
 python3 tools/check_kernel.py      # 四条内核守卫
