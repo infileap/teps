@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""器官守卫：organs/<x>/ 与两份文档必须一一对上。
+"""器官守卫：organs/<x>/、两份文档的状态表、以及 ⬜ 的断言必须与代码一致。
 
 规则
 ----
@@ -105,6 +105,51 @@ def main():
     if not organs:
         print("器官守卫：organs/ 下一个含 .go 的目录都没有。通过是平凡的真，不构成证据。")
         return 0
+
+    # 方向三：⬜ 的断言不许指向一个真实存在的路径。
+    #
+    # 文档里唯一会主动说谎的地方是「这东西还没写」。代码不会让它变红，
+    # 所以一句「⬜ 未写」可以在功能落地之后原封不动地留很久 ——
+    # 契约里那张「实现 ⬜ 未写一行」的表就是这么留了十三个包的时间。
+    PATH_RE = re.compile(r"`([A-Za-z0-9_./-]+(?:/[A-Za-z0-9_.-]*)?)`")
+    docs = []
+    for base, dirs, files in os.walk(ROOT):
+        dirs[:] = [d for d in dirs if d not in (".git", ".toolchain", ".scratch", "node_modules")]
+        for fn in files:
+            if fn.endswith(".md"):
+                docs.append(os.path.join(base, fn))
+    for doc in docs:
+        rel = os.path.relpath(doc, ROOT)
+        for i, line in enumerate(read(doc).splitlines(), 1):
+            if "⬜" not in line:
+                continue
+            for tok in PATH_RE.findall(line):
+                if not (("/" in tok) or tok.endswith((".go", ".py", ".sh"))):
+                    continue
+                if os.path.exists(os.path.join(ROOT, tok.rstrip("/"))):
+                    problems.append(
+                        f"{rel}:{i} 说某样东西还没做，但它提到的 {tok} 是存在的")
+
+    # 方向四：实现状态表只许有一处。
+    #
+    # 这条规则针对的是一次真实事故：契约里那张表在实现完成之后一个字都没变。
+    # 同一个事实写两遍，就会有一个地方没被改到。
+    for doc in docs:
+        rel = os.path.relpath(doc, ROOT)
+        if rel == "README.md":
+            continue
+        for i, line in enumerate(read(doc).splitlines(), 1):
+            if not (line.startswith("|") and "⬜" in line):
+                continue
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if not cells:
+                continue
+            # 首格以「实现」结尾 = 在声明这个组件的实现状态。
+            # 契约里 `escalation.quote` 那种「某个帧尚未实现」是设计说明，
+            # 不是项目状态，不该被这条规则误伤。
+            if cells[0].endswith("实现"):
+                problems.append(
+                    f"{rel}:{i} 在维护一份实现状态表：状态只许有一处（README.md）")
 
     if problems:
         print(f"器官守卫：{len(problems)} 处不一致")
