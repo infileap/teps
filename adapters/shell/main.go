@@ -215,6 +215,9 @@ func (s *server) handle(f core.Frame) core.Frame {
 	if s.handleIntake(f, &out) {
 		return out
 	}
+	if s.handleEscalation(f, &out) {
+		return out
+	}
 	if s.handleReflex(f, &out) {
 		return out
 	}

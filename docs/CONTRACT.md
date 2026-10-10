@@ -70,6 +70,7 @@
 | `skill.` | `skill.publish` `skill.resolve` `skill.list` `skill.promote` `skill.invoke` `skill.compose` | `invoke` **钉死** `ref` 的内容哈希 |
 | `compose.` | `compose.propose` | **只读**：按类型搜出一条链，不运行任何东西 |
 | `memory.` | `memory.write` `memory.supersede` `memory.retrieve` | 写入后不可变，纠正只能 supersede |
+| `escalation.` | `escalation.quote` `escalation.decide` | ★ **问价不消耗**：`quote` 不写链、不扣预算；`decide` 占 grant，且必须带上它依据的 `quote_id`——价格一动，那条报价就作废 |
 | `arbiter.` | `arbiter.observe` `arbiter.rank` `arbiter.state` `arbiter.fix` | 后验是**从链上折出来的投影**，不另存一份 |
 | `reflex.` | `reflex.observe` `reflex.match` `reflex.state` | 唯一一层零上下文的回答 |
 | `task.` | `task.intake` `task.stats` | 任务入口——**率的分母** |
@@ -79,8 +80,6 @@
 
 | 消息 | 状态 |
 |---|---|
-| `escalation.quote` | ⬜ 未实现。设计要点仍在：**不消耗、不占配额** |
-| `escalation.decide` | ⬜ 未实现。占 grant |
 | `audit.tail` | ⬜ 未实现。追加式日志的尾部（`status` 目前只回 `head` 与 `seq`） |
 | `metrics.get` | ⬜ 未实现。暴露 `beta: [α, β]`（`arbiter.state` 目前回 `alpha`/`beta`） |
 
