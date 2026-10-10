@@ -698,7 +698,13 @@ r=$(req '{"t":"metrics.get","v":1}')
 expect "★ 还没收过任务时，覆盖率不是 0 而是「未定义」" "$r" '"defined":false'
 expect "★ 未定义时给出理由：分母不存在" "$r" 'the denominator does not exist'
 expect "★ 能力是乘积，一个因子未定义则未定义" "$r" 'coverage is undefined'
-expect "★ 准确率这个因子此刻也没有定义，且理由点名了缺口" "$r" 'nothing links a proposal'
+# ★ 反直觉但正确：任务入口一个都没收过，准确率却**已经有定义** ——
+# 因为规划器那条链是直接跑起来的，没有经过任务入口。三个因子里最晚有定义的那个，
+# 恰恰是唯一不依赖任务流的那一个。
+expect "★ 准确率此刻已经有定义：链跑过，而它没经过任务入口" "$r" '"accuracy":{"chains"'
+expect "★ 但它数的只是「声明由规划器产出的链」，不是「提议过的链」" "$r" '"provenance":"planner"'
+expect "★ 未跑过的链不许被当成失败计入（unrun 单独报）" "$r" '"unrun"'
+expect "★ 它也报了这条链是在哪个任务类下跑的" "$r" '"task_classes"'
 before=$(req '{"t":"status","v":1}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["seq"])')
 req '{"t":"metrics.get","v":1}' >/dev/null
 after=$(req '{"t":"status","v":1}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["seq"])')
@@ -891,7 +897,22 @@ expect "收过任务之后覆盖率有定义" "$r" '"intercept_rate"'
 expect "★ 分母跟着率一起走" "$r" '"tasks"'
 expect "可靠性有定义（后验已有观测）" "$r" '"weakest"'
 expect "★ 最弱的一环单独报出来（平均会把它盖住）" "$r" '"mean"'
-expect "★ 乘积仍未定义，且指出卡在准确率" "$r" 'a product with one undefined factor is undefined'
+expect "★★ 乘积第一次有了值（覆盖率 × 准确率 × 可靠性）" "$r" '"capability":{"defined":true'
+expect "★ 准确率数的是「声明由规划器产出的链」" "$r" '"observed":1'
+expect "★★ 准确率按任务类求和（后验是按 (skill, task_class) 分组的）" "$r" '"auto.tag":["task_exec"]'
+# ★★★ 最强的一条：那个值必须**就是**三个因子的乘积，而不是另算出来的一个数。
+# 只断言「有值」，一个把三个数相加再取平均的实现也会通过。
+if printf '%s' "$r" | python3 -c '
+import json,sys
+b=json.load(sys.stdin)["body"]
+want=b["coverage"]["intercept_rate"]*b["accuracy"]["value"]*b["reliability"]["mean"]
+got=b["capability"]["value"]
+sys.exit(0 if abs(want-got) < 1e-3 else 1)'; then
+  printf '  ok    ★★★ 那个值真的就是三个因子的乘积（不是另算的一个数）\n'
+else
+  printf '  FAIL  乘积的值与三个因子算不出来\n'
+  fails=$((fails + 1))
+fi
 # 最弱的一环必须真的比平均低：只断言字段存在，就分不出「算了」和「没算」
 if printf '%s' "$r" | python3 -c '
 import json,sys

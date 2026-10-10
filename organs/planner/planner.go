@@ -29,6 +29,8 @@
 package planner
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"math"
 	"sort"
 	"strconv"
@@ -90,6 +92,34 @@ type Result struct {
 	Unusable  []Unusable
 	States    int
 	Truncated bool
+}
+
+// SearchOp is the only operator the search produces.
+//
+// It is a named constant because it is half of a chain's identity, and an
+// identity spelled as a literal in two places is an identity that will drift.
+const SearchOp = "serial"
+
+// ShapeID is the identity of a chain's shape: its operator and its ordered
+// children.
+//
+// A proposal has no id of its own, and without one nothing connects "the chain
+// we proposed" to "the skill it became" — which is why accuracy was the one
+// factor of the capability product with no data behind it.
+//
+// The shape is the right identity because it is what a composition manifest
+// already declares: op and children. So this id is recomputable from anything
+// already published, and that is the only kind of identity that survives
+// publication. Order is part of it: serial(a,b) is not serial(b,a).
+func ShapeID(op string, children []string) string {
+	h := sha256.New()
+	h.Write([]byte(op))
+	h.Write([]byte{0})
+	for _, c := range children {
+		h.Write([]byte(c))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // maxStates bounds the frontier. A resource account, not a correctness one: the

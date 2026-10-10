@@ -1,10 +1,14 @@
 package main
 
 import (
+	"sort"
+	"strconv"
 	"strings"
 
 	"sansheng/core"
+	"sansheng/organs/arbiter"
 	"sansheng/organs/intake"
+	"sansheng/store"
 )
 
 // metrics.get is the one read that reports whether the numbers are defined.
@@ -68,16 +72,7 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 		coverage["reason"] = "no task has ever been taken in, so the denominator does not exist: a rate over zero arrivals is not zero, it is undefined"
 	}
 
-	// Accuracy is the factor nobody can compute yet, and saying so is the point.
-	// The planner proposes chains; a proposal that gets published becomes a
-	// skill with its own ref, and the runs land in the posterior keyed by
-	// skill_id. Nothing carries the proposal's identity across that gap, so
-	// there is no way to ask "of the chains we proposed, how many worked".
-	accuracy := map[string]any{
-		"defined": false,
-		"source":  "planner",
-		"reason":  "nothing links a proposal to the runs of the skill it became: the posterior is keyed by skill_id and a proposal has no id that survives publication",
-	}
+	accuracy := s.accuracy(tbl)
 
 	reliability := map[string]any{
 		"observations": observations,
@@ -107,10 +102,14 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 	switch {
 	case !coverage["defined"].(bool):
 		capability["reason"] = "coverage is undefined"
+	case !accuracy["defined"].(bool):
+		capability["reason"] = "accuracy is undefined"
 	case !reliability["defined"].(bool):
 		capability["reason"] = "reliability is undefined"
 	default:
-		capability["reason"] = "accuracy is undefined: a product with one undefined factor is undefined"
+		capability["defined"] = true
+		capability["value"] = round(coverage["intercept_rate"].(float64) *
+			accuracy["value"].(float64) * reliability["mean"].(float64))
 	}
 
 	out.Body = mustJSON(map[string]any{
@@ -119,4 +118,88 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 		"reliability": reliability,
 		"capability":  capability,
 	})
+}
+
+// plannerSource is the provenance value that marks a chain as the planner's
+// output rather than a person's.
+const plannerSource = "planner"
+
+// accuracy reports how the chains the planner proposed actually did.
+//
+// ★ The link between a proposal and a run is provenance.source == "planner".
+// It has to be something on the chain, because a proposal is not: the search is
+// pure and writes nothing. A published chain's *shape* is recoverable from its
+// own manifest, but whether a person or the planner produced it is not — that
+// is what the source field records, and it is the whole ABI this factor needed.
+//
+// The denominator is therefore "compositions that say the planner made them",
+// not "chains the planner proposed". A proposal nobody published leaves no
+// trace, and reporting a rate over proposals would be inventing a denominator.
+func (s *server) accuracy(tbl arbiter.Table) map[string]any {
+	out := map[string]any{"source": "store + arbiter", "provenance": plannerSource}
+	catalog, ref := s.skills.Catalog()
+	if ref != nil {
+		out["defined"] = false
+		out["reason"] = "the catalogue could not be read: " + ref.Reason
+		return out
+	}
+	traced, observed, ok := 0, 0, 0
+	var chains []string
+	byChain := map[string][]string{}
+	for _, e := range catalog {
+		m := e.Manifest
+		if m == nil || m.Kind != store.KindCompose || m.Compose == nil {
+			continue
+		}
+		if m.Provenance.Source != plannerSource {
+			continue
+		}
+		traced++
+		chains = append(chains, e.Name)
+		// ★ The posterior is keyed by (skill, task class), and an observation
+		// is written under the task class the invocation declared. Looking this
+		// chain up with an empty task class silently returns the *prior* — the
+		// same zero-means-two-things failure this op exists to report, this
+		// time inside the op itself. So the evidence is summed over every task
+		// class the chain has been run under, and the classes are reported.
+		//
+		// Count() is Alpha+Beta and the prior is Beta(1,1), so a posterior
+		// still at 2.0 has never been observed. "Never run" is not a failure
+		// and must not be averaged in as one.
+		var p arbiter.Posterior
+		var classes []string
+		for k, v := range tbl {
+			if k.Skill != e.Name {
+				continue
+			}
+			p.Alpha += v.Alpha
+			p.Beta += v.Beta
+			classes = append(classes, k.TaskClass)
+		}
+		if p.Count() <= 2.0+1e-9 {
+			continue
+		}
+		sort.Strings(classes)
+		byChain[e.Name] = classes
+		observed++
+		if p.Mean() >= 0.5 {
+			ok++
+		}
+	}
+	sort.Strings(chains)
+	out["traced"] = traced
+	out["observed"] = observed
+	out["unrun"] = traced - observed
+	out["ok"] = ok
+	out["chains"] = chains
+	out["task_classes"] = byChain
+	if observed == 0 {
+		out["defined"] = false
+		out["reason"] = "no chain the planner proposed has ever been run: " + strconv.Itoa(traced) +
+			" are in the shop and every one of them is still at the prior. A matching rate over proposals nobody ran would be a rate over zero"
+		return out
+	}
+	out["defined"] = true
+	out["value"] = round(float64(ok) / float64(observed))
+	return out
 }

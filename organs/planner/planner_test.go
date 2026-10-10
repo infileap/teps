@@ -278,3 +278,27 @@ func TestEveryProposalExplainsItself(t *testing.T) {
 		}
 	}
 }
+
+func TestShapeIDIsTheChainsIdentity(t *testing.T) {
+	a := ShapeID(SearchOp, []string{"h1", "h2"})
+	if len(a) != 64 {
+		t.Fatalf("a shape id is a sha256 hex digest, got %d chars", len(a))
+	}
+	if a != ShapeID(SearchOp, []string{"h1", "h2"}) {
+		t.Fatal("the same shape must have the same id")
+	}
+	// Order is part of the shape: serial(a,b) is not serial(b,a).
+	if a == ShapeID(SearchOp, []string{"h2", "h1"}) {
+		t.Fatal("order is part of a serial chain's shape")
+	}
+	// So is the operator, or a future parallel search over the same children
+	// would collide with a serial one.
+	if a == ShapeID("parallel", []string{"h1", "h2"}) {
+		t.Fatal("the operator is part of the shape")
+	}
+	// And the children must be separated, or their boundaries are lost:
+	// ["ab","c"] and ["a","bc"] concatenate to the same bytes.
+	if ShapeID(SearchOp, []string{"ab", "c"}) == ShapeID(SearchOp, []string{"a", "bc"}) {
+		t.Fatal("children must be separated, or their boundaries are lost")
+	}
+}

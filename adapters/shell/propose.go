@@ -107,6 +107,13 @@ func (s *server) handlePropose(f core.Frame, out *core.Frame) {
 	for _, p := range res.Proposals {
 		props = append(props, map[string]any{
 			"children": p.Children, "names": p.Names,
+			// The shape id is the proposal's identity, and it is recomputable
+			// from anything published: a composition manifest already declares
+			// op and children. Publishing is still a separate act, so a
+			// proposal nobody publishes leaves no trace — which is why the
+			// matching rate below counts what was published, not what was
+			// proposed.
+			"shape_id":    planner.ShapeID(planner.SearchOp, p.Children),
 			"reliability": round(p.Rel), "depth": p.Depth,
 			"reaches": p.Reaches, "why": p.Why,
 		})
