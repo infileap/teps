@@ -28,6 +28,17 @@ import (
 // that owns it, and it says out loud whether the factor is defined. That is the
 // whole contribution: a zero with no denominator is not a small number, it is
 // an absent one.
+//
+// The accuracy factor was the one with no definition at all, because nothing
+// linked a proposal to the runs of the skill it became. It does now. A
+// proposal's identity is the *shape* of the chain it proposes — a hash over the
+// operator and the ordered children — and that hash can be recomputed from any
+// published manifest, so the link needs no second copy of anything. Accuracy is
+// therefore counted over the compositions whose provenance says the planner
+// produced them: how many of those have ever run, and how they ran.
+//
+// Note what is *not* counted: proposals nobody published. They leave no trace,
+// and a rate over them would be a rate over zero.
 func (s *server) handleMetrics(f core.Frame, out *core.Frame) bool {
 	if !strings.HasPrefix(f.T, "metrics.") {
 		return false

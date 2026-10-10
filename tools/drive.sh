@@ -611,6 +611,15 @@ expect "★ typ.tag 单独跑只会印 SOLO：它需要上游" "$r" '"stdout":"S
 
 r=$(req '{"t":"compose.propose","v":1,"body":{"from":["doc"],"to":["tagged"],"task_class":"task_exec","max_depth":4,"floor":0.1,"max_proposals":5}}')
 expect "★ 规划器从类型里找到了这条链（没人告诉它）" "$r" '"names":["typ.split","typ.tag"]'
+expect "★ 提议带上了它自己的身份：形状的哈希" "$r" '"shape_id":"'
+shapeFromProposal=$(printf '%s' "$r" | python3 -c 'import json,sys
+ps=json.load(sys.stdin)["body"]["proposals"]
+print(ps[0]["shape_id"] if ps else "")' 2>/dev/null || true)
+if printf '%s' "$shapeFromProposal" | grep -qE '^[0-9a-f]{64}$'; then
+  printf '  ok    ★ 形状 id 是 64 位内容哈希\n'
+else
+  printf '  FAIL  提议没有带上合法的形状 id\n'; fails=$((fails + 1))
+fi
 expect "★ 提议自述它为什么够得着" "$r" '"why"'
 expect "★ 不声明类型的技能被报告为无法参与规划" "$r" 'will not guess what a skill accepts'
 
@@ -630,6 +639,26 @@ if [ -n "$autoRef" ] && [ "$autoRef" != "$tA" ] && [ "$autoRef" != "$tB" ]; then
 else
   printf '  FAIL  自动建出来的组合没有自己的 ref\n'; fails=$((fails + 1))
 fi
+# ★★ 形状 id 必须能从**已发布的清单**重算出来。那正是「提议 → 运行」这条链接的
+# 全部依据：不另存一份身份，而是让身份可以从制品本身再算一遍。
+shapeFromManifest=$(python3 - "$tA" "$tB" <<'PYINNER'
+import hashlib, sys
+h = hashlib.sha256()
+h.update(b"serial"); h.update(b"\x00")
+for c in sys.argv[1:]:
+    h.update(c.encode()); h.update(b"\x00")
+print(h.hexdigest())
+PYINNER
+)
+if [ -n "$shapeFromProposal" ] && [ "$shapeFromProposal" = "$shapeFromManifest" ]; then
+  printf '  ok    ★★ 形状 id 从已发布的清单能重算出来（链接不靠另存一份身份）\n'
+else
+  printf '  FAIL  提议的形状 id 与清单重算出来的不一致\n'; fails=$((fails + 1))
+fi
+
+# 一条发布了却从没跑过的规划器链：没有它，「未跑过」这条路径就没有样本。
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"tp5\",\"body\":{\"manifest\":{\"skill_id\":\"auto.never\",\"version\":\"1.0.0\",\"kind\":\"compose\",\"evidence\":\"E0\",\"license\":\"MIT\",\"provenance\":{\"source\":\"planner\"},\"deps\":[\"$tA\",\"$tB\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$tA\",\"$tB\"]}},\"files\":{}}}")
+expect "★ 一条发布了却从没跑过的规划器链" "$r" '"channel":"canary"'
 
 r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"tp2\",\"body\":{\"ref\":\"$autoRef\",\"attempt\":\"tp-auto\",\"task_class\":\"task_exec\",\"input\":{}}}")
 expect "★★ 没人写过这条链，它跑通了" "$r" '"outcome":"ok"'
@@ -899,6 +928,10 @@ expect "可靠性有定义（后验已有观测）" "$r" '"weakest"'
 expect "★ 最弱的一环单独报出来（平均会把它盖住）" "$r" '"mean"'
 expect "★★ 乘积第一次有了值（覆盖率 × 准确率 × 可靠性）" "$r" '"capability":{"defined":true'
 expect "★ 准确率数的是「声明由规划器产出的链」" "$r" '"observed":1'
+expect "★ 没跑过的那条不许被当成失败计入（traced 2 / unrun 1）" "$r" '"traced":2'
+expect "★ unrun 单独报出来" "$r" '"unrun":1'
+expect "★ 跑过的那条算 ok" "$r" '"ok":1'
+expect "★ 准确率的值直接报出来" "$r" '"value":1}'
 expect "★★ 准确率按任务类求和（后验是按 (skill, task_class) 分组的）" "$r" '"auto.tag":["task_exec"]'
 # ★★★ 最强的一条：那个值必须**就是**三个因子的乘积，而不是另算出来的一个数。
 # 只断言「有值」，一个把三个数相加再取平均的实现也会通过。
