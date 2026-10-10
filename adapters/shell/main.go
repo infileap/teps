@@ -40,6 +40,7 @@ type server struct {
 	skills    *store.Store
 	decisions *decisionStore
 	reflexes  *reflexStore
+	pools     *poolStore
 	tasks     *taskStore
 }
 
@@ -104,6 +105,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	pl, ref := newPoolStore(lg)
+	if ref != nil {
+		fmt.Fprintln(os.Stderr, "shell adapter: "+ref.Reason)
+		os.Exit(1)
+	}
+
 	s := &server{
 		log:       lg,
 		acct:      core.NewAccount(core.Budget{MS: *ms, Tokens: *tokens, Money: *money}),
@@ -113,6 +120,7 @@ func main() {
 		decisions: dec,
 		reflexes:  rfx,
 		tasks:     tsk,
+		pools:     pl,
 	}
 
 	if *addr != "" {
@@ -228,6 +236,9 @@ func (s *server) handle(f core.Frame) core.Frame {
 		return out
 	}
 	if s.handleMetrics(f, &out) {
+		return out
+	}
+	if s.handlePool(f, &out) {
 		return out
 	}
 

@@ -987,6 +987,55 @@ else
 fi
 
 echo
+echo "—— 算力池：容量是租约不是计数 ——"
+r=$(req '{"t":"pool.register","v":1,"key":"pl1","body":{"id":"core.0","kind":"local","capacity":1,"note":"this machine"}}')
+expect "免费的本机核登记成功" "$r" '"id":"core.0"'
+r=$(req '{"t":"pool.register","v":1,"key":"pl2","body":{"id":"gpu.far","kind":"remote","money_per_ms":0.002,"capacity":2}}')
+expect "远端 GPU 按毫秒计价" "$r" '"id":"gpu.far"'
+r=$(req '{"t":"pool.register","v":1,"key":"pl3","body":{"id":"core.0","kind":"local","capacity":4}}')
+expect "重复 id 被拒（替换会让租约指着一个已经不是它的资源）" "$r" 'already registered'
+r=$(req '{"t":"pool.register","v":1,"key":"pl4","body":{"id":"zero.cap","kind":"local","capacity":0}}')
+expect "容量为零被拒（登记表会显得比实际大）" "$r" 'look bigger'
+r=$(req '{"t":"pool.register","v":1,"key":"pl5","body":{"id":"neg.price","kind":"remote","money_per_ms":-0.5,"capacity":1}}')
+expect "负价格被拒" "$r" 'pays the caller'
+r=$(req '{"t":"pool.quote","v":1,"body":{"ms":1000,"tokens":100,"available_money":100}}')
+expect "★ 报价选免费的（同价时免费的就是最便宜的）" "$r" '"id":"core.0"'
+expect "报价标出它是免费的" "$r" '"free":true'
+
+r=$(req '{"t":"pool.lease","v":1,"key":"pl6","body":{"id":"core.0","holder":"job.a","ttl_ms":60000}}')
+expect "租到槽" "$r" '"holder":"job.a"'
+expect "报告用了几个槽" "$r" '"used":1'
+r=$(req '{"t":"pool.quote","v":1,"body":{"ms":1000,"tokens":100,"available_money":100}}')
+expect "★ 免费的被占了，于是选付费的（付不起的价格不是更便宜的价格）" "$r" '"id":"gpu.far"'
+expect "付费的报价算出钱" "$r" '"money":2'
+r=$(req '{"t":"pool.lease","v":1,"key":"pl7","body":{"id":"core.0","holder":"job.b","ttl_ms":60000}}')
+expect "★ 容量满了被拒" "$r" 'lease_held'
+expect "★ 拒绝点名持有者（「池满了」不是可执行的信息）" "$r" 'job.a'
+r=$(req '{"t":"pool.state","v":1}')
+expect "状态里列出持有者" "$r" '"held_by":["job.a"]'
+r=$(req '{"t":"pool.lease","v":1,"key":"pl8","body":{"id":"core.0","ttl_ms":60000}}')
+expect "匿名租约被拒（它永远释放不了）" "$r" 'anonymous lease'
+r=$(req '{"t":"pool.lease","v":1,"key":"pl9","body":{"id":"core.0","holder":"job.c","ttl_ms":0}}')
+expect "零 ttl 被拒（持有者一死就永久漏容量）" "$r" 'leaks capacity forever'
+
+echo
+echo "—— 算力池：租约过期，容量自己回来 ——"
+r=$(req '{"t":"pool.lease","v":1,"key":"pl10","body":{"id":"gpu.far","holder":"job.doomed","ttl_ms":50}}')
+expect "短租约拿到槽" "$r" '"holder":"job.doomed"'
+r=$(req '{"t":"pool.state","v":1}')
+expect "活着时它占着槽" "$r" '"job.doomed"'
+sleep 0.15
+r=$(req '{"t":"pool.state","v":1}')
+case "$r" in
+  *'job.doomed'*) printf '  FAIL  ★ 过期租约必须把容量还回来\n'; fails=$((fails + 1)) ;;
+  *) printf '  ok    ★ 过期租约把容量还回来了（持有者死了没人释放，池不会因此变小）\n' ;;
+esac
+r=$(req '{"t":"pool.release","v":1,"key":"pl11","body":{"holder":"job.a"}}')
+expect "释放按持有者，不按资源" "$r" '"holder":"job.a"'
+r=$(req '{"t":"pool.state","v":1}')
+expect "释放后槽空出来" "$r" '"held_by":[]'
+
+echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null
