@@ -52,20 +52,40 @@
 
 ## 三、消息集
 
-| 消息 | 要点 |
+★ **这一节现在有一台守卫**（`tools/check_frames.py`）：适配器分派的每一个帧类型，
+这里都必须有；这里写了的，必须有人分派。**它第一次运行就抓到 12 处不一致**——
+8 个前缀族文档里根本没提，4 个帧文档在承诺而没人实现。
+
+它防的是本项目第四次付过的那笔学费：**帧类型是全局命名空间**。我新加的
+`compose.build` 与 `organs/composer` 抢了同一个帧名，于是 composer 段七条断言全红。
+撞名的特别之处在于**两边都能跑**，只有把两边放在一起看才知道撞了。
+
+### 已实现的帧（按前缀族）
+
+| 前缀族 | 帧 | 要点 |
+|---|---|---|
+| （无前缀） | `hello` / `welcome` | `welcome` 带 `epoch`；服务端重启后客户端靠它察觉 ⇒ `stale_epoch` |
+| （无前缀） | `put` `spend` `status` `drain` `bye` | 参考传输的最小面 |
+| `session.` | `open` `event` `observe` `retry` `status` | 同会话**严格串行**；非法迁移在 append 之前就拒 |
+| `skill.` | `publish` `resolve` `list` `promote` `invoke` `compose` | `invoke` **钉死** `ref` 的内容哈希 |
+| `compose.` | `propose` | **只读**：按类型搜出一条链，不运行任何东西 |
+| `memory.` | `write` `supersede` `retrieve` | 写入后不可变，纠正只能 supersede |
+| `arbiter.` | `observe` `rank` `state` `fix` | 后验是**从链上折出来的投影**，不另存一份 |
+| `reflex.` | `observe` `match` `state` | 唯一一层零上下文的回答 |
+| `task.` | `intake` `stats` | 任务入口——**率的分母** |
+| `distill.` | `apply` | 一次成功的完整路径 → 一个可固化的提案 |
+
+### 契约承诺但**尚未实现**的帧
+
+| 消息 | 状态 |
 |---|---|
-| `hello` / `welcome` | `welcome` 带 `epoch`；服务端重启后客户端靠它察觉 ⇒ `stale_epoch` |
-| `session.open/send/stream/done` | 同会话**严格串行** |
-| `session.capsule` | 只读快照，带 `max_bytes` |
-| `session.fork` | 带 `kind`：`reasoning` 无租约；`execution` **必须**带 `resource` + lease |
-| `session.merge` | `decision` **没有默认值**，必须显式 |
-| `escalation.quote` | **不消耗、不占配额** |
-| `escalation.decide` | 占 grant |
-| `skill.list/invoke/publish` | `invoke` **钉死** `ref` 的内容哈希 |
-| `memory.write/retrieve/supersede` | 写入后不可变，纠正只能 supersede |
-| `audit.tail` | 追加式日志的尾部 |
-| `metrics.get` | 暴露 `beta: [α, β]` |
-| `bye` | 关闭 |
+| `escalation.quote` | ⬜ 未实现。设计要点仍在：**不消耗、不占配额** |
+| `escalation.decide` | ⬜ 未实现。占 grant |
+| `audit.tail` | ⬜ 未实现。追加式日志的尾部（`status` 目前只回 `head` 与 `seq`） |
+| `metrics.get` | ⬜ 未实现。暴露 `beta: [α, β]`（`arbiter.state` 目前回 `alpha`/`beta`） |
+
+**这四个是文档在承诺一个不存在的入口。** 标出来而不是删掉，是因为它们的设计要点仍然成立，
+只是没有实现——而「未实现」和「已实现」必须长得不一样。
 
 **`quote` 与 `decide` 分开是一个刻意的设计**：
 先问价不花钱，才能在不消耗配额的前提下做比较。合成它们会导致
