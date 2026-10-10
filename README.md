@@ -167,12 +167,13 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | **任务入口（率的分母）** | ✅ **`organs/intake/`——率终于有了分母。没记层的到达也算进分母：丢掉它会靠忘记不顺利的那些来提高率** |
 | **经验蒸馏** | ✅ **`organs/distill/`——把一次成功变成一条候选规则。只有成功、且只有花了成本的成功可以蒸；已经零上下文答过的东西再蒸一次就是把同一次成功数两遍** || **经验蒸馏** | ✅ **`organs/distill/`——把一次成功变成一条候选规则。只有成功、且只有花了成本的成功可以蒸；已经零上下文答过的东西再蒸一次就是把同一次成功数两遍** |
 | **升级定价（问价 / 付价）** | ✅ **`escalation.quote` 不写链、不扣预算；`escalation.decide` 占 grant，且必须带上它依据的 `quote_id`——价格一动那张报价就作废。契约里唯一一处「先问价不花钱」** |
+| **度量（这个数有没有定义）** | ✅ `metrics.get` 不新增任何事实，新增的是**「它有没有定义」**：同一个 `0` 可以表示「从没收过任务」也可以表示「一个都没答上」。三个因子各自从拥有它的器官取，`accuracy` 诚实报未定义并点名缺口，`reliability` 同时报 `mean` 与 `weakest`（乘积里最弱的一环才是那个数） |
 
 ### 证据（七条命令，可复跑）
 
 ```sh
 tools/go test ./...                # 十三个包，254 个测试
-bash tools/drive.sh                # 267/267，全程只有 curl
+bash tools/drive.sh                # 280/280，全程只有 curl
 bash tools/drive_mcp.sh            # 21/21，全程只有 printf 的 JSON-RPC
 bash tools/check_format.sh         # gofmt 干净
 python3 tools/check_kernel.py      # 四条内核守卫

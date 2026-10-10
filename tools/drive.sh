@@ -18,6 +18,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# ★ 一条不存在的命令只会在 stderr 上留一行 `command not found`，而脚本照旧报「全部通过」。
+# 这个 handler 把它变成一条 FAIL —— **通过不等于全跑过**：那一行如果本该是个 req，
+# 后面的 expect 就会拿上一次的响应去比，然后因为错误的原因通过。
+command_not_found_handle() {
+  printf '  FAIL  驱动脚本调用了一个不存在的命令：%s —— 那一行根本没跑\n' "$1" >&2
+  printf '%s\n' "$1" >> "$tmp/notfound"
+  return 127
+}
+
 echo "构建 shell 适配器"
 ( cd "$root" && PATH="$root/tools:$PATH" go build -o "$bin" ./adapters/shell ) || exit 1
 
@@ -733,7 +742,7 @@ r=$(req '{"t":"task.intake","v":1,"key":"tk6","body":{"task_id":"t6","stimulus":
 expect "重启后新的到达仍然走反射层" "$r" '"layer":"reflex"'
 expect "★ 分母跟着涨到 4" "$r" '"total":4'
 
-echoecho
+echo
 echo "—— 蒸馏：把一次成功变成一条规则（没人写过它）——"
 r=$(req '{"t":"task.intake","v":1,"key":"ds1","body":{"task_id":"d1","stimulus":"translate this paragraph"}}')
 expect "一个从没见过的刺激：先落到完整路径" "$r" '"layer":"full"'
@@ -773,7 +782,7 @@ expect "★ 新的刺激先让率下降（学会之前要先付学费）" "$r" '
 expect "★ 分母是 7 次到达" "$r" '"total":7'
 expect "★ 反射层 4 次" "$r" '"reflex":4'
 
-echoecho
+echo
 echo "—— 升级定价：问价不消耗，付价要凭那张报价 ——"
 off='[{"action":"skill","skill":"read.file","task_class":"task_exec","value":10,"cost":0.01,"latency":5,"latency_weight":0.1},{"action":"escalate","skill":"l3","task_class":"task_exec","value":10,"cost":1.5,"latency":200,"latency_weight":0.1,"pinned":0.9,"use_pinned":true}]'
 
@@ -895,6 +904,34 @@ else
   fails=$((fails + 1))
 fi
 
+# ★ 一个响应里不能自相矛盾：乘积的判据必须和三个因子各自的判据一致。
+# 只断言「乘积未定义」会漏掉「准确率谎报有定义」——那时两句话在同一份响应里互相否认。
+if printf '%s' "$r" | python3 -c '
+import json,sys
+b=json.load(sys.stdin)["body"]
+factors=[b[k]["defined"] for k in ("coverage","accuracy","reliability")]
+sys.exit(0 if b["capability"]["defined"] == all(factors) else 1)'; then
+  printf '  ok    ★★ 乘积的判据与三个因子各自的判据一致（同一份响应不许自相矛盾）\n'
+else
+  printf '  FAIL  乘积的判据与因子的判据不一致\n'
+  fails=$((fails + 1))
+fi
+
+# ★ 同一个事实两个帧必须给同一个答案：metrics 的覆盖率就是 task.stats 的拦截率。
+ts=$(req '{"t":"task.stats","v":1,"body":{}}')
+if python3 - "$r" "$ts" <<'PYINNER'
+import json,sys
+m=json.loads(sys.argv[1])["body"]["coverage"]["intercept_rate"]
+t=json.loads(sys.argv[2])["body"]["stats"]["intercept_rate"]
+sys.exit(0 if abs(m-t) < 1e-9 else 1)
+PYINNER
+then
+  printf '  ok    ★★ metrics 的覆盖率与 task.stats 的拦截率是同一个数\n'
+else
+  printf '  FAIL  同一个事实两个帧给了两个答案\n'
+  fails=$((fails + 1))
+fi
+
 echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
@@ -928,6 +965,14 @@ echo
 echo "—— bye ——"
 r=$(req '{"t":"bye","v":1}')
 expect "bye 被应答" "$r" '"epoch"'
+
+echo
+# 这道检查必须在裁决之前跑。放进 `fails -eq 0` 的分支里，它就只在「本来就没问题」时执行 ——
+# **一个只在没事时才跑的检查，报不出有事。**
+if [ -s "$tmp/notfound" ]; then
+  printf '  FAIL  驱动脚本有 %s 个不存在的命令（见上）\n' "$(wc -l < "$tmp/notfound")"
+  fails=$((fails + 1))
+fi
 
 echo
 if [ "$fails" -eq 0 ]; then
