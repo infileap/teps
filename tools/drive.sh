@@ -683,6 +683,19 @@ expect "跨重启规则仍在" "$r" '"id":"time.now"'
 expect "跨重启强度不变（它是链折出来的）" "$r" '"strength":0.7'
 expect "★ 跨重启仍然会回答" "$r" '"firing":1'
 echo
+echo
+echo "—— 度量：这个数到底有没有定义 ——"
+r=$(req '{"t":"metrics.get","v":1}')
+expect "★ 还没收过任务时，覆盖率不是 0 而是「未定义」" "$r" '"defined":false'
+expect "★ 未定义时给出理由：分母不存在" "$r" 'the denominator does not exist'
+expect "★ 能力是乘积，一个因子未定义则未定义" "$r" 'coverage is undefined'
+expect "★ 准确率这个因子此刻也没有定义，且理由点名了缺口" "$r" 'nothing links a proposal'
+before=$(req '{"t":"status","v":1}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["seq"])')
+req '{"t":"metrics.get","v":1}' >/dev/null
+after=$(req '{"t":"status","v":1}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["seq"])')
+if [ "$before" = "$after" ]; then printf '  ok    ★★ 读度量不写链（seq 不变）\n'; else printf '  FAIL  读度量把链改动了\n'; fails=$((fails+1)); fi
+
+echo
 echo "—— 任务入口：率现在有分母了 ——"
 r=$(req '{"t":"task.intake","v":1,"key":"tk1","body":{"task_id":"t1","stimulus":"What  TIME is it?"}}')
 expect "第一次到达被记录" "$r" '"task_id":"t1"'
@@ -860,6 +873,27 @@ before=$(req '{"t":"status","v":1}' | python3 -c 'import json,sys; print(json.lo
 req '{"t":"audit.tail","v":1,"body":{"limit":0}}' >/dev/null
 after=$(req '{"t":"status","v":1}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["seq"])')
 if [ "$before" = "$after" ]; then printf '  ok    ★★ 读链不写链（seq 不变）\n'; else printf '  FAIL  读链把链改动了\n'; fails=$((fails+1)); fi
+
+echo
+echo
+echo "—— 度量：现在覆盖率有分母了 ——"
+r=$(req '{"t":"metrics.get","v":1}')
+expect "收过任务之后覆盖率有定义" "$r" '"intercept_rate"'
+expect "★ 分母跟着率一起走" "$r" '"tasks"'
+expect "可靠性有定义（后验已有观测）" "$r" '"weakest"'
+expect "★ 最弱的一环单独报出来（平均会把它盖住）" "$r" '"mean"'
+expect "★ 乘积仍未定义，且指出卡在准确率" "$r" 'a product with one undefined factor is undefined'
+# 最弱的一环必须真的比平均低：只断言字段存在，就分不出「算了」和「没算」
+if printf '%s' "$r" | python3 -c '
+import json,sys
+b=json.load(sys.stdin)["body"]
+w,m=b["reliability"]["weakest"],b["reliability"]["mean"]
+sys.exit(0 if w < m else 1)'; then
+  printf '  ok    ★★ 最弱的一环确实低于平均（一个技能腐烂了，平均会把它盖住）\n'
+else
+  printf '  FAIL  weakest 没有真的算出来（等于 mean 或更高）\n'
+  fails=$((fails + 1))
+fi
 
 echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
