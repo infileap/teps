@@ -179,3 +179,120 @@ func TestEveryCodeHasARetryAnswer(t *testing.T) {
 		}
 	}
 }
+
+func TestTailReturnsTheLastRecordsInOrder(t *testing.T) {
+	l, ref := Open(t.TempDir())
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	defer l.Close()
+	for i := 1; i <= 5; i++ {
+		if _, ref := l.Append("k"+itoa(i), []byte(`{"n":`+itoa(i)+`}`)); ref != nil {
+			t.Fatal(ref)
+		}
+	}
+	got, ref := l.Tail(3)
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	if len(got) != 3 {
+		t.Fatalf("want 3 records, got %d", len(got))
+	}
+	for i, e := range got {
+		if e.Seq != uint64(3+i) {
+			t.Fatalf("record %d has seq %d, want %d", i, e.Seq, 3+i)
+		}
+	}
+	// The last tailed record must be the chain head. A tail that ended
+	// somewhere else would be a second account of what the chain contains.
+	head, seq := l.Head()
+	last := got[len(got)-1]
+	if last.Head != head || last.Seq != seq {
+		t.Fatalf("tail ends at %d/%s but the chain head is %d/%s", last.Seq, last.Head, seq, head)
+	}
+}
+
+func TestTailLongerThanTheChainReturnsTheChain(t *testing.T) {
+	l, ref := Open(t.TempDir())
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	defer l.Close()
+	empty, ref := l.Tail(5)
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("an empty chain has an empty tail, got %d", len(empty))
+	}
+	l.Append("k1", []byte(`{"n":1}`))
+	got, ref := l.Tail(50)
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	if len(got) != 1 {
+		t.Fatalf("asking for more than exists returns what exists, got %d", len(got))
+	}
+}
+
+func TestTailRefusesANonPositiveLimit(t *testing.T) {
+	l, ref := Open(t.TempDir())
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	defer l.Close()
+	for _, n := range []int{0, -1} {
+		_, ref := l.Tail(n)
+		if ref == nil || ref.Code != CodeBadRequest {
+			t.Fatalf("limit %d must be refused as a bad request, got %v", n, ref)
+		}
+	}
+}
+
+func TestTailIsCappedRatherThanTruncatedSilently(t *testing.T) {
+	l, ref := Open(t.TempDir())
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	defer l.Close()
+	_, ref = l.Tail(MaxTail + 1)
+	if ref == nil || ref.Code != CodeBadRequest {
+		t.Fatalf("a request past the cap must be refused, not truncated: got %v", ref)
+	}
+	if _, ref := l.Tail(MaxTail); ref != nil {
+		t.Fatalf("exactly the cap must be allowed, got %v", ref)
+	}
+}
+
+func TestTailReadsWithoutWriting(t *testing.T) {
+	dir := t.TempDir()
+	l, ref := Open(dir)
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	l.Append("k1", []byte(`{"n":1}`))
+	before, seqBefore := l.Head()
+	if _, ref := l.Tail(10); ref != nil {
+		t.Fatal(ref)
+	}
+	after, seqAfter := l.Head()
+	if before != after || seqBefore != seqAfter {
+		t.Fatalf("reading the chain changed it: %s/%d -> %s/%d", before, seqBefore, after, seqAfter)
+	}
+	l.Close()
+
+	// And the tail survives a restart, because it is read from the file and
+	// not remembered.
+	again, ref := Open(dir)
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	defer again.Close()
+	got, ref := again.Tail(1)
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	if len(got) != 1 || got[0].Head != before {
+		t.Fatalf("after restart the tail should still end at %s, got %v", before, got)
+	}
+}

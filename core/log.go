@@ -188,6 +188,61 @@ func (l *Log) Replay(fn func(Entry) error) *Refusal {
 	return nil
 }
 
+// MaxTail caps how many records one tail request may return.
+//
+// The chain is append-only and unbounded; an uncapped read is a request that
+// gets slower forever. The cap is the honest form of "read the tail": if you
+// need more than this, you are not auditing a tail, you are copying the log,
+// and that deserves its own answer rather than a silent truncation.
+const MaxTail = 1000
+
+// Tail returns the last `limit` records in chain order.
+//
+// Reading the chain is a read of the authoritative structure, so it belongs
+// here and not in an adapter: what the chain contains is the Log concept's own
+// fact, and an adapter that rebuilt the tail by parsing events.log would be a
+// second implementation of it — the exact drift this project has paid for
+// repeatedly.
+//
+// The walk is O(n) in the chain, which is honest: the chain is the only place
+// the records are, and a cached index would be a second copy of them.
+func (l *Log) Tail(limit int) ([]Entry, *Refusal) {
+	if limit <= 0 {
+		return nil, Refuse(CodeBadRequest, "tail needs a positive limit")
+	}
+	if limit > MaxTail {
+		return nil, Refuse(CodeBadRequest, "tail is capped at "+itoa(MaxTail)+" records")
+	}
+	ring := make([]Entry, 0, limit)
+	if ref := l.Replay(func(e Entry) error {
+		if len(ring) == limit {
+			copy(ring, ring[1:])
+			ring = ring[:limit-1]
+		}
+		ring = append(ring, e)
+		return nil
+	}); ref != nil {
+		return nil, ref
+	}
+	return ring, nil
+}
+
+// itoa is a local integer formatter, so this file keeps needing no imports
+// beyond what it already has.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
+}
+
 // Head returns the current chain head and the number of records in it.
 func (l *Log) Head() (string, uint64) {
 	l.mu.Lock()

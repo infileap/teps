@@ -834,6 +834,34 @@ r=$(req "{\"t\":\"escalation.decide\",\"v\":1,\"id\":\"e12\",\"body\":{\"quote_i
 expect "★ 拿零 margin 的报价去按 margin=5 行动被拒" "$r" 'the quote is stale'
 
 
+echo
+echo "—— audit.tail：链本身，不是关于链的摘要 ——"
+jlen() { python3 -c 'import json,sys; print(len(json.load(sys.stdin)["body"]["entries"]))'; }
+jlast() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["entries"][-1]["head"])'; }
+jhead() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["head"])'; }
+
+r=$(req '{"t":"audit.tail","v":1,"body":{"limit":3}}')
+n=$(printf '%s' "$r" | jlen)
+if [ "$n" = "3" ]; then printf '  ok    尾部按要求的条数返回\n'; else printf '  FAIL  尾部返回 %s 条，要 3 条\n' "$n"; fails=$((fails+1)); fi
+r2=$(req '{"t":"status","v":1}')
+lh=$(printf '%s' "$r" | jlast)
+sh=$(printf '%s' "$r2" | jhead)
+if [ -n "$lh" ] && [ "$lh" = "$sh" ]; then
+  printf '  ok    ★ 尾部最后一条的链头就是 status 报的链头（同一个事实，同一个答案）\n'
+else
+  printf '  FAIL  尾部链头 %s != status 链头 %s\n' "$lh" "$sh"; fails=$((fails+1))
+fi
+r=$(req '{"t":"audit.tail","v":1}')
+n=$(printf '%s' "$r" | jlen)
+if [ "$n" = "20" ]; then printf '  ok    没给 limit 时用默认值，不是无声地全给\n'; else printf '  FAIL  默认返回 %s 条\n' "$n"; fails=$((fails+1)); fi
+expect "负数 limit 被拒" "$(req '{"t":"audit.tail","v":1,"body":{"limit":-1}}')" 'bad_request'
+expect "超过上限被拒（不是悄悄截断）" "$(req '{"t":"audit.tail","v":1,"body":{"limit":1001}}')" 'bad_request'
+before=$(req '{"t":"status","v":1}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["seq"])')
+req '{"t":"audit.tail","v":1,"body":{"limit":0}}' >/dev/null
+after=$(req '{"t":"status","v":1}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["seq"])')
+if [ "$before" = "$after" ]; then printf '  ok    ★★ 读链不写链（seq 不变）\n'; else printf '  FAIL  读链把链改动了\n'; fails=$((fails+1)); fi
+
+echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null

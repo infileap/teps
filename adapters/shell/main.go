@@ -224,6 +224,9 @@ func (s *server) handle(f core.Frame) core.Frame {
 	if s.handleDecision(f, &out) {
 		return out
 	}
+	if s.handleAudit(f, &out) {
+		return out
+	}
 
 	switch f.T {
 	case "hello":
