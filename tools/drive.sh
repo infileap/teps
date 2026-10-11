@@ -237,6 +237,19 @@ r=$(req '{"t":"skill.resolve","v":1,"body":{"ref":"../../etc/passwd"}}')
 expect "非哈希的 ref 被拒" "$r" 'bad_request'
 
 echo
+echo "—— 内容哈希是一个三元组：算法 / 版本 / 归一化 ——"
+# ★ 把算法写在名字里。裸 64 位十六进制是磁盘与线上的形式（＝sha256），
+# 带前缀的形式说的是同一件事，只是说出来。
+r=$(req "{\"t\":\"skill.resolve\",\"v\":1,\"body\":{\"ref\":\"sha256:$skref\"}}")
+expect "★ 带算法前缀的 ref 与裸 ref 指的是同一个 blob" "$r" '"skill_id":"read.file"'
+r=$(req "{\"t\":\"skill.resolve\",\"v\":1,\"body\":{\"ref\":\"blake3:$skref\"}}")
+expect "★ 本店没有的算法被拒" "$r" 'blake3'
+expect "★ 而且说清「不是损坏」——否则读者会去找一个不存在的损伤" "$r" 'not corrupt'
+expect "★ 它是一个调用方的错，不是一个恢复事件" "$r" '"code":"bad_request"'
+r=$(req '{"t":"skill.resolve","v":1,"body":{"ref":"sha256:nothex"}}')
+expect "★ 前缀合法但十六进制畸形，是另一个答案" "$r" 'not a content hash'
+
+echo
 echo "—— 技能店：证据等级是固化闸门 ——"
 r=$(req '{"t":"skill.publish","v":1,"key":"p5","body":{"manifest":{"skill_id":"raw.guess","version":"1","kind":"code","verify_assert":["x"],"evidence":"E0","license":"MIT","provenance":{"source":"model"},"env":{"interpreter":"builtin"}},"files":{"a":"x"}}}')
 expect "E0 可以进 canary（生成不等于可用）" "$r" '"channel":"canary"'

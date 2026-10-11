@@ -728,3 +728,224 @@ func TestACompositionCarriesNoFiles(t *testing.T) {
 		t.Fatalf("the refusal must say what the files would have been, got %q", ref.Reason)
 	}
 }
+
+// ★ A content hash is a triple — algorithm, version, normalization — and the
+// string is only one of the three.
+//
+// The concrete cost of leaving the algorithm implicit: a digest produced by
+// some other 64-hex algorithm passes a shape check, the recomputation disagrees,
+// and the caller is told `recovery_required` — "these bytes are corrupt". The
+// truth is "this store does not implement that algorithm". Two different facts,
+// one code, and the second one sends the reader looking for damage that is not
+// there.
+func TestAnUnknownAlgorithmIsNotCorruption(t *testing.T) {
+	dir := t.TempDir()
+	c, err := OpenCAS(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("payload")
+	h, err := c.Put(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Same bytes, same length, different algorithm named.
+	foreign := "blake3:" + h
+	_, err = c.Get(foreign)
+	if err == nil {
+		t.Fatal("a digest in an algorithm this store does not have must be refused")
+	}
+	ref, ok := err.(*core.Refusal)
+	if !ok {
+		t.Fatalf("want a refusal, got %T", err)
+	}
+	if ref.Code != core.CodeBadRequest {
+		t.Fatalf("an unimplemented algorithm is a caller error, not damage: got %s", ref.Code)
+	}
+	if !strings.Contains(ref.Reason, "blake3") || !strings.Contains(ref.Reason, "not corrupt") {
+		t.Fatalf("the refusal must name the algorithm and say the bytes are fine: %s", ref.Reason)
+	}
+
+	// And the fact it must NOT be confused with: real corruption. The blob has
+	// to exist for this to be a claim about its bytes — an absent file is a
+	// third answer again, and it comes back as a path error.
+	bad := strings.Repeat("0", 64)
+	if err := os.MkdirAll(filepath.Dir(c.path(bad)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(c.path(bad), []byte("tampered"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Get(bad)
+	ref2, ok := err.(*core.Refusal)
+	if !ok {
+		t.Fatalf("want a refusal, got %T", err)
+	}
+	if ref2.Code != core.CodeRecoveryRequired {
+		t.Fatalf("a sha256 digest whose bytes disagree IS damage: got %s", ref2.Code)
+	}
+	if ref.Code == ref2.Code {
+		t.Fatal("two different facts must not share one code")
+	}
+}
+
+func TestADigestMayNameItsAlgorithmAndBothFormsNameTheSameBlob(t *testing.T) {
+	dir := t.TempDir()
+	c, err := OpenCAS(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := c.Put([]byte("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Bare hex is the stored form and means sha256.
+	for _, form := range []string{h, AlgoSHA256 + ":" + h} {
+		got, err := c.Get(form)
+		if err != nil {
+			t.Fatalf("Get(%s): %s", form, err)
+		}
+		if string(got) != "payload" {
+			t.Fatalf("Get(%s) returned %q", form, got)
+		}
+		// ★ Get and Has must agree about what a name is. A store whose two
+		// halves disagree would deny a blob it can read.
+		if !c.Has(form) {
+			t.Fatalf("Has(%s) must agree with Get(%s)", form, form)
+		}
+	}
+	if c.Has("blake3:" + h) {
+		t.Fatal("Has must not claim a blob under an algorithm this store does not have")
+	}
+	if c.Has(strings.Repeat("0", 64)) {
+		t.Fatal("Has reports presence, not validity, but a well-formed absent hash is still absent")
+	}
+}
+
+func TestSplitDigestReadsBothForms(t *testing.T) {
+	h := strings.Repeat("a", 64)
+	cases := []struct{ in, algo, hex string }{
+		{h, AlgoSHA256, h},
+		{AlgoSHA256 + ":" + h, AlgoSHA256, h},
+		{"blake3:" + h, "blake3", h},
+	}
+	for _, c := range cases {
+		algo, hex := SplitDigest(c.in)
+		if algo != c.algo || hex != c.hex {
+			t.Fatalf("SplitDigest(%q) = (%q,%q), want (%q,%q)", c.in, algo, hex, c.algo, c.hex)
+		}
+	}
+	if _, _, ok := ValidDigest("blake3:" + h); ok {
+		t.Fatal("an algorithm this store does not implement is not valid here")
+	}
+	if algo, _, _ := ValidDigest("blake3:" + h); algo != "blake3" {
+		t.Fatalf("the algorithm must still be reported so the caller can say which one: %q", algo)
+	}
+	if _, _, ok := ValidDigest("sha256:nothex"); ok {
+		t.Fatal("a malformed hex is not valid")
+	}
+}
+
+// ★ The third leg: normalization.
+//
+// A manifest's digest is the hash of its canonical bytes. Bytes written to a
+// different recipe are the same *value* under a different *identity*, and the
+// bytes are intact — which is again a different answer from corruption.
+func TestABlobWrittenToADifferentRecipeIsNotCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	c, err := OpenCAS(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately not canonical: keys out of order and a space.
+	h, err := c.Put([]byte(`{"b":1, "a":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v map[string]int
+	err = c.GetJSON(h, &v)
+	if err == nil {
+		t.Fatal("a non-canonical manifest blob must be reported")
+	}
+	ref, ok := err.(*core.Refusal)
+	if !ok {
+		t.Fatalf("want a refusal, got %T", err)
+	}
+	if !strings.Contains(ref.Reason, NormCanonJSON) {
+		t.Fatalf("the refusal must name the normalization it wanted: %s", ref.Reason)
+	}
+	if !strings.Contains(ref.Reason, "intact") {
+		t.Fatalf("the bytes are fine and the refusal has to say so: %s", ref.Reason)
+	}
+	// The canonical form of the same value reads back cleanly.
+	ch, canon, err := c.PutJSON(map[string]int{"a": 2, "b": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(canon) != `{"a":2,"b":1}` {
+		t.Fatalf("unexpected canonical form: %s", canon)
+	}
+	if err := c.GetJSON(ch, &v); err != nil {
+		t.Fatalf("canonical bytes must read back: %s", err)
+	}
+}
+
+// ★ Resolve must not flatten the CAS's answers into one sentence.
+//
+// Four different facts reach it, and only the first means "you asked for
+// something that is not here":
+//
+//	absent          -> not a skill_ref in this store
+//	corrupt bytes   -> recovery_required
+//	unknown algo    -> bad_request, naming the algorithm
+//	wrong recipe    -> recovery_required, naming the normalization
+//
+// A reader sent down the wrong one of those four looks for damage that is not
+// there, or for a missing thing that is present.
+func TestResolveKeepsTheFourAnswersApart(t *testing.T) {
+	s := tmpStore(t)
+
+	// 1. Absent.
+	if _, _, ref := s.Resolve(strings.Repeat("a", 64)); ref == nil ||
+		!strings.Contains(ref.Reason, "not a skill_ref in this store") {
+		t.Fatalf("an absent ref must say so: %v", ref)
+	}
+
+	// 2. Unknown algorithm — the bytes may be perfectly fine.
+	if _, _, ref := s.Resolve("blake3:" + strings.Repeat("a", 64)); ref == nil ||
+		ref.Code != core.CodeBadRequest || !strings.Contains(ref.Reason, "blake3") {
+		t.Fatalf("an unimplemented algorithm must be a caller error naming it: %v", ref)
+	}
+
+	// 3. Corrupt bytes: the blob exists and does not match its own name.
+	bad := strings.Repeat("b", 64)
+	if err := os.MkdirAll(filepath.Dir(s.CAS.path(bad)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.CAS.path(bad), []byte("tampered"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ref := s.Resolve(bad); ref == nil || ref.Code != core.CodeRecoveryRequired {
+		t.Fatalf("a corrupt blob must be a recovery event: %v", ref)
+	}
+
+	// 4. Right bytes, wrong recipe.
+	raw := strings.Repeat("c", 64)
+	if err := os.MkdirAll(filepath.Dir(s.CAS.path(raw)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A package blob, but not in canonical form.
+	body := []byte(`{"manifest":"` + strings.Repeat("d", 64) + `", "files":{}}`)
+	h := Hash(body)
+	if err := os.MkdirAll(filepath.Dir(s.CAS.path(h)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.CAS.path(h), body, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	_, _, ref := s.Resolve(h)
+	if ref == nil || !strings.Contains(ref.Reason, NormCanonJSON) {
+		t.Fatalf("a blob written to another recipe must name the normalization: %v", ref)
+	}
+}

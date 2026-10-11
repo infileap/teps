@@ -260,9 +260,25 @@ func (s *Store) Register(reg Registration) (*Result, *core.Refusal) {
 }
 
 // Resolve reads a package and its manifest by skill_ref.
+//
+// ★ A refusal from the CAS is **passed through**, not flattened.
+//
+// This used to answer every read failure with one sentence — "not a skill_ref in
+// this store" — which made four different facts indistinguishable: the blob is
+// absent, the bytes are corrupt, the digest names an algorithm this store does
+// not have, and the bytes were written to a different normalization. Only the
+// first of those means "you asked for something that is not here"; the others
+// mean the thing is here and something else is wrong with it. Collapsing them
+// sends every reader down the same path, and three of the four are the wrong one.
+//
+// A plain read error still becomes "not in this store", because an absent file
+// genuinely is that.
 func (s *Store) Resolve(ref string) (*Package, *Manifest, *core.Refusal) {
 	var pkg Package
 	if err := s.CAS.GetJSON(ref, &pkg); err != nil {
+		if r, ok := err.(*core.Refusal); ok {
+			return nil, nil, r
+		}
 		return nil, nil, &core.Refusal{
 			Code:   core.CodeBadRequest,
 			Reason: "not a skill_ref in this store: " + ref,
