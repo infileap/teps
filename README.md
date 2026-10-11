@@ -107,6 +107,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
             check_adapters.py                    翻译器不许 import 内核
             check_frames.py                      帧类型 ↔ 契约不许漂移
             check_organs.py                      器官 ↔ 两份文档的状态表不许漂移
+            check_assertions.py                  ★ 断言里的 JSON 值片段不许互相是前缀
             check_format.sh                      gofmt 干净，别让 diff 里混进重排
             drive.sh                             ★ 自由判据：只有 curl 驱动全流程
             drive_mcp.sh                         ★ 自由判据：只有 printf 的 JSON-RPC
@@ -187,7 +188,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 
 ```sh
 tools/go test ./...                # 十四个包，301 个测试
-bash tools/drive.sh                # 365/365，全程只有 curl
+bash tools/drive.sh                # 406/406，全程只有 curl
 bash tools/drive_mcp.sh            # 21/21，全程只有 printf 的 JSON-RPC
 bash tools/check_format.sh         # gofmt 干净
 python3 tools/check_kernel.py      # 四条内核守卫
@@ -195,6 +196,7 @@ python3 tools/check_contract.py    # 文档与代码的拒绝码不许漂移
 python3 tools/check_adapters.py    # 翻译器不许 import 内核
 python3 tools/check_frames.py      # 帧类型与契约必须一一对上
 python3 tools/check_organs.py      # 器官与两份文档的状态表必须一一对上
+python3 tools/check_assertions.py  # ★ 存在性判据不许冒充一致性判据
 ```
 
 守卫读数：**511 / 3000 行 · 0 / 0 依赖 · 6 / 12 公开类型 · 0 / 0 领域词**。
