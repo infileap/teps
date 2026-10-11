@@ -67,7 +67,7 @@
 | （无前缀） | `hello` / `welcome` | `welcome` 带 `epoch`；服务端重启后客户端靠它察觉 ⇒ `stale_epoch` |
 | （无前缀） | `put` `spend` `status` `drain` `bye` | 参考传输的最小面 |
 | `session.` | `session.open` `session.event` `session.observe` `session.retry` `session.status` | 同会话**严格串行**；非法迁移在 append 之前就拒 |
-| `skill.` | `skill.publish` `skill.resolve` `skill.list` `skill.promote` `skill.invoke` `skill.compose` | `invoke` **钉死** `ref` 的内容哈希 |
+| `skill.` | `skill.publish` `skill.resolve` `skill.list` `skill.promote` `skill.invoke` `skill.compose` | `invoke` **钉死** `ref` 的内容哈希 | **`verify_refute` 是提级的必要条件**：只有必过用例的声明停在 E0。
 | `compose.` | `compose.propose` | **只读**：按类型搜出一条链，不运行任何东西 |
 | `memory.` | `memory.write` `memory.supersede` `memory.retrieve` | 写入后不可变，纠正只能 supersede |
 | `escalation.` | `escalation.quote` `escalation.decide` | ★ **问价不消耗**：`quote` 不写链、不扣预算；`decide` 占 grant，且必须带上它依据的 `quote_id`——价格一动，那条报价就作废 |

@@ -434,6 +434,14 @@ xweak=$(xpub x9 "$(xman runner.weak '["exit == 0","stdout contains \"RUNNER-OK\"
 # 不是「这条断言被证明为假」—— 算作驳倒就是让一个坏掉的技能靠「跑不完」拿到 E1。
 RUNNER_HANG_SH='read -r line\ncase $line in *REFUTE*) sleep 5; exit 0;; esac\nprintf RUNNER-OK\n'
 xtime=$(xpub x10 "$(xman runner.hangs '["exit == 0","stdout contains \"RUNNER-OK\""]' 300 '[{"input":{"marker":"REFUTE"},"assert":"exit == 0"}]')" "{\"run.sh\":\"$RUNNER_HANG_SH\"}")
+# 一条必败用例必须说清**哪条断言**应该失败：没有断言的必败用例没有内容，
+# 它只会把「我们试过」变成一句没有宾语的话。
+r=$(req '{"t":"skill.publish","v":1,"key":"xr0","body":{"manifest":{"skill_id":"empty.refute","version":"1.0.0","kind":"script","verify_assert":["exit == 0"],"verify_refute":[{"input":{},"assert":""}],"budget":{"ms":1000},"evidence":"E0","idempotent":true,"license":"MIT","provenance":{"source":"handwritten"},"env":{"interpreter":"/bin/sh"}},"files":{"run.sh":"exit 0\n"}}}')
+expect "★ 必败用例必须说清哪条断言应该失败" "$r" 'has no assert'
+expect "★ 理由说清缺的是什么" "$r" 'nothing to fail has no content'
+r=$(req '{"t":"skill.publish","v":1,"key":"xr1","body":{"manifest":{"skill_id":"compose.refute","version":"1.0.0","kind":"compose","verify_refute":[{"input":{},"assert":"exit == 0"}],"budget":{"ms":1000},"evidence":"E0","idempotent":true,"license":"MIT","provenance":{"source":"handwritten"},"compose":{"op":"serial","children":[]}},"files":{}}}')
+expect "★ 组合不许声明必败用例（它自己什么都不产出）" "$r" 'compose declares no verify_refute'
+
 if [ -n "$xok" ] && [ -n "$xlie" ] && [ -n "$xslow" ] && [ -n "$xvague" ] &&
   [ -n "$xnobud" ] && [ -n "$xamb" ] && [ -n "$xecho" ] && [ -n "$xone" ] && [ -n "$xweak" ] && [ -n "$xtime" ]; then
   printf '  ok    十个技能已注册（E0，canary）\n'
