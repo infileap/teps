@@ -61,6 +61,16 @@ type Offer struct {
 	// notably asking a human, whose reliability is not the system's to estimate.
 	Pinned    float64
 	UsePinned bool
+
+	// Tag is an opaque label the caller attaches to an offer so it can be
+	// matched back to its input after ranking. The arbiter never reads it.
+	//
+	// It exists because two offers can carry the same action name — two
+	// different skills are both "skill" actions — and a response that keyed
+	// its per-offer notes by action would then attribute one offer's cost to
+	// the other. That is the same failure this project keeps paying for: one
+	// fact with two copies, and only one of them updated.
+	Tag string
 }
 
 // Utility is U(a) = P(success|a) * value - cost - latency + exploration.

@@ -3,11 +3,14 @@ package main
 import (
 	"encoding/json"
 	"math"
+	"strconv"
 	"strings"
+	"time"
 
 	"sansheng/core"
 	"sansheng/evidence"
 	"sansheng/organs/arbiter"
+	"sansheng/organs/pool"
 )
 
 // The arbiter's table is a projection of the chain, like sessions and memory.
@@ -233,13 +236,10 @@ func (s *server) arbiterRank(f core.Frame, out *core.Frame) {
 		out.Err = ref
 		return
 	}
-	offers := make([]arbiter.Offer, 0, len(body.Offers))
-	for _, o := range body.Offers {
-		offers = append(offers, arbiter.Offer{
-			Action: arbiter.Action(o.Action), Skill: o.Skill, TaskClass: o.TaskClass,
-			Value: o.Value, Cost: o.Cost, Latency: o.Latency, LatencyWeight: o.LatencyWeight,
-			Pinned: o.Pinned, UsePinned: o.UsePinned,
-		})
+	offers, meta, skipped, ref := s.resolveOffers(body.Offers)
+	if ref != nil {
+		out.Err = ref
+		return
 	}
 	s.decisions.lock()
 	tbl := s.decisions.table()
@@ -253,18 +253,99 @@ func (s *server) arbiterRank(f core.Frame, out *core.Frame) {
 		out.Body = mustJSON(map[string]any{
 			"chosen": esc.Chosen.Offer.Action, "utility": round(esc.Chosen.Utility),
 			"reason": esc.Reason, "threshold": body.Margin,
+			"cost": metaAt(meta, esc.Chosen.Offer.Tag), "skipped": skipped,
 		})
 		return
 	}
 	ranked := arbiter.Rank(offers, tbl)
 	rows := make([]map[string]any, 0, len(ranked))
 	for _, r := range ranked {
-		rows = append(rows, map[string]any{
+		row := map[string]any{
 			"action": r.Offer.Action, "skill": r.Offer.Skill,
 			"utility": round(r.Utility), "p": round(r.Prob),
-		})
+		}
+		if m := metaAt(meta, r.Offer.Tag); m != nil {
+			row["cost"] = m
+		}
+		rows = append(rows, row)
 	}
-	out.Body = mustJSON(map[string]any{"ranked": rows})
+	out.Body = mustJSON(map[string]any{"ranked": rows, "skipped": skipped})
+}
+
+// metaAt 把 Tag 换回那条报价的账。Tag 是索引的十进制写法，由 resolveOffers 打上。
+func metaAt(meta []map[string]any, tag string) map[string]any {
+	i, err := strconv.Atoi(tag)
+	if err != nil || i < 0 || i >= len(meta) {
+		return nil
+	}
+	return meta[i]
+}
+
+// resolveOffers 决定每个 offer 的钱从哪里来。
+//
+// 一个数不能有两个来源。调用方填了 cost 又说这个 offer 跑在某个资源上，
+// 就是给了两个来源 —— 而它们不一致的时候，谁也不会发现。
+//
+// 占不到的资源不是更便宜的选择。它被**排除出排序**，但**照样被报出来**：
+// 静默丢弃的剪枝无法被审查，而「我明明报价了却没被选」是最需要能查的一句话。
+func (s *server) resolveOffers(in []offerJSON) ([]arbiter.Offer, []map[string]any, []map[string]any, *core.Refusal) {
+	offers := make([]arbiter.Offer, 0, len(in))
+	// meta 与 offers 一一对齐，靠 offer 自己的 Tag 关联。
+	// 用 action 当键是不行的：两个 offer 可以都是 "skill" 动作，
+	// 于是后一个会把前一个的账盖掉，而响应看起来完全正常。
+	meta := make([]map[string]any, 0, len(in))
+	skipped := []map[string]any{}
+
+	var leases []pool.Lease
+	if s.pools != nil {
+		s.pools.lock()
+		leases = append([]pool.Lease(nil), s.pools.leases...)
+		s.pools.unlock()
+	}
+	now := time.Now().UnixMilli()
+
+	for _, o := range in {
+		cost := o.Cost
+		m := map[string]any{"cost": round(cost), "cost_from": "caller"}
+
+		if o.Resource != "" {
+			if o.Cost != 0 {
+				return nil, nil, nil, core.Refuse(core.CodeBadRequest,
+					"offer "+o.Action+" gives both a resource and a cost: one number, one source — the pool prices a resource, the caller prices a guess")
+			}
+			if s.pools == nil {
+				return nil, nil, nil, core.Refuse(core.CodeBadRequest, "no compute pool is attached")
+			}
+			s.pools.lock()
+			r, ok := s.pools.find(o.Resource)
+			s.pools.unlock()
+			if !ok {
+				return nil, nil, nil, core.Refuse(core.CodeBadRequest,
+					"offer "+o.Action+" names a resource that is not registered: "+o.Resource)
+			}
+			cost = float64(pool.Cost(r, core.Budget{MS: o.MS, Tokens: o.Tokens}).Money)
+			m = map[string]any{
+				"cost": round(cost), "cost_from": "pool",
+				"resource": r.ID, "kind": string(r.Kind),
+			}
+			if len(pool.Live(leases, r.ID, now)) >= r.Capacity {
+				m["available"] = false
+				m["reason"] = "at capacity: a slot you cannot take is not a cheaper option"
+				skipped = append(skipped, map[string]any{"action": o.Action, "cost": m})
+				continue
+			}
+			m["available"] = true
+		}
+
+		offers = append(offers, arbiter.Offer{
+			Action: arbiter.Action(o.Action), Skill: o.Skill, TaskClass: o.TaskClass,
+			Value: o.Value, Cost: cost, Latency: o.Latency, LatencyWeight: o.LatencyWeight,
+			Pinned: o.Pinned, UsePinned: o.UsePinned,
+			Tag: strconv.Itoa(len(offers)),
+		})
+		meta = append(meta, m)
+	}
+	return offers, meta, skipped, nil
 }
 
 func (s *server) arbiterState(f core.Frame, out *core.Frame) {
@@ -337,4 +418,10 @@ type offerJSON struct {
 	LatencyWeight float64 `json:"latency_weight"`
 	Pinned        float64 `json:"pinned"`
 	UsePinned     bool    `json:"use_pinned"`
+	// Resource 让这次报价的钱从池里取，而不是由调用方填。
+	// 与 Cost 同时给是矛盾的：一个数不能有两个来源。
+	Resource string `json:"resource"`
+	// MS 与 Tokens 是这份工作的大小，池用它算钱。
+	MS     int64 `json:"ms"`
+	Tokens int64 `json:"tokens"`
 }

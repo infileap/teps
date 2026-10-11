@@ -897,6 +897,7 @@ jlen() { python3 -c 'import json,sys; print(len(json.load(sys.stdin)["body"]["en
 jlast() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["entries"][-1]["head"])'; }
 jhead() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["head"])'; }
 jmoney() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["left"]["money"])'; }
+jfirst() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["ranked"][0]["action"])'; }
 
 r=$(req '{"t":"audit.tail","v":1,"body":{"limit":3}}')
 n=$(printf '%s' "$r" | jlen)
@@ -1098,6 +1099,40 @@ r=$(req '{"t":"audit.tail","v":1,"body":{"limit":400}}')
 expect "★ 链上有这次尝试占槽的记录" "$r" '"holder":"p-pick"'
 expect "★ 也有它释放的记录" "$r" '"op":"release"'
 expect "租约记录里是绝对过期时间，不是 ttl" "$r" '"expires"'
+
+echo
+echo "—— 报价的钱从池里取，不由调用方填 ——"
+r=$(req '{"t":"pool.register","v":1,"key":"pp1","body":{"id":"core.dear","kind":"local","money_per_ms":0.01,"capacity":1,"note":"a local core with an expensive meter"}}')
+expect "登记一个贵的本机核" "$r" '"id":"core.dear"'
+
+rank_two='{"t":"arbiter.rank","v":1,"body":{"offers":[{"action":"skill","skill":"runner.ok","task_class":"task_exec","value":10,"latency":0,"pinned":1.0,"use_pinned":true,"resource":"core.paid","ms":1000},{"action":"skill","skill":"runner.ok","task_class":"task_exec","value":10,"latency":0,"pinned":1.0,"use_pinned":true,"resource":"core.dear","ms":1000}]}}'
+r=$(req "$rank_two")
+expect "★ 钱从池里取，不从调用方取" "$r" '"cost_from":"pool"'
+expect "★ 便宜的那个：utility = 10 − 1" "$r" '"utility":9'
+expect "★ 贵的那个：utility = 10 − 10" "$r" '"utility":0'
+first=$(jfirst <<<"$r")
+if [ "$first" = "skill" ]; then
+  printf '  ok    ★ 排在前面的确实是便宜的那个（价格真的进了排序）\n'
+else
+  printf '  FAIL  排序没跟着价格走：first=%s\n' "$first"
+  fails=$((fails + 1))
+fi
+
+r=$(req '{"t":"arbiter.rank","v":1,"body":{"offers":[{"action":"skill","value":10,"resource":"core.paid","cost":3,"ms":1000}]}}')
+expect "★ 一个数两个来源被拒（池定价，调用方定猜测）" "$r" 'one number, one source'
+r=$(req '{"t":"arbiter.rank","v":1,"body":{"offers":[{"action":"skill","value":10,"resource":"ghost.9","ms":1000}]}}')
+expect "点名没登记的资源的报价被拒" "$r" 'not registered'
+r=$(req '{"t":"arbiter.rank","v":1,"body":{"offers":[{"action":"skill","value":10,"latency":0,"pinned":1.0,"use_pinned":true,"cost":0},{"action":"skill","value":10,"resource":"core.paid","ms":1000}]}}')
+expect "不点名资源时，调用方填的钱照旧管用" "$r" '"cost_from":"caller"'
+
+r=$(req '{"t":"pool.lease","v":1,"key":"pp2","body":{"id":"core.dear","holder":"occupier","ttl_ms":60000}}')
+expect "把贵的那个占住" "$r" '"holder":"occupier"'
+r=$(req "$rank_two")
+expect "★ 占不到的报价被排除出排序" "$r" '"available":false'
+expect "★ 但它照样被报出来，并说明为什么" "$r" 'a slot you cannot take is not a cheaper option'
+expect "★ 于是只剩下便宜的那个" "$r" '"utility":9'
+r=$(req '{"t":"pool.release","v":1,"key":"pp3","body":{"holder":"occupier"}}')
+expect "释放 occupier" "$r" '"holder":"occupier"'
 
 echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
