@@ -526,6 +526,8 @@ expect "★ E0 进不了 stable" "$r" 'unverified work must not be frozen'
 
 rslow=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xi3\",\"body\":{\"ref\":\"$xslow\",\"attempt\":\"x-slow\",\"task_class\":\"task_exec\"}}")
 expect "★ 超出声明预算的进程被杀掉，判超时" "$rslow" '"outcome":"timeout"'
+# 互斥的另一面：被杀掉的进程确实起来了，所以它不是「宿主拒绝启动」。
+expect "★ 超时的那个确实起来了（互斥的另一面）" "$rslow" '"refused":false'
 expect "超时是核验器看时间判的，不是脚本自报的" "$rslow" '"timed_out":true'
 # 这一处读的是「当前开着的 intent 数」，用来证明下面那一次没有闭合。
 ob1=$(printf '%s' "$rslow" | sed -n 's/.*"open":\([0-9]*\).*/\1/p')
@@ -1340,6 +1342,9 @@ expect "★ 进程根本没起来，所以这不是一个执行结果" "$r" 'the
 expect "★ 它是一个独立的判定，不是 failed" "$r" '"outcome":"refused"'
 expect "★ 机器可读的那一位也要置起来" "$r" '"refused":true'
 expect "★ 退出码是 -1，不是 0（空的 stdout 旁边那个 0 才是「跑了」）" "$r" '"exit":-1'
+# ★ 一个根本没起来的进程不可能超时。这条互斥是 Judge 里两条 if 顺序不承重的前提，
+#   而一个没有断言过的不变量，下一个人改代码时会当作不存在。
+expect "★ 沉默与超时是互斥的（没起来就不可能超时）" "$r" '"timed_out":false'
 expect "★ 它同样拿不到证据等级" "$r" '"level":""'
 
 echo

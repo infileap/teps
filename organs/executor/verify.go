@@ -130,6 +130,13 @@ type Judgement struct {
 func Judge(asserts []string, obs Observed) Judgement {
 	j := Judgement{Verdict: VerdictUnknown, VerifiedBy: VerifierName}
 
+	// ★ 这两个标志是互斥的，而这一条**由构造保证**：runSandbox 在 cmd.Start()
+	// 失败时置 Refused 并立刻返回（TimedOut 保持 false），在超时时置 TimedOut
+	// （Refused 保持 false）。一个根本没起来的进程不可能超时。
+	//
+	// 所以下面两条 if 的顺序**不是承重的**。写下来是因为「顺序无所谓」这件事
+	// 只有在互斥成立时才真，而一个没有写下来的不变量，下一个人改代码时会
+	// 当作不存在。
 	if obs.Refused {
 		j.Verdict = VerdictRefused
 		j.Reason = "the host refused to start the process: this is not an execution result, the execution did not happen"
