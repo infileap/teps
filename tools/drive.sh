@@ -896,6 +896,7 @@ echo "—— audit.tail：链本身，不是关于链的摘要 ——"
 jlen() { python3 -c 'import json,sys; print(len(json.load(sys.stdin)["body"]["entries"]))'; }
 jlast() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["entries"][-1]["head"])'; }
 jhead() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["head"])'; }
+jmoney() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["left"]["money"])'; }
 
 r=$(req '{"t":"audit.tail","v":1,"body":{"limit":3}}')
 n=$(printf '%s' "$r" | jlen)
@@ -1063,9 +1064,19 @@ expect "★ 跑完槽就还回去了（不靠调用方记得释放）" "$r" '"he
 
 r=$(req '{"t":"pool.lease","v":1,"key":"pa7","body":{"id":"core.0","holder":"blocker","ttl_ms":60000}}')
 expect "另一个持有者占住免费的那个" "$r" '"holder":"blocker"'
+r=$(req '{"t":"status","v":1}')
+money_before=$(jmoney <<<"$r")
 r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"pa8\",\"body\":{\"ref\":\"$xok\",\"attempt\":\"p-busy\",\"task_class\":\"task_exec\",\"pick\":true}}")
 expect "★ 免费的那个忙了，于是挑到收费的那个" "$r" '"resource":"core.paid"'
 expect "★ 而且钱是从价格算出来的，不是调用方填的" "$r" '"cost_money":2'
+r=$(req '{"t":"status","v":1}')
+money_after=$(jmoney <<<"$r")
+if [ -n "$money_before" ] && [ -n "$money_after" ] && [ "$((money_before - money_after))" -eq 2 ]; then
+  printf '  ok    ★ 报告的花费真的被扣了（报一个价不等于付那个价）\n'
+else
+  printf '  FAIL  ★ 报告的花费没有被扣：before=%s after=%s\n' "$money_before" "$money_after"
+  fails=$((fails + 1))
+fi
 r=$(req '{"t":"pool.release","v":1,"key":"pa9","body":{"holder":"blocker"}}')
 expect "释放 blocker" "$r" '"holder":"blocker"'
 

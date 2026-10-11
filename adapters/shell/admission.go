@@ -52,7 +52,7 @@ type admission struct {
 //
 // want 是点名要的资源 id；pick 为真时由池从**本机**资源里挑最便宜的。
 // 两者都没给，就是「不点名」，本次执行不受准入约束。
-func (s *server) admit(attempt, want string, pick bool, work core.Budget, ttl int64) (*admission, *core.Refusal) {
+func (s *server) admit(attempt, want string, pick bool, work core.Budget) (*admission, *core.Refusal) {
 	if want == "" && !pick {
 		return &admission{
 			Resource: "",
@@ -98,7 +98,10 @@ func (s *server) admit(attempt, want string, pick bool, work core.Budget, ttl in
 		r = chosen
 	}
 
-	lease, refusal := pool.Acquire(r, s.pools.leases, attempt, now, ttl)
+	// 租约的长度由**硬时限**推出来，不由调用方传进来。
+	// 传进来就能传一个等于时限的值，于是槽会在进程被杀死的那一刻正好过期 ——
+	// 那是一个没人会注意到的差一，直到它真的发生。
+	lease, refusal := pool.Acquire(r, s.pools.leases, attempt, now, work.MS+leaseSlack)
 	if refusal != nil {
 		return nil, refusal
 	}

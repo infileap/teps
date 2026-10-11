@@ -212,7 +212,7 @@ func (s *server) handleExecute(f core.Frame, out *core.Frame) bool {
 	// 准入：先占住容量，再花钱，最后才 spawn。顺序是有意的 ——
 	// 占不到槽的执行不该先扣掉预算，否则一次被拒绝的尝试会留下已付费的痕迹。
 	adm, refusal := s.admit(req.Attempt, req.Resource, req.Pick,
-		core.Budget{MS: plan.TimeoutMS, Tokens: 0}, plan.TimeoutMS+leaseSlack)
+		core.Budget{MS: plan.TimeoutMS, Tokens: 0})
 	if refusal != nil {
 		out.Err = refusal
 		return true
