@@ -70,6 +70,7 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 	s.decisions.lock()
 	tbl := s.decisions.table()
 	observations := len(s.decisions.obs)
+	spent := round(s.decisions.spent)
 	s.decisions.unlock()
 
 	coverage := map[string]any{
@@ -89,6 +90,9 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 		"observations": observations,
 		"skills":       len(tbl),
 		"source":       "arbiter.state",
+		// spent 是链上那些执行记录说的钱。它必须与 reliability 同时出现：
+		// 一条可靠但没人付得起的路，和一条便宜但不可靠的路，是两个不同的答案。
+		"spent": spent,
 	}
 	if len(tbl) == 0 {
 		reliability["defined"] = false

@@ -267,6 +267,10 @@ func (s *server) handleExecute(f core.Frame, out *core.Frame) bool {
 		rseq, rhead, ropen, refusal := s.observe(req.Attempt+keyResolution, observeBody{
 			Attempt: req.Attempt, Skill: m.SkillID, TaskClass: req.TaskClass, Strategy: strategy,
 			Outcome: outcome, Verified: j.VerifiedBy, Latency: float64(obs.LatencyMS),
+			// 钱必须落到链上，否则链会声称每一次执行都是免费的。
+			// 准入算出的那个数就是花掉的那个数 —— 报一个价不等于付那个价，
+			// 付了却不记下来同样是一句假话。
+			Cost: float64(adm.Money),
 		})
 		if refusal != nil {
 			out.Err = refusal

@@ -58,7 +58,10 @@ type decisionStore struct {
 	// obs is every concluded attempt, in chain order. It is what the table folds.
 	obs []arbiter.Observation
 	// open holds attempts that were started and not concluded.
-	open    map[string]bool
+	open map[string]bool
+	// spent is the money the chain says these attempts cost.
+	// It is a sum over the same records as obs, so it cannot drift from them.
+	spent   float64
 	applied uint64
 }
 
@@ -85,6 +88,7 @@ func (st *decisionStore) absorb(e core.Entry) error {
 		return nil
 	}
 	delete(st.open, rec.Attempt)
+	st.spent += rec.Cost
 	st.obs = append(st.obs, arbiter.Observation{
 		Key: arbiter.Key{Skill: rec.Skill, TaskClass: rec.TaskClass},
 		OK:  *rec.OK,
@@ -361,6 +365,7 @@ func (s *server) arbiterState(f core.Frame, out *core.Frame) {
 	tbl := s.decisions.table()
 	open := len(s.decisions.open)
 	n := len(s.decisions.obs)
+	spent := s.decisions.spent
 	s.decisions.unlock()
 	if body.Skill != "" && body.TaskClass != "" {
 		p := tbl.Get(arbiter.Key{Skill: body.Skill, TaskClass: body.TaskClass})
@@ -368,7 +373,7 @@ func (s *server) arbiterState(f core.Frame, out *core.Frame) {
 			"skill": body.Skill, "task_class": body.TaskClass,
 			"alpha": round(p.Alpha), "beta": round(p.Beta),
 			"mean": round(p.Mean()), "upper": round(p.UpperBound()),
-			"observations": n, "open": open,
+			"observations": n, "open": open, "spent": round(spent),
 		})
 		return
 	}
@@ -379,7 +384,7 @@ func (s *server) arbiterState(f core.Frame, out *core.Frame) {
 			"mean": round(p.Mean()), "upper": round(p.UpperBound()),
 		})
 	}
-	out.Body = mustJSON(map[string]any{"posteriors": rows, "observations": n, "open": open})
+	out.Body = mustJSON(map[string]any{"posteriors": rows, "observations": n, "open": open, "spent": round(spent)})
 }
 
 func (s *server) arbiterFix(f core.Frame, out *core.Frame) {

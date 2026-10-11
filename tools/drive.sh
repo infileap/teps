@@ -898,6 +898,7 @@ jlast() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["entri
 jhead() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["head"])'; }
 jmoney() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["left"]["money"])'; }
 jfirst() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["ranked"][0]["action"])'; }
+jspent() { python3 -c 'import json,sys; b=json.load(sys.stdin)["body"]; print(b.get("spent", b.get("reliability",{}).get("spent","")))'; }
 
 r=$(req '{"t":"audit.tail","v":1,"body":{"limit":3}}')
 n=$(printf '%s' "$r" | jlen)
@@ -1078,6 +1079,22 @@ else
   printf '  FAIL  ★ 报告的花费没有被扣：before=%s after=%s\n' "$money_before" "$money_after"
   fails=$((fails + 1))
 fi
+r=$(req '{"t":"arbiter.state","v":1,"body":{"skill":"runner.ok","task_class":"task_exec"}}')
+expect "★ 链上记着这次执行花了多少钱（否则链会声称每次执行都免费）" "$r" '"spent":2'
+r=$(req '{"t":"metrics.get","v":1}')
+expect "★ 可靠性报告与花费一起给（便宜但不可靠和可靠但付不起是两个答案）" "$r" '"spent":2'
+spent_metrics=$(jspent <<<"$r")
+r2=$(req '{"t":"arbiter.state","v":1,"body":{"skill":"runner.ok","task_class":"task_exec"}}')
+spent_arbiter=$(jspent <<<"$r2")
+if [ -n "$spent_metrics" ] && [ "$spent_metrics" = "$spent_arbiter" ]; then
+  printf '  ok    ★ 同一个数在两处必须是同一个数（metrics=%s arbiter=%s）\n' "$spent_metrics" "$spent_arbiter"
+else
+  printf '  FAIL  ★ 两处报的花费不一致：metrics=%s arbiter=%s\n' "$spent_metrics" "$spent_arbiter"
+  fails=$((fails + 1))
+fi
+r=$(req '{"t":"metrics.get","v":1}')
+r=$(req '{"t":"audit.tail","v":1,"body":{"limit":400}}')
+expect "★ 那次执行的 resolution 记录里带着它的花费" "$r" '"cost":2' 
 r=$(req '{"t":"pool.release","v":1,"key":"pa9","body":{"holder":"blocker"}}')
 expect "释放 blocker" "$r" '"holder":"blocker"'
 
