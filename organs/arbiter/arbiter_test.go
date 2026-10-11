@@ -319,3 +319,73 @@ func TestCompileCriteriaGateOnMeasurements(t *testing.T) {
 		t.Fatal("a script that fails must not be compiled into something harder to change")
 	}
 }
+
+// ★ The two expectations rank differently, and neither is wrong.
+//
+//	A: p=0.99, cost=0.9    B: p=0.50, cost=0.1    value=1.5
+//	per attempt: A = 0.585   B = 0.650  -> B wins
+//	per success: A = 0.576   B = 0.550  -> A wins
+//
+// This is the whole reason the expectation is an explicit field: the same two
+// offers swap places depending on which question was asked, and a caller that
+// cannot say which one it meant cannot read the answer.
+func TestTheTwoExpectationsRankDifferently(t *testing.T) {
+	steady := Offer{Action: ActionSkill, Value: 1.5, Cost: 0.9, Pinned: 0.99, UsePinned: true}
+	cheap := Offer{Action: ActionShadow, Value: 1.5, Cost: 0.1, Pinned: 0.5, UsePinned: true}
+
+	byAttempt := Rank([]Offer{steady, cheap}, Table{})
+	if byAttempt[0].Offer.Action != ActionShadow {
+		t.Fatalf("priced per attempt, the cheap one should win: got %s", byAttempt[0].Offer.Action)
+	}
+
+	steady.Expect, cheap.Expect = ExpectSuccess, ExpectSuccess
+	bySuccess := Rank([]Offer{steady, cheap}, Table{})
+	if bySuccess[0].Offer.Action != ActionSkill {
+		t.Fatalf("priced per success, the reliable one should win: got %s", bySuccess[0].Offer.Action)
+	}
+}
+
+func TestAnEmptyExpectationMeansOneAttempt(t *testing.T) {
+	o := Offer{Value: 10, Cost: 2}
+	got, ok := ExpectedCost(o, Posterior{Alpha: 1, Beta: 1})
+	if !ok || got != 2 {
+		t.Fatalf("an offer written before this field existed must keep its meaning: got %v ok=%v", got, ok)
+	}
+}
+
+func TestCostPerSuccessDividesByTheProbability(t *testing.T) {
+	o := Offer{Value: 10, Cost: 1, Pinned: 0.5, UsePinned: true, Expect: ExpectSuccess}
+	got, ok := ExpectedCost(o, Posterior{Alpha: 1, Beta: 1})
+	if !ok {
+		t.Fatal("a pinned probability of 0.5 is defined")
+	}
+	if got != 2 {
+		t.Fatalf("cost per success with p=0.5 is 1/0.5 = 2, got %v", got)
+	}
+}
+
+// ★ An action that never succeeds has no cost per success, because it buys
+// nothing. Reporting a very large number there would be a lie of a different
+// shape: it would look like a price.
+func TestAnActionThatNeverSucceedsHasNoPrice(t *testing.T) {
+	o := Offer{Value: 10, Cost: 1, Pinned: 0, UsePinned: true, Expect: ExpectSuccess}
+	if _, ok := ExpectedCost(o, Posterior{Alpha: 1, Beta: 1}); ok {
+		t.Fatal("p=0 has no cost per success and must say so rather than divide")
+	}
+}
+
+func TestProbOfPrefersTheUpperBoundAndHonoursPinning(t *testing.T) {
+	post := Posterior{Alpha: 3, Beta: 1}
+	if got := ProbOf(Offer{}, post); got != post.UpperBound() {
+		t.Fatalf("an unpinned offer is judged by the upper bound: got %v", got)
+	}
+	if got := ProbOf(Offer{Pinned: 0.4, UsePinned: true}, post); got != 0.4 {
+		t.Fatalf("a pinned offer is judged by its pinned value: got %v", got)
+	}
+	// The upper bound is above the mean on purpose: choosing is not reporting,
+	// and using the mean would make the system stop trying what it knows least
+	// about.
+	if post.UpperBound() <= post.Mean() {
+		t.Fatalf("the upper bound must exceed the mean: %v <= %v", post.UpperBound(), post.Mean())
+	}
+}

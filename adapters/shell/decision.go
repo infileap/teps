@@ -245,14 +245,14 @@ func (s *server) arbiterRank(f core.Frame, out *core.Frame) {
 		out.Err = ref
 		return
 	}
-	offers, meta, skipped, ref := s.resolveOffers(body.Offers)
+	s.decisions.lock()
+	tbl := s.decisions.table()
+	s.decisions.unlock()
+	offers, meta, skipped, ref := s.resolveOffers(body.Offers, tbl)
 	if ref != nil {
 		out.Err = ref
 		return
 	}
-	s.decisions.lock()
-	tbl := s.decisions.table()
-	s.decisions.unlock()
 	if body.Margin > 0 {
 		esc, ref := arbiter.ShouldEscalate(offers, tbl, body.Margin)
 		if ref != nil {
@@ -297,7 +297,7 @@ func metaAt(meta []map[string]any, tag string) map[string]any {
 //
 // 占不到的资源不是更便宜的选择。它被**排除出排序**，但**照样被报出来**：
 // 静默丢弃的剪枝无法被审查，而「我明明报价了却没被选」是最需要能查的一句话。
-func (s *server) resolveOffers(in []offerJSON) ([]arbiter.Offer, []map[string]any, []map[string]any, *core.Refusal) {
+func (s *server) resolveOffers(in []offerJSON, tbl arbiter.Table) ([]arbiter.Offer, []map[string]any, []map[string]any, *core.Refusal) {
 	offers := make([]arbiter.Offer, 0, len(in))
 	// meta 与 offers 一一对齐，靠 offer 自己的 Tag 关联。
 	// 用 action 当键是不行的：两个 offer 可以都是 "skill" 动作，
@@ -346,12 +346,42 @@ func (s *server) resolveOffers(in []offerJSON) ([]arbiter.Offer, []map[string]an
 			m["available"] = true
 		}
 
-		offers = append(offers, arbiter.Offer{
+		expect := arbiter.Expectation(o.Expectation)
+		switch expect {
+		case "", arbiter.ExpectAttempt:
+			expect = arbiter.ExpectAttempt
+		case arbiter.ExpectSuccess:
+		default:
+			return nil, nil, nil, core.Refuse(core.CodeBadRequest,
+				"offer "+o.Action+" asks to be priced per "+string(expect)+": the two questions are \"attempt\" and \"success\"")
+		}
+		offer := arbiter.Offer{
 			Action: arbiter.Action(o.Action), Skill: o.Skill, TaskClass: o.TaskClass,
 			Value: o.Value, Cost: cost, Latency: o.Latency, LatencyWeight: o.LatencyWeight,
-			Pinned: o.Pinned, UsePinned: o.UsePinned,
+			Pinned: o.Pinned, UsePinned: o.UsePinned, Expect: expect,
 			Tag: strconv.Itoa(len(offers)),
-		})
+		}
+		m["expectation"] = string(expect)
+		m["cost_per_attempt"] = round(cost)
+		// cost_per_success 永远是「成功一次多少钱」，不管这次用的是哪个口径。
+		// 一个叫 cost_per_success 的字段里放一次尝试的价格，就是同一个名字下的另一个数。
+		prob := arbiter.ProbOf(offer, tbl.Get(arbiter.Key{Skill: o.Skill, TaskClass: o.TaskClass}))
+		if prob <= 0 {
+			// 一次也不成功的动作没有价格，因为它什么都买不到。
+			// 报一个很大的数会是另一种形状的假话。
+			m["cost_per_success"] = nil
+			m["reason"] = "never succeeds, so it has no cost per success: an action that buys nothing has no price"
+			skipped = append(skipped, map[string]any{"action": o.Action, "cost": m})
+			continue
+		}
+		m["cost_per_success"] = round(cost / prob)
+		// cost 是**真正进了效用函数**的那个数，不是原始报价。
+		// 报一个没被用上的数，等于让人以为他看懂了那次决定。
+		m["cost"] = m["cost_per_success"]
+		if expect == arbiter.ExpectAttempt {
+			m["cost"] = round(cost)
+		}
+		offers = append(offers, offer)
 		meta = append(meta, m)
 	}
 	return offers, meta, skipped, nil
@@ -434,4 +464,8 @@ type offerJSON struct {
 	// MS 与 Tokens 是这份工作的大小，池用它算钱。
 	MS     int64 `json:"ms"`
 	Tokens int64 `json:"tokens"`
+	// Expectation 说这张报价回答的是哪个问题：
+	// "attempt"（默认）＝一次尝试多少钱；"success"＝成功一次多少钱。
+	// 两者排序不同，而哪个都不是错的——不问清就答，答案没法读。
+	Expectation string `json:"expectation"`
 }

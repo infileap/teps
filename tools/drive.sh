@@ -1171,6 +1171,44 @@ r=$(req '{"t":"pool.release","v":1,"key":"pp3","body":{"holder":"occupier"}}')
 expect "释放 occupier" "$r" '"holder":"occupier"'
 
 echo
+echo "—— 报价回答的是哪个问题：一次尝试，还是成功一次 ——"
+# ★ 两张报价，两种排法。
+#   A: p=0.99, 一次尝试 0.9     B: p=0.50, 一次尝试 0.1     value=1.5
+#   按「一次尝试多少钱」： A = 0.585   B = 0.650  -> B 赢
+#   按「成功一次多少钱」： A = 0.576   B = 0.550  -> A 赢
+# 两个数都不是错的。不先问清是哪一个，答案就没法读。
+two_offers='{"t":"arbiter.rank","v":1,"body":{"offers":[{"action":"skill","skill":"steady.one","task_class":"task_exec","value":1.5,"cost":0.9,"pinned":0.99,"use_pinned":true,"expectation":"EXP"},{"action":"shadow","skill":"cheap.one","task_class":"task_exec","value":1.5,"cost":0.1,"pinned":0.5,"use_pinned":true,"expectation":"EXP"}]}}'
+
+r=$(req "$(printf '%s' "$two_offers" | sed 's/EXP/attempt/g')")
+first=$(jfirst <<<"$r")
+if [ "$first" = "shadow" ]; then
+  printf '  ok    ★ 按「一次尝试」计价时，便宜的那个赢（B 0.650 > A 0.585）\n'
+else
+  printf '  FAIL  按一次尝试计价时排序不对：first=%s\n' "$first"
+  fails=$((fails + 1))
+fi
+expect "★ 响应说清它按哪个问题算的" "$r" '"expectation":"attempt"'
+expect "★ 两个数都报出来，但只有一个是进了效用函数的" "$r" '"cost_per_attempt":0.9'
+expect "★ 成功一次的成本也一并报出（这里 p=0.99 ⇒ 0.9091）" "$r" '"cost_per_success":0.9091'
+
+r=$(req "$(printf '%s' "$two_offers" | sed 's/EXP/success/g')")
+first=$(jfirst <<<"$r")
+if [ "$first" = "skill" ]; then
+  printf '  ok    ★★ 换成「成功一次」计价，赢家换了人（A 0.576 > B 0.550）\n'
+else
+  printf '  FAIL  按成功一次计价时排序不对：first=%s\n' "$first"
+  fails=$((fails + 1))
+fi
+expect "★ 响应说清换了问题" "$r" '"expectation":"success"'
+expect "★ 进了效用函数的是那个除过的数，不是原始报价" "$r" '"cost":0.9091'
+
+r=$(req '{"t":"arbiter.rank","v":1,"body":{"offers":[{"action":"skill","value":10,"cost":1,"expectation":"whenever"}]}}')
+expect "未知的计价口径被拒，而不是当成默认值" "$r" 'the two questions are'
+r=$(req '{"t":"arbiter.rank","v":1,"body":{"offers":[{"action":"skill","skill":"never.works","task_class":"task_exec","value":10,"cost":1,"pinned":0,"use_pinned":true,"expectation":"success"}]}}')
+expect "★ 一次也不成功的动作没有价格（它什么都买不到）" "$r" 'has no price'
+expect "★ 它被排除出排序，但照样报出来" "$r" '"skipped"'
+
+echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null

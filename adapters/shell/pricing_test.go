@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 
+	"sansheng/organs/arbiter"
+
 	"sansheng/core"
 	"sansheng/organs/pool"
 )
@@ -29,7 +31,7 @@ func TestTwoOffersWithTheSameActionKeepTheirOwnCosts(t *testing.T) {
 		{Action: "skill", Skill: "a", Value: 10, Resource: "core.cheap", MS: 1000},
 		{Action: "skill", Skill: "b", Value: 10, Resource: "core.dear", MS: 1000},
 	}
-	offers, meta, skipped, ref := s.resolveOffers(in)
+	offers, meta, skipped, ref := s.resolveOffers(in, arbiter.Table{})
 	if ref != nil {
 		t.Fatalf("resolve: %s", ref.Reason)
 	}
@@ -64,7 +66,7 @@ func TestAnOfferCannotGiveTwoSourcesForOneNumber(t *testing.T) {
 	}
 	_, _, _, ref := s.resolveOffers([]offerJSON{
 		{Action: "skill", Value: 10, Resource: "core.0", Cost: 3, MS: 1000},
-	})
+	}, arbiter.Table{})
 	if ref == nil {
 		t.Fatal("a resource and a cost together are two sources for one number")
 	}
@@ -77,7 +79,7 @@ func TestAnOfferForAnUnregisteredResourceIsRefused(t *testing.T) {
 	s := testServer(t)
 	_, _, _, ref := s.resolveOffers([]offerJSON{
 		{Action: "skill", Value: 10, Resource: "ghost.9", MS: 1000},
-	})
+	}, arbiter.Table{})
 	if ref == nil {
 		t.Fatal("a named resource that does not exist is a typo, not a price of zero")
 	}
@@ -102,7 +104,7 @@ func TestAnOfferAtCapacityIsSkippedButReported(t *testing.T) {
 	}
 	offers, meta, skipped, ref := s.resolveOffers([]offerJSON{
 		{Action: "skill", Value: 10, Resource: "core.0", MS: 1000},
-	})
+	}, arbiter.Table{})
 	if ref != nil {
 		t.Fatalf("resolve: %s", ref.Reason)
 	}

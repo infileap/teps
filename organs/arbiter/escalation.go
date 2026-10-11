@@ -1,9 +1,36 @@
 package arbiter
 
 import (
+	"math"
 	"sort"
 
 	"sansheng/core"
+)
+
+// Expectation names which question an offer is answering.
+//
+// It exists because "what does one attempt cost" and "what does it cost to get
+// there" are two different questions, and the arithmetic used to answer one of
+// them while looking like it answered the other.
+//
+// They rank differently, and neither is wrong. They diverge exactly when a
+// cheap option is unreliable — which is the case a caller most needs to see:
+//
+//	A: p=0.99, cost=1    B: p=0.50, cost=0.01    value=10
+//	per attempt:  A = 8.90   B = 4.99   -> A wins
+//	per success:  A = 8.99   B = 9.98   -> B wins
+//
+// A caller that cannot say which question it is asking cannot read the answer.
+type Expectation string
+
+const (
+	// ExpectAttempt prices one attempt. This is the default: it is what the
+	// arithmetic has always meant, and changing a default silently would be a
+	// different failure than the one this type fixes.
+	ExpectAttempt Expectation = "attempt"
+	// ExpectSuccess prices the attempt that finally works: cost divided by the
+	// probability of success.
+	ExpectSuccess Expectation = "success"
 )
 
 // Action names what the arbiter is choosing between.
@@ -71,6 +98,11 @@ type Offer struct {
 	// the other. That is the same failure this project keeps paying for: one
 	// fact with two copies, and only one of them updated.
 	Tag string
+
+	// Expect says which question this offer is answering. The empty value means
+	// ExpectAttempt, so an offer written before this field existed keeps its
+	// meaning.
+	Expect Expectation
 }
 
 // Utility is U(a) = P(success|a) * value - cost - latency + exploration.
@@ -78,11 +110,45 @@ type Offer struct {
 // The exploration term is what makes this not a pure exploit: it is the only
 // reason a skill that was abandoned can ever be tried again. See Posterior.
 func Utility(o Offer, p Posterior) float64 {
-	prob := p.UpperBound()
-	if o.UsePinned {
-		prob = clamp01(o.Pinned)
+	cost, ok := ExpectedCost(o, p)
+	if !ok {
+		// An action that never succeeds has no cost per success, so it cannot be
+		// compared on that basis. Rank keeps it (last, by this number) rather
+		// than dropping it: a silently dropped offer cannot be audited, and the
+		// adapter reports these in its skipped list before ranking.
+		return math.Inf(-1)
 	}
-	return prob*o.Value - o.Cost - o.LatencyWeight*o.Latency
+	return ProbOf(o, p)*o.Value - cost - o.LatencyWeight*o.Latency
+}
+
+// ProbOf is the probability an offer is judged by: the optimistic estimate, or
+// the pinned value when the caller supplied one.
+//
+// It is the upper bound rather than the mean on purpose. Choosing is not
+// reporting: an option that has been tried twice and worked twice should be
+// explored, and using the mean here would make the system stop trying the
+// things it knows least about.
+func ProbOf(o Offer, p Posterior) float64 {
+	if o.UsePinned {
+		return clamp01(o.Pinned)
+	}
+	return p.UpperBound()
+}
+
+// ExpectedCost is what the offer costs on the basis it says it is priced on.
+//
+// It returns false when a per-success cost is asked for and the probability is
+// zero: an action that never succeeds has no price, because it buys nothing.
+// Reporting a very large number there would be a lie of a different shape.
+func ExpectedCost(o Offer, p Posterior) (float64, bool) {
+	if o.Expect != ExpectSuccess {
+		return o.Cost, true
+	}
+	prob := ProbOf(o, p)
+	if prob <= 0 {
+		return 0, false
+	}
+	return o.Cost / prob, true
 }
 
 // Ranked is an offer with the numbers that produced its place.
@@ -104,10 +170,7 @@ func Rank(offers []Offer, t Table) []Ranked {
 	for _, o := range offers {
 		key := Key{Skill: o.Skill, TaskClass: o.TaskClass}
 		p := t.Get(key)
-		prob := p.UpperBound()
-		if o.UsePinned {
-			prob = clamp01(o.Pinned)
-		}
+		prob := ProbOf(o, p)
 		out = append(out, Ranked{
 			Offer:   o,
 			Utility: Utility(o, p),
