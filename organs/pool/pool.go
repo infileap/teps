@@ -36,7 +36,7 @@ package pool
 import (
 	"strings"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 // Kind is where a resource lives.

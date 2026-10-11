@@ -34,7 +34,7 @@ package distill
 import (
 	"strings"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 // LayerReflex is the name of the layer that answers from no context. It is

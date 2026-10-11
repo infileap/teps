@@ -21,7 +21,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 // CAS is a content-addressed blob store.

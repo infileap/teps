@@ -24,8 +24,8 @@ import (
 	"strings"
 	"syscall"
 
-	"sansheng/core"
-	"sansheng/store"
+	"teps/core"
+	"teps/store"
 )
 
 // scannerMax is deliberately larger than the protocol cap: a frame that is too

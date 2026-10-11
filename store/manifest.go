@@ -3,8 +3,8 @@ package store
 import (
 	"encoding/json"
 
-	"sansheng/core"
-	"sansheng/evidence"
+	"teps/core"
+	"teps/evidence"
 )
 
 // Kind is a skill's execution form.

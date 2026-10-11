@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 // Channels. A new skill lands in canary first; everything else resolves through

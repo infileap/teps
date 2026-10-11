@@ -5,10 +5,10 @@ import (
 	"strconv"
 	"strings"
 
-	"sansheng/core"
-	"sansheng/organs/arbiter"
-	"sansheng/organs/intake"
-	"sansheng/store"
+	"teps/core"
+	"teps/organs/arbiter"
+	"teps/organs/intake"
+	"teps/store"
 )
 
 // metrics.get is the one read that reports whether the numbers are defined.

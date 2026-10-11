@@ -3,10 +3,10 @@ package main
 import (
 	"testing"
 
-	"sansheng/organs/arbiter"
+	"teps/organs/arbiter"
 
-	"sansheng/core"
-	"sansheng/organs/pool"
+	"teps/core"
+	"teps/organs/pool"
 )
 
 // ★ Two offers may carry the same action name — two different skills are both

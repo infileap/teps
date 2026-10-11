@@ -24,8 +24,8 @@ package memory
 import (
 	"strings"
 
-	"sansheng/core"
-	"sansheng/evidence"
+	"teps/core"
+	"teps/evidence"
 )
 
 // Op is a memory operation.

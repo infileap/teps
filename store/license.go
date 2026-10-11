@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 // Class is an SPDX license's obligation class, ordered least to most

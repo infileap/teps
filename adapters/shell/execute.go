@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
-	"sansheng/core"
-	"sansheng/organs/executor"
-	"sansheng/store"
+	"teps/core"
+	"teps/organs/executor"
+	"teps/store"
 )
 
 // skill.invoke：把一个已注册的技能**真的跑起来**。
@@ -434,7 +434,7 @@ func (s *server) runSandbox(plan executor.Plan, pkg *store.Package) executor.Obs
 		return obs
 	}
 
-	root, err := os.MkdirTemp("", "sansheng-exec-")
+	root, err := os.MkdirTemp("", "teps-exec-")
 	if err != nil {
 		return refuse("no sandbox directory could be created: %v", err)
 	}

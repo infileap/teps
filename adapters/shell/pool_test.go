@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"sansheng/organs/pool"
+	"teps/organs/pool"
 )
 
 // The aggregate and the per-resource view are the same fact, so they have to

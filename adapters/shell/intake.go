@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"strings"
 
-	"sansheng/core"
-	"sansheng/organs/intake"
-	"sansheng/organs/reflex"
+	"teps/core"
+	"teps/organs/intake"
+	"teps/organs/reflex"
 )
 
 // task.intake is the front door.

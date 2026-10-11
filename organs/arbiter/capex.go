@@ -1,7 +1,7 @@
 package arbiter
 
 import (
-	"sansheng/evidence"
+	"teps/evidence"
 )
 
 // Fixing is the decision to turn a repeated LLM path into a stored skill.

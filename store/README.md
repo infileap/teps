@@ -73,7 +73,7 @@ manifest 哈希只覆盖「声明了什么」，是**内部地址**；package �
 
 ### 与内核的交界：**复用同一套拒绝码**
 
-`store` 直接 `import "sansheng/core"`，不另造一套码。第二套词汇会与第一套漂移，
+`store` 直接 `import "teps/core"`，不另造一套码。第二套词汇会与第一套漂移，
 而漂移是静默的——本项目已经为此付过一次学费（`tools/check_contract.py` 的来历）。
 
 

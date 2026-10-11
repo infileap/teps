@@ -5,9 +5,9 @@ import (
 	"sort"
 	"strings"
 
-	"sansheng/core"
-	"sansheng/organs/arbiter"
-	"sansheng/organs/planner"
+	"teps/core"
+	"teps/organs/arbiter"
+	"teps/organs/planner"
 )
 
 // compose.propose searches for compositions nobody wrote.

@@ -5,10 +5,10 @@ import (
 	"sort"
 	"strings"
 
-	"sansheng/core"
-	"sansheng/evidence"
-	"sansheng/organs/composer"
-	"sansheng/organs/memory"
+	"teps/core"
+	"teps/evidence"
+	"teps/organs/composer"
+	"teps/organs/memory"
 )
 
 // Two more organs get a protocol face here: the memory store and the context

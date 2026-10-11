@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"sync"
 
-	"sansheng/core"
-	"sansheng/organs/session"
+	"teps/core"
+	"teps/organs/session"
 )
 
 // A session action, as it appears on the chain.

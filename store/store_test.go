@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 // ---------- helpers ----------

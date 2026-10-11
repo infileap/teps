@@ -232,7 +232,7 @@ func TestReflexImportsNothingFromTheContextPipeline(t *testing.T) {
 		if line == "" {
 			continue
 		}
-		if line == "sansheng/core" {
+		if line == "teps/core" {
 			continue
 		}
 		if !strings.Contains(line, "/") && !strings.Contains(line, ".") {

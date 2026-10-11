@@ -4,8 +4,8 @@ import (
 	"strings"
 	"time"
 
-	"sansheng/core"
-	"sansheng/organs/pool"
+	"teps/core"
+	"teps/organs/pool"
 )
 
 // 准入：算力池第一次真的决定一次执行能不能跑。

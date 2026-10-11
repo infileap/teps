@@ -77,7 +77,7 @@ expect() { # 描述 实际 期望子串
 echo "—— MCP：握手与工具表 ——"
 send '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"drive","version":"1"}}}'
 await
-expect "initialize 报告服务名" "$resp" '"name":"sansheng-mcp"'
+expect "initialize 报告服务名" "$resp" '"name":"teps-mcp"'
 expect "initialize 声明 tools 能力" "$resp" '"tools":{}'
 
 send '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'

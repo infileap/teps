@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	"sansheng/core"
-	"sansheng/organs/reflex"
+	"teps/core"
+	"teps/organs/reflex"
 )
 
 // The reflex table is a projection of the chain, like sessions, memory and the

@@ -5,9 +5,9 @@ import (
 	"encoding/hex"
 	"strings"
 
-	"sansheng/core"
-	"sansheng/organs/distill"
-	"sansheng/organs/reflex"
+	"teps/core"
+	"teps/organs/distill"
+	"teps/organs/reflex"
 )
 
 // distill.apply turns a completed experience into a reflex rule.

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 func cand(id, section, text string, score float64) Candidate {

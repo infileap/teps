@@ -4,7 +4,7 @@ import (
 	"math"
 	"sort"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 // Expectation names which question an offer is answering.

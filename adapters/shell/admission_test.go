@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"sansheng/core"
-	"sansheng/organs/pool"
+	"teps/core"
+	"teps/organs/pool"
 )
 
 func testServer(t *testing.T) *server {

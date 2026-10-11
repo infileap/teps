@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"sansheng/core"
-	"sansheng/store"
+	"teps/core"
+	"teps/store"
 )
 
 // The skill ops are the store's protocol face: publish, resolve, list, promote.

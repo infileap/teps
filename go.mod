@@ -1,4 +1,4 @@
-module sansheng
+module teps
 
 go 1.23
 

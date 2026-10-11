@@ -41,7 +41,7 @@ import (
 )
 
 const (
-	serverName = "sansheng-mcp"
+	serverName = "teps-mcp"
 	// The kernel's own protocol version. The adapter does not negotiate it; it
 	// reports what it speaks and refuses to pretend otherwise.
 	adapterVersion = "0.1.0"
@@ -181,7 +181,7 @@ func (c *child) dispatch(req rpcRequest) rpcResponse {
 func toolDescriptor() map[string]any {
 	return map[string]any{
 		"name": "kernel",
-		"description": "Send one frame to the sansheng kernel and get its answer back verbatim. " +
+		"description": "Send one frame to the teps kernel and get its answer back verbatim. " +
 			"`t` is the kernel's own frame type (for example hello, status, put). " +
 			"`key` is an idempotency key: repeating a call with the same key must not apply it twice. " +
 			"If you omit it, the adapter derives one from the JSON-RPC id and the parameters, so a " +

@@ -5,9 +5,9 @@ import (
 	"sort"
 	"strconv"
 
-	"sansheng/core"
-	"sansheng/organs/executor"
-	"sansheng/store"
+	"teps/core"
+	"teps/organs/executor"
+	"teps/store"
 )
 
 // skill.compose runs a composition: it resolves the children, runs them in the

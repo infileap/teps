@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 // 执行形态的调度键。它们与 store/manifest.go 的 Kind 取值逐字相同，

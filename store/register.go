@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 // Package is what a ref points at, and therefore what a `skill_ref` names.

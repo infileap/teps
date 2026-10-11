@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"sansheng/core"
-	"sansheng/organs/pool"
+	"teps/core"
+	"teps/organs/pool"
 )
 
 // The compute registry, projected from the chain like everything else.

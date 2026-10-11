@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 // audit.tail exposes the chain itself, not a summary of it.

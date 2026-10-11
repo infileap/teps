@@ -6,8 +6,8 @@ import (
 	"math"
 	"strings"
 
-	"sansheng/core"
-	"sansheng/organs/arbiter"
+	"teps/core"
+	"teps/organs/arbiter"
 )
 
 // Asking the price and paying it are two operations.

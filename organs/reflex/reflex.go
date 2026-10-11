@@ -38,7 +38,7 @@ import (
 	"strings"
 	"unicode"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 // Strength is a value in [0,1]. The constants below are the whole behaviour of

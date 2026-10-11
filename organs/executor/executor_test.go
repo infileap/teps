@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"sansheng/core"
-	"sansheng/evidence"
+	"teps/core"
+	"teps/evidence"
 )
 
 // ---------- 核验器：只有声明能判，执行器的自评不算证据 ----------

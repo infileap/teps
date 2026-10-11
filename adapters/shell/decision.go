@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"sansheng/core"
-	"sansheng/evidence"
-	"sansheng/organs/arbiter"
-	"sansheng/organs/pool"
+	"teps/core"
+	"teps/evidence"
+	"teps/organs/arbiter"
+	"teps/organs/pool"
 )
 
 // The arbiter's table is a projection of the chain, like sessions and memory.

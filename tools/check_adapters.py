@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """适配器守卫：只有参考传输可以 import 内核。
 
-一条 import 了 `sansheng/...` 的适配器就不再是适配器，而是内核的第二个入口。
+一条 import 了 `teps/...` 的适配器就不再是适配器，而是内核的第二个入口。
 第二个入口必然与第一个漂移——这个项目已经为此付过三次学费：
 
   1. docs/CONTRACT.md 的拒绝码表与 core/refusal.go 不一致（逼出 tools/check_contract.py）
@@ -25,7 +25,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ADAPTERS = os.path.join(ROOT, "adapters")
 REFERENCE = "shell"
-MODULE = "sansheng/"
+MODULE = "teps/"
 
 IMPORT_LINE = re.compile(r'^\s*(?:[A-Za-z_.]+\s+)?"([^"]+)"', re.M)
 

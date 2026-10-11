@@ -3,7 +3,7 @@ package store
 import (
 	"math"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 // Op is a composition operator.

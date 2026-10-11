@@ -33,7 +33,7 @@ import (
 	"strings"
 	"unicode"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 // TaskClass selects a budget split.

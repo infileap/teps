@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 // 组合执行：把一个 Composition 算成一张**执行图**。

@@ -27,7 +27,7 @@ import (
 	"math"
 	"sort"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 // Layer names who answered. They are the layers of the design note, and they

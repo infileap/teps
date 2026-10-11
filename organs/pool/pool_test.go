@@ -3,7 +3,7 @@ package pool
 import (
 	"testing"
 
-	"sansheng/core"
+	"teps/core"
 )
 
 func res(id string, kind Kind, perMS, perTok float64, cap int) Resource {

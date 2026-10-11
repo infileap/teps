@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"sansheng/evidence"
+	"teps/evidence"
 )
 
 func close(a, b, tol float64) bool { return math.Abs(a-b) <= tol }
