@@ -7,6 +7,7 @@ import (
 
 	"teps/core"
 	"teps/organs/executor"
+	"teps/organs/planner"
 	"teps/store"
 )
 
@@ -165,8 +166,18 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 	// share a skill_id share one posterior. That is a naming problem, and the
 	// audit trail is where it shows up.
 	//
-	// An inline composition has no name of its own, so it can only be grouped by
-	// shape — two unrelated serial compositions then share one posterior.
+	// An inline composition has no name of its own, so it is grouped by shape.
+	//
+	// Shape used to mean "the operator", which folded two unrelated serial
+	// chains into one posterior. That is the same defect as averaging two rule
+	// sets: 0.5 can mean "one chain that works half the time" or "two chains,
+	// one that always works and one that never does". The shape identity was
+	// already available and already used by the planner, so the cost that note
+	// described is not a cost any more.
+	//
+	// The identity is computed from the children's **skill ids**, not their
+	// refs: a ref changes when a child is re-published, and an identity that
+	// moves on re-publication is the ref-keying mistake wearing a different hat.
 	identity := composeSkillName(req.Composition.Op)
 	if req.Ref != "" {
 		if len(req.Composition.Children) != 0 {
@@ -254,6 +265,22 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 		preps = append(preps, prepared{pkg: pkg, man: man, decl: decl})
 	}
 
+	if req.Ref == "" {
+		// Inline: the shape is the only identity available, so make it a real
+		// one — and compute it here, after the children have been resolved, so
+		// an unresolvable child is refused by the guard above with its own
+		// message rather than by this.
+		//
+		// The children's **skill ids**, not their refs: a ref changes when a
+		// child is re-published, and an identity that moves on re-publication is
+		// the ref-keying mistake wearing a different hat.
+		ids := make([]string, 0, len(preps))
+		for _, pr := range preps {
+			ids = append(ids, pr.man.SkillID)
+		}
+		identity = composeSkillName(spec.Op) + ":" + planner.ShapeID(spec.Op, ids)[:12]
+	}
+
 	// The composition's intent, before anything runs.
 	seq, head, open, refusal := s.observe(req.Attempt+keyIntent, observeBody{
 		Attempt: req.Attempt, Skill: identity, TaskClass: req.TaskClass,
@@ -269,6 +296,10 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 		Steps:  []composeStep{},
 		Open:   open,
 	}
+
+	// stepRules 收集每一步自己的规则身份。组合没有自己的断言，
+	// 它被判定所依据的规则就是孩子们各自的那组断言。
+	var stepRules []string
 
 	// Run the graph.
 	var prevOut []byte
@@ -294,6 +325,7 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 			out.Err = refusal
 			return true
 		}
+		stepRules = append(stepRules, plan.Rules)
 		if refusal := s.acct.Spend(core.Budget{MS: plan.TimeoutMS}); refusal != nil {
 			out.Err = refusal
 			return true
@@ -330,7 +362,7 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 			if _, _, _, refusal := s.observe(attempt+keyResolution, observeBody{
 				Attempt: attempt, Skill: prep.man.SkillID, TaskClass: req.TaskClass,
 				Strategy: strategyInvoke, Outcome: outcome, Verified: j.VerifiedBy,
-				Latency: float64(obs.LatencyMS),
+				Latency: float64(obs.LatencyMS), Rules: plan.Rules,
 			}); refusal != nil {
 				out.Err = refusal
 				return true
@@ -353,9 +385,13 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 		// identity, not composeSkillName: the intent and the resolution must name
 		// the same thing, or the posterior is opened under one key and closed
 		// under another — and only the resolution is what the table counts.
+		// 组合没有自己的断言（契约禁止 compose 声明 verify_assert），
+		// 它被判定所依据的规则**就是孩子们各自的那组断言**。
+		// 用孩子们的身份算一个身份出来：孩子换了判定规则，组合的规则也就换了。
 		seq, head, open, refusal := s.observe(req.Attempt+keyResolution, observeBody{
 			Attempt: req.Attempt, Skill: identity, TaskClass: req.TaskClass,
 			Strategy: strategyCompose, Outcome: outcome, Verified: total.VerifiedBy,
+			Rules: executor.RuleID(stepRules),
 		})
 		if refusal != nil {
 			out.Err = refusal

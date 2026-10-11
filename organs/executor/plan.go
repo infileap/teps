@@ -1,6 +1,8 @@
 package executor
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"path"
 	"sort"
@@ -56,7 +58,14 @@ type Declaration struct {
 // 所以同一个 ref（内容哈希）在一次执行里只会对应一条命令，
 // 这正是 skill.invoke 钉死 ref 的含义。
 type Plan struct {
-	SkillID     string   `json:"skill"`
+	SkillID string `json:"skill"`
+	// Rules 是这份计划被判定所依据的那组断言的**身份**。
+	//
+	// 它存在是因为链上记了「哪个核验器判的」（verify_assert），
+	// 却没记「拿哪几条断言判的」。技能被重新发布、断言换过之后，
+	// 后验仍然把新的运行折进同一个键 —— 于是它报出来的那个数
+	// 变成了**两个不同问题的平均值**。
+	Rules       string   `json:"rules"`
 	Kind        string   `json:"kind"`
 	Interpreter string   `json:"interpreter"`
 	Entrypoint  string   `json:"entrypoint"`
@@ -134,6 +143,7 @@ func NewPlan(d Declaration) (Plan, *core.Refusal) {
 			"verify_assert is empty: the executor does not run what cannot be judged, because running it once is the whole basis of the judgement")
 	}
 	p.Assert = append([]string(nil), d.Assert...)
+	p.Rules = RuleID(d.Assert)
 
 	// 5. 入口。Skill ABI 里**没有** entrypoint 字段（这是已知缺口），
 	//    所以入口必须从 payload 自身推出来，且推导规则要唯一：
@@ -192,4 +202,22 @@ func pickEntrypoint(files []string) (string, *core.Refusal) {
 	return "", core.Refuse(core.CodeBadRequest, fmt.Sprintf(
 		"the payload has %d files and no single entrypoint [%s]: the Skill ABI has no entrypoint field, so the rule is exactly one payload file or exactly one main / main.*",
 		len(names), strings.Join(names, " ")))
+}
+
+// RuleID is the identity of a set of declared assertions.
+//
+// The order is deliberately **not** part of the identity: every assertion must
+// hold, so reordering them cannot change the verdict. An identity should track
+// what changes the answer, not what changes the text — otherwise every
+// cosmetic edit to a manifest looks like a new rule set, and the signal drowns.
+func RuleID(asserts []string) string {
+	canon := append([]string(nil), asserts...)
+	sort.Strings(canon)
+	h := sha256.New()
+	for _, a := range canon {
+		h.Write([]byte(a))
+		// 分隔符是必要的：没有它，["ab","c"] 与 ["a","bc"] 会算出同一个身份。
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }

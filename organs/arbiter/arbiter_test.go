@@ -54,8 +54,8 @@ func TestDecayIsWhatBoundsTheMemory(t *testing.T) {
 
 func TestFoldIsOrderDependent(t *testing.T) {
 	k := Key{Skill: "s", TaskClass: "t"}
-	goodThenBad := Fold([]Observation{{k, true}, {k, true}, {k, true}, {k, false}}, DefaultDecay)
-	badThenGood := Fold([]Observation{{k, false}, {k, true}, {k, true}, {k, true}}, DefaultDecay)
+	goodThenBad := Fold([]Observation{{Key: k, OK: true}, {Key: k, OK: true}, {Key: k, OK: true}, {Key: k, OK: false}}, DefaultDecay)
+	badThenGood := Fold([]Observation{{Key: k, OK: false}, {Key: k, OK: true}, {Key: k, OK: true}, {Key: k, OK: true}}, DefaultDecay)
 	if close(goodThenBad[k].Mean(), badThenGood[k].Mean(), 1e-9) {
 		t.Fatal("forgetting makes the order matter; a fold that ignores it disagrees with the live system")
 	}
@@ -387,5 +387,69 @@ func TestProbOfPrefersTheUpperBoundAndHonoursPinning(t *testing.T) {
 	// about.
 	if post.UpperBound() <= post.Mean() {
 		t.Fatalf("the upper bound must exceed the mean: %v <= %v", post.UpperBound(), post.Mean())
+	}
+}
+
+// ★ RulesOf reports which judging standards a posterior was folded from.
+//
+// It exists because a posterior keyed by skill_id alone will happily average
+// runs judged by two different assertion sets, and 0.5 can then mean either
+// "one program that works half the time" or "two programs, one that always
+// works and one that never does". Those are two facts and one number.
+func TestRulesOfReportsEveryDistinctRuleSet(t *testing.T) {
+	k := Key{Skill: "s", TaskClass: "task_exec"}
+	other := Key{Skill: "t", TaskClass: "task_exec"}
+	obs := []Observation{
+		{Key: k, OK: true, Rules: "b"},
+		{Key: k, OK: true, Rules: "a"},
+		{Key: k, OK: false, Rules: "a"}, // a duplicate, not a third rule set
+		{Key: other, OK: true, Rules: "c"},
+	}
+	got := RulesOf(obs)
+	if len(got[k]) != 2 {
+		t.Fatalf("want two distinct rule sets under k, got %v", got[k])
+	}
+	// Sorted, so two reads of the same chain render identically.
+	if got[k][0] != "a" || got[k][1] != "b" {
+		t.Fatalf("the identities must be sorted, got %v", got[k])
+	}
+	if len(got[other]) != 1 || got[other][0] != "c" {
+		t.Fatalf("keys must not bleed into each other, got %v", got[other])
+	}
+}
+
+// ★ A run recorded before the field existed is a third thing: not one rule set,
+// not two, but unknown. It has to be visible as such — folding it in silently
+// would either hide a real mixing or invent one.
+func TestAnUnrecordedRuleSetIsItsOwnAnswer(t *testing.T) {
+	k := Key{Skill: "s", TaskClass: "task_exec"}
+	got := RulesOf([]Observation{{Key: k, OK: true}})
+	if len(got[k]) != 1 || got[k][0] != "(unrecorded)" {
+		t.Fatalf("an empty rules field must read as unrecorded, got %v", got[k])
+	}
+	// And it is genuinely distinct from a recorded one: an old run plus a new
+	// one under a known rule set IS a mixture, and must be reported as one.
+	mixed := RulesOf([]Observation{{Key: k, OK: true}, {Key: k, OK: true, Rules: "a"}})
+	if len(mixed[k]) != 2 {
+		t.Fatalf("an unrecorded run beside a recorded one is a mixture, got %v", mixed[k])
+	}
+}
+
+func TestRulesOfAgreesWithTheTableItWasFoldedFrom(t *testing.T) {
+	// Both projections come from the same slice, so every key in the table must
+	// have a rule list — an empty one would mean a posterior from nowhere.
+	obs := []Observation{
+		{Key: Key{Skill: "a", TaskClass: "task_exec"}, OK: true, Rules: "r1"},
+		{Key: Key{Skill: "b", TaskClass: "task_exec"}, OK: false, Rules: "r1"},
+	}
+	tbl := Fold(obs, DefaultDecay)
+	rules := RulesOf(obs)
+	for k := range tbl {
+		if len(rules[k]) == 0 {
+			t.Fatalf("key %v has a posterior but no rule identity", k)
+		}
+	}
+	if len(rules) != len(tbl) {
+		t.Fatalf("the two projections must cover the same keys: %d vs %d", len(rules), len(tbl))
 	}
 }

@@ -69,6 +69,8 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 
 	s.decisions.lock()
 	tbl := s.decisions.table()
+	rules := arbiter.RulesOf(s.decisions.obs)
+	mixed := mixedSkills(rules)
 	observations := len(s.decisions.obs)
 	spent := round(s.decisions.spent)
 	successes := s.decisions.ok
@@ -113,6 +115,12 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 		// as reliable as its worst step, and an average hides exactly that.
 		reliability["weakest"] = round(weakest)
 	}
+	// ★ 一个后验如果在两套判定规则上折出来，它就不是一个后验。
+	//
+	// 与「同一个 0 可以是两个事实」是同一条论证：均值 0.5 可以表示
+	// 「一个程序一半时间能用」，也可以表示「两个程序，一个总行一个从不行」——
+	// 那是两个事实，而报出来的只有一个数。
+	reliability["mixed_skills"] = mixed
 
 	capability := map[string]any{"defined": false}
 	switch {
@@ -122,6 +130,11 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 		capability["reason"] = "accuracy is undefined"
 	case !reliability["defined"].(bool):
 		capability["reason"] = "reliability is undefined"
+	case mixed > 0:
+		// 能力是乘积，而可靠性这一项此刻是**不同问题的平均值**。
+		// 把它当因子乘进去，乘积看起来照旧是个数——那正是最坏的一种错：
+		// 一个没人会去查的数。
+		capability["reason"] = "reliability averages observations judged under more than one rule set: the factor is an average of different questions, and a product that hides that is a number nobody will check"
 	default:
 		capability["defined"] = true
 		capability["value"] = round(coverage["intercept_rate"].(float64) *

@@ -1256,6 +1256,39 @@ expect "★ 一次也不成功的动作没有价格（它什么都买不到）" 
 expect "★ 它被排除出排序，但照样报出来" "$r" '"skipped"'
 
 echo
+echo
+echo "—— 判定规则的身份：一个后验不能在两套规则上折 ——"
+# ★ 同一句 skill_id，两套不同的断言，两次运行。
+# 后验按 (skill_id, task_class) 分组，而 skill_id 与版本无关 ⇒
+# 不做任何事的话，两次运行会被折进同一个键，报出来的数是**两个不同问题的平均值**。
+rv1=$(xpub rv1 "$(xman runner.rules '["exit == 0"]' 1000)" '{"run.sh":"printf RUNNER-OK\n"}')
+rv2=$(xpub rv2 "$(xman runner.rules '["exit == 0","stdout contains \"RUNNER-OK\""]' 1000)" '{"run.sh":"printf RUNNER-OK\n"}')
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"rv3\",\"body\":{\"ref\":\"$rv1\",\"attempt\":\"rv-a\",\"task_class\":\"task_exec\"}}")
+expect "同一句 skill_id 的第一版跑通" "$r" '"outcome":"ok"'
+expect "★ 链上记着这次是被哪组断言判的" "$r" '"rules":"'
+r1=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["rules"])' <<<"$r")
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"rv4\",\"body\":{\"ref\":\"$rv2\",\"attempt\":\"rv-b\",\"task_class\":\"task_exec\"}}")
+expect "换了断言重新发布之后也跑通" "$r" '"outcome":"ok"'
+r2=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["rules"])' <<<"$r")
+if [ -n "$r1" ] && [ -n "$r2" ] && [ "$r1" != "$r2" ]; then
+  printf '  ok    ★ 两组不同的断言算出两个不同的身份\n'
+else
+  printf '  FAIL  断言换过，身份却没变：r1=%s r2=%s\n' "$r1" "$r2"
+  fails=$((fails + 1))
+fi
+
+r=$(req '{"t":"arbiter.state","v":1,"body":{"skill":"runner.rules","task_class":"task_exec"}}')
+expect "★ 这个后验报出它折过几套规则" "$r" '"mixed":true'
+expect "★ 两套规则的身份都报出来，不是只报一个数" "$r" "$r1"
+expect "★ 另一个身份也在" "$r" "$r2"
+
+r=$(req '{"t":"metrics.get","v":1}')
+
+expect "★ 顶层报出有多少个技能的后验是混的" "$r" '"mixed_skills":1'
+expect "★★ 能力乘积此刻未定义：可靠性这一项是不同问题的平均值" "$r" '"capability":{"defined":false'
+expect "★★ 并说清为什么——一个把这件事藏起来的乘积是没人会去查的数" "$r" 'average of different questions'
+
+echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null

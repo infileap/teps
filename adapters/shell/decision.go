@@ -49,6 +49,8 @@ type executionRecord struct {
 	Verified  string  `json:"verified_by,omitempty"`
 	Latency   float64 `json:"latency,omitempty"`
 	Cost      float64 `json:"cost,omitempty"`
+	// Rules 是这次运行被判定所依据的那组断言的身份。
+	Rules string `json:"rules,omitempty"`
 }
 
 type decisionStore struct {
@@ -95,8 +97,9 @@ func (st *decisionStore) absorb(e core.Entry) error {
 		st.ok++
 	}
 	st.obs = append(st.obs, arbiter.Observation{
-		Key: arbiter.Key{Skill: rec.Skill, TaskClass: rec.TaskClass},
-		OK:  *rec.OK,
+		Key:   arbiter.Key{Skill: rec.Skill, TaskClass: rec.TaskClass},
+		OK:    *rec.OK,
+		Rules: rec.Rules,
 	})
 	return nil
 }
@@ -151,6 +154,7 @@ func (s *server) arbiterObserve(f core.Frame, out *core.Frame) {
 		Verified  string  `json:"verified_by"`
 		Latency   float64 `json:"latency"`
 		Cost      float64 `json:"cost"`
+		Rules     string  `json:"rules"`
 	}
 	if ref := decodeBody(f.Body, &body); ref != nil {
 		out.Err = ref
@@ -164,7 +168,7 @@ func (s *server) arbiterObserve(f core.Frame, out *core.Frame) {
 	rec := executionRecord{
 		Rec: "execution", Attempt: body.Attempt, Skill: body.Skill,
 		TaskClass: body.TaskClass, Strategy: body.Strategy,
-		Latency: body.Latency, Cost: body.Cost,
+		Latency: body.Latency, Cost: body.Cost, Rules: body.Rules,
 	}
 	s.decisions.lock()
 	_, known := s.decisions.open[body.Attempt]
@@ -398,16 +402,20 @@ func (s *server) arbiterState(f core.Frame, out *core.Frame) {
 	}
 	s.decisions.lock()
 	tbl := s.decisions.table()
+	// rules 与 tbl 出自**同一个切片**，所以它们不可能描述不同的观测集合。
+	rules := arbiter.RulesOf(s.decisions.obs)
 	open := len(s.decisions.open)
 	n := len(s.decisions.obs)
 	spent := s.decisions.spent
 	s.decisions.unlock()
 	if body.Skill != "" && body.TaskClass != "" {
-		p := tbl.Get(arbiter.Key{Skill: body.Skill, TaskClass: body.TaskClass})
+		k := arbiter.Key{Skill: body.Skill, TaskClass: body.TaskClass}
+		p := tbl.Get(k)
 		out.Body = mustJSON(map[string]any{
 			"skill": body.Skill, "task_class": body.TaskClass,
 			"alpha": round(p.Alpha), "beta": round(p.Beta),
 			"mean": round(p.Mean()), "upper": round(p.UpperBound()),
+			"rules": rules[k], "mixed": len(rules[k]) > 1,
 			"observations": n, "open": open, "spent": round(spent),
 		})
 		return
@@ -417,9 +425,26 @@ func (s *server) arbiterState(f core.Frame, out *core.Frame) {
 		rows = append(rows, map[string]any{
 			"skill": k.Skill, "task_class": k.TaskClass,
 			"mean": round(p.Mean()), "upper": round(p.UpperBound()),
+			"rules": rules[k], "mixed": len(rules[k]) > 1,
 		})
 	}
-	out.Body = mustJSON(map[string]any{"posteriors": rows, "observations": n, "open": open, "spent": round(spent)})
+	out.Body = mustJSON(map[string]any{
+		"posteriors": rows, "observations": n, "open": open, "spent": round(spent),
+		"mixed_skills": mixedSkills(rules),
+	})
+}
+
+// mixedSkills counts the keys whose observations were judged under more than
+// one rule set. It is the number a reader needs before believing any mean above
+// it: a posterior folded across two judging rules is not one posterior.
+func mixedSkills(rules map[arbiter.Key][]string) int {
+	n := 0
+	for _, ids := range rules {
+		if len(ids) > 1 {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *server) arbiterFix(f core.Frame, out *core.Frame) {

@@ -142,6 +142,9 @@ type invokeResult struct {
 	VerifiedBy string    `json:"verified_by,omitempty"`
 	Reason     string    `json:"reason"`
 	LatencyMS  int64     `json:"latency_ms"`
+	// Rules 是这次执行被判定所依据的那组断言的身份。
+	// 报出来，「这条运行和那条运行可比吗」才有答案。
+	Rules string `json:"rules,omitempty"`
 	// Pool 报告这次执行被准许在哪里跑、花了多少。缺席 = 没有资源被点名。
 	Pool      map[string]any     `json:"pool,omitempty"`
 	Observed  *executor.Observed `json:"observed,omitempty"`
@@ -161,6 +164,9 @@ type observeBody struct {
 	Verified  string  `json:"verified_by"`
 	Latency   float64 `json:"latency"`
 	Cost      float64 `json:"cost"`
+	// Rules 是判定这次运行所依据的那组断言的身份。
+	// 不记它，「这条运行和那条运行可比吗」就永远没有答案。
+	Rules string `json:"rules,omitempty"`
 }
 
 // handleExecute 认领 skill.invoke 与 skill.compose。
@@ -300,6 +306,7 @@ func (s *server) handleExecute(f core.Frame, out *core.Frame) bool {
 		LatencyMS:  obs.LatencyMS,
 		Observed:   &obs,
 		Pool:       poolSummary(adm),
+		Rules:      plan.Rules,
 		Plan:       &plan,
 		Checks:     j.Checks,
 		Open:       open,
@@ -312,7 +319,8 @@ func (s *server) handleExecute(f core.Frame, out *core.Frame) bool {
 			// 钱必须落到链上，否则链会声称每一次执行都是免费的。
 			// 准入算出的那个数就是花掉的那个数 —— 报一个价不等于付那个价，
 			// 付了却不记下来同样是一句假话。
-			Cost: float64(adm.Money),
+			Cost:  float64(adm.Money),
+			Rules: plan.Rules,
 		})
 		if refusal != nil {
 			out.Err = refusal

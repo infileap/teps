@@ -26,7 +26,10 @@
 // Without it the system can only ever get worse at what it already does.
 package arbiter
 
-import "math"
+import (
+	"math"
+	"sort"
+)
 
 // Key identifies what a posterior is about.
 //
@@ -99,6 +102,16 @@ func (t Table) Get(k Key) Posterior {
 type Observation struct {
 	Key Key
 	OK  bool
+	// Rules is the identity of the assertions this run was judged against.
+	//
+	// The chain already records *which verifier* passed a run. It did not
+	// record *which assertions* it was judged against, so a skill republished
+	// with different assertions kept folding new runs into the same key — and
+	// the number that came out was an average of two different questions.
+	//
+	// The empty value means "the run predates this field", which is a third
+	// thing: not one rule set, not two, but unknown.
+	Rules string
 }
 
 // Fold replays observations in order into a table.
@@ -146,4 +159,38 @@ func (p Posterior) UpperBound() float64 {
 		return 1
 	}
 	return m
+}
+
+// RulesOf reports, per key, the distinct judging-rule identities behind its
+// observations.
+//
+// ★ A posterior folded across two judging rules is not one posterior.
+//
+// The same argument as everywhere else in this project: one number with two
+// sources is not one number. A mean of 0.5 can mean "one program that works
+// half the time" or "two programs, one always works and one never does" — and
+// those are two facts.
+//
+// It takes the same []Observation as Fold, so the two projections cannot be
+// derived from different walks over different data.
+func RulesOf(obs []Observation) map[Key][]string {
+	seen := map[Key]map[string]bool{}
+	out := map[Key][]string{}
+	for _, o := range obs {
+		id := o.Rules
+		if id == "" {
+			id = "(unrecorded)"
+		}
+		if seen[o.Key] == nil {
+			seen[o.Key] = map[string]bool{}
+		}
+		if !seen[o.Key][id] {
+			seen[o.Key][id] = true
+			out[o.Key] = append(out[o.Key], id)
+		}
+	}
+	for k := range out {
+		sort.Strings(out[k])
+	}
+	return out
 }
