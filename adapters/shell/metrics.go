@@ -71,6 +71,7 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 	tbl := s.decisions.table()
 	observations := len(s.decisions.obs)
 	spent := round(s.decisions.spent)
+	successes := s.decisions.ok
 	s.decisions.unlock()
 
 	coverage := map[string]any{
@@ -127,11 +128,30 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 			accuracy["value"].(float64) * reliability["mean"].(float64))
 	}
 
+	// ★ 一个价格只有放在它买到的东西旁边才有意义。
+	//
+	// 花费与成功率各自都有定义，但「每次成功花了多少钱」是第三个事实，
+	// 而它恰恰是唯一能回答「这件事值不值得做」的那个。分母为零时它没有定义 ——
+	// 一个没有成功的每次成功成本，是一个装扮成数字的除零。
+	cost := map[string]any{
+		"spent":     spent,
+		"successes": successes,
+		"source":    "the execution records on the chain",
+	}
+	if successes == 0 {
+		cost["defined"] = false
+		cost["reason"] = "nothing has succeeded yet, so there is no cost per success: dividing by a success count of zero is not a very large number, it is an absent one"
+	} else {
+		cost["defined"] = true
+		cost["per_success"] = round(spent / float64(successes))
+	}
+
 	out.Body = mustJSON(map[string]any{
 		"coverage":    coverage,
 		"accuracy":    accuracy,
 		"reliability": reliability,
 		"capability":  capability,
+		"cost":        cost,
 	})
 }
 

@@ -70,6 +70,15 @@ r=$(req '{"t":"hello","v":1}')
 expect "应答类型是 welcome" "$r" '"t":"welcome"'
 expect "epoch 从 1 开始" "$r" '"epoch":1'
 
+# ★ 最早的一次度量：什么都还没跑过。
+# 「每次成功花多少钱」此刻没有定义 —— 一个没有成功的每次成功成本，
+# 是一个装扮成数字的除零。这一条只能在这里问，因为一旦有东西跑成功过，
+# 那个状态就再也回不来了。
+r=$(req '{"t":"metrics.get","v":1}')
+expect "★ 还没跑过任何东西时，每次成功成本没有定义" "$r" 'no cost per success'
+expect "★ 而且说清是分母为零，不是数字很大" "$r" 'absent one'
+expect "★ 花费本身照报（它是有定义的）" "$r" '"successes":0'
+
 echo
 echo "—— put：位置由服务端分配 ——"
 r=$(req '{"t":"put","v":1,"key":"k1","body":{"task":"a"}}')
@@ -734,6 +743,7 @@ expect "★ 准确率此刻已经有定义：链跑过，而它没经过任务�
 expect "★ 但它数的只是「声明由规划器产出的链」，不是「提议过的链」" "$r" '"provenance":"planner"'
 expect "★ 未跑过的链不许被当成失败计入（unrun 单独报）" "$r" '"unrun"'
 expect "★ 它也报了这条链是在哪个任务类下跑的" "$r" '"task_classes"'
+expect "★ 一个价格只有放在它买到的东西旁边才有意义" "$r" '"cost":{'
 before=$(req '{"t":"status","v":1}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["seq"])')
 req '{"t":"metrics.get","v":1}' >/dev/null
 after=$(req '{"t":"status","v":1}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["seq"])')
@@ -1093,6 +1103,15 @@ else
   fails=$((fails + 1))
 fi
 r=$(req '{"t":"metrics.get","v":1}')
+expect "★ 有成功过之后，每次成功成本有定义" "$r" '"per_success"'
+cps=$(python3 -c 'import json,sys; b=json.load(sys.stdin)["body"]["cost"]; print(b["spent"], b["successes"], b["per_success"])' <<<"$r")
+set -- $cps
+if [ "$3" = "$(python3 -c "print(round($1/$2, 4))")" ]; then
+  printf '  ok    ★★ 每次成功成本真的就是花费除以成功数（spent=%s ok=%s per=%s）\n' "$1" "$2" "$3"
+else
+  printf '  FAIL  ★★ 每次成功成本对不上：spent=%s ok=%s per=%s\n' "$1" "$2" "$3"
+  fails=$((fails + 1))
+fi
 r=$(req '{"t":"audit.tail","v":1,"body":{"limit":400}}')
 expect "★ 那次执行的 resolution 记录里带着它的花费" "$r" '"cost":2' 
 r=$(req '{"t":"pool.release","v":1,"key":"pa9","body":{"holder":"blocker"}}')

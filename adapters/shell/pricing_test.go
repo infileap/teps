@@ -172,3 +172,60 @@ func TestSpentIsASumOverTheSameRecordsAsTheObservations(t *testing.T) {
 		t.Fatalf("an open intent must not add to spent: want %v, got %v", want, s.decisions.spent)
 	}
 }
+
+// ★ ok must be a count over the same records as obs, and it must count only
+// what the verifier passed.
+//
+// A success count that came from anywhere else — the caller's claim, the exit
+// code, the executor's own opinion — would be a different number wearing the
+// same name. The chain already says which attempts the verifier passed; this
+// is a count of that, not a second judgement.
+func TestTheSuccessCountIsOverTheSameRecordsAsTheObservations(t *testing.T) {
+	s := testServer(t)
+	verdicts := []bool{true, false, true, true, false}
+	for i, ok := range verdicts {
+		attempt := "ok" + string(rune('0'+i))
+		if _, ref := s.decisions.append(executionRecord{
+			Rec: "execution", Attempt: attempt, Skill: "runner.ok", TaskClass: "task_exec",
+		}, attempt+keyIntent); ref != nil {
+			t.Fatalf("intent %d: %s", i, ref.Reason)
+		}
+		yes, no := true, false
+		rec := executionRecord{
+			Rec: "execution", Attempt: attempt, Skill: "runner.ok", TaskClass: "task_exec",
+			Verified: "verify_assert",
+		}
+		if ok {
+			rec.OK = &yes
+		} else {
+			rec.OK = &no
+		}
+		if _, ref := s.decisions.append(rec, attempt+keyResolution); ref != nil {
+			t.Fatalf("resolution %d: %s", i, ref.Reason)
+		}
+	}
+	want := 0
+	for _, ok := range verdicts {
+		if ok {
+			want++
+		}
+	}
+	if len(s.decisions.obs) != len(verdicts) {
+		t.Fatalf("want %d observations, got %d", len(verdicts), len(s.decisions.obs))
+	}
+	if s.decisions.ok != want {
+		t.Fatalf("the success count must be over the same records: want %d, got %d", want, s.decisions.ok)
+	}
+	// An intent with no resolution is not a failure and not a success: it has
+	// no verdict, so it must move neither number.
+	before, beforeObs := s.decisions.ok, len(s.decisions.obs)
+	if _, ref := s.decisions.append(executionRecord{
+		Rec: "execution", Attempt: "never-concluded", Skill: "runner.ok", TaskClass: "task_exec",
+	}, "never-concluded"+keyIntent); ref != nil {
+		t.Fatalf("open intent: %s", ref.Reason)
+	}
+	if s.decisions.ok != before || len(s.decisions.obs) != beforeObs {
+		t.Fatalf("an open intent moved a count: ok %d->%d, obs %d->%d",
+			before, s.decisions.ok, beforeObs, len(s.decisions.obs))
+	}
+}

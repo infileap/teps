@@ -59,9 +59,11 @@ type decisionStore struct {
 	obs []arbiter.Observation
 	// open holds attempts that were started and not concluded.
 	open map[string]bool
-	// spent is the money the chain says these attempts cost.
-	// It is a sum over the same records as obs, so it cannot drift from them.
+	// spent is the money the chain says these attempts cost, and ok is how many
+	// of them the verifier passed. Both are counted over the same records as
+	// obs, in the same walk, so neither can drift from it.
 	spent   float64
+	ok      int
 	applied uint64
 }
 
@@ -89,6 +91,9 @@ func (st *decisionStore) absorb(e core.Entry) error {
 	}
 	delete(st.open, rec.Attempt)
 	st.spent += rec.Cost
+	if *rec.OK {
+		st.ok++
+	}
 	st.obs = append(st.obs, arbiter.Observation{
 		Key: arbiter.Key{Skill: rec.Skill, TaskClass: rec.TaskClass},
 		OK:  *rec.OK,
