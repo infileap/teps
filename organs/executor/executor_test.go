@@ -344,7 +344,7 @@ func TestElevationIsOnlyEverOneStep(t *testing.T) {
 		declared evidence.Level
 		want     evidence.Level
 	}{
-		{"一次核验 ok 的执行把 E0 提到 E1", ok, evidence.L0, evidence.L1},
+		{"一次核验 ok 且必败用例确实失败 ⇒ E0 提到 E1", ok, evidence.L0, evidence.L1},
 		{"已经是 E1 就不再提", ok, evidence.L1, ""},
 		{"E2 不会被执行拉到 E1（那是降级）", ok, evidence.L2, ""},
 		{"E4 同样不动", ok, evidence.L4, ""},
@@ -354,8 +354,10 @@ func TestElevationIsOnlyEverOneStep(t *testing.T) {
 		{"未知等级不做任何推断", ok, evidence.Level("E9"), ""},
 		{"空等级不做任何推断", ok, evidence.Level(""), ""},
 	}
+	// 一对「确实被驳倒」的必败用例：这是 E1 需要的另一半证据。
+	refuted := []Refutation{{Assert: "exit == 0", Verdict: VerdictFailed, Held: true}}
 	for _, c := range cases {
-		got := Elevate(c.j, c.declared)
+		got := Elevate(c.j, c.declared, refuted)
 		if got.Level != c.want {
 			t.Fatalf("%s: want level %q, got %q (%s)", c.name, c.want, got.Level, got.Reason)
 		}
@@ -420,5 +422,74 @@ func TestARawInputIsNotValidatedAsJSON(t *testing.T) {
 	got := mustPlan(t, d)
 	if string(got.Stdin) != "not json at all\n\n" {
 		t.Fatalf("raw bytes must not be parsed as JSON, got %q", got.Stdin)
+	}
+}
+
+// ★ 单边证据不是证据。
+//
+// 一个断言是 `exit == 0`、载荷永远返回 0 的技能，被证明的是「它通过了」，
+// **没有被证明的是「它有能力失败」**。而「不会失败」不是任何人想要的性质。
+// 所以必败用例是必需的那一半，不是建议的那一半。
+func TestOneSidedEvidenceIsNotEvidence(t *testing.T) {
+	ok := Judgement{Verdict: VerdictOK}
+
+	// 没声明必败用例 ⇒ 停在 E0，且理由说清缺的是哪一半。
+	got := Elevate(ok, evidence.L0, nil)
+	if got.Level != "" {
+		t.Fatalf("without a must-fail case it must not reach E1, got %q", got.Level)
+	}
+	if !strings.Contains(got.Reason, "one-sided") {
+		t.Fatalf("the refusal must name the shape of the gap, got: %s", got.Reason)
+	}
+
+	// ★ 必过通过、必败**也**通过 ⇒ 这不是验证过的技能。
+	// 这条断言是关键的那一条：它区分「正确通过」与「总是通过」。
+	held := []Refutation{{Assert: "exit == 0", Verdict: VerdictOK, Held: false}}
+	got = Elevate(ok, evidence.L0, held)
+	if got.Level != "" {
+		t.Fatalf("a must-fail case that passed anyway must block E1, got %q", got.Level)
+	}
+	if !strings.Contains(got.Reason, "does not discriminate") {
+		t.Fatalf("the refusal must say the assertion does not discriminate, got: %s", got.Reason)
+	}
+
+	// ★ 而 timeout / refused / unknown **不算**被驳倒。
+	// 它们不是「这条断言被证明为假」：超时是关于时间的事实，refused 说明进程
+	// 根本没起来，unknown 是判不了。把它们算作驳倒，就是让一个坏掉的技能
+	// 靠「跑不起来」拿到双边的证据。
+	for _, v := range []Verdict{VerdictTimeout, VerdictRefused, VerdictUnknown} {
+		got := Elevate(ok, evidence.L0, []Refutation{{Assert: "exit == 0", Verdict: v, Held: false}})
+		if got.Level != "" {
+			t.Fatalf("%s is not a refutation, but it elevated to %q", v, got.Level)
+		}
+	}
+
+	// 拒绝时也要把必败用例的结果报出来 —— 「我们试过驳倒它，没驳倒」
+	// 是关于一个技能最有用的那一句话。
+	got = Elevate(ok, evidence.L0, held)
+	if len(got.Refutations) != 1 {
+		t.Fatalf("the refutation outcome must survive the refusal, got %d", len(got.Refutations))
+	}
+}
+
+// NeedsRefutation 必须与 Elevate 自己的条件顺序一致 ——
+// 它存在的唯一理由就是让调用方不必再写一遍那个顺序。
+func TestNeedsRefutationAgreesWithElevate(t *testing.T) {
+	ok := Judgement{Verdict: VerdictOK}
+	refuted := []Refutation{{Assert: "exit == 0", Verdict: VerdictFailed, Held: true}}
+	for _, j := range []Judgement{ok, {Verdict: VerdictFailed}, {Verdict: VerdictUnknown}} {
+		for _, lv := range []evidence.Level{evidence.L0, evidence.L1, evidence.L4, evidence.Level("E9")} {
+			need := NeedsRefutation(j, lv)
+			// 若 Elevate 在给了必败用例时会提级，而 NeedsRefutation 说不用跑，
+			// 那就是调用方会漏掉一次本该发生的执行。
+			got := Elevate(j, lv, refuted)
+			if got.Elevated() && !need {
+				t.Fatalf("Elevate elevates %s/%s but NeedsRefutation said not to bother", j.Verdict, lv)
+			}
+			// 反过来：说需要跑，却给了用例也提不了级 ⇒ 白跑一次。
+			if need && !got.Elevated() {
+				t.Fatalf("NeedsRefutation said to run for %s/%s but it cannot elevate", j.Verdict, lv)
+			}
+		}
 	}
 }

@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"strings"
 
 	"teps/core"
 	"teps/evidence"
@@ -83,24 +84,46 @@ type Provenance struct {
 
 // Manifest is the Skill ABI (docs/CONTRACT.md §5).
 type Manifest struct {
-	SkillID    string          `json:"skill_id"`
-	Version    string          `json:"version"`
-	Kind       Kind            `json:"kind"`
-	Input      json.RawMessage `json:"input_schema,omitempty"`
-	Output     json.RawMessage `json:"output_schema,omitempty"`
-	Pre        []string        `json:"preconditions,omitempty"`
-	Post       []string        `json:"postconditions,omitempty"`
-	Verify     []string        `json:"verify_assert"`
-	OnFailure  string          `json:"on_failure,omitempty"`
-	Budget     core.Budget     `json:"budget"`
-	Effects    []string        `json:"effects,omitempty"`
-	Evidence   Evidence        `json:"evidence"`
-	Idempotent bool            `json:"idempotent"`
-	License    string          `json:"license"`
-	Deps       []string        `json:"deps,omitempty"` // content hashes, never version numbers
-	Provenance Provenance      `json:"provenance"`
-	Env        Env             `json:"env"`
-	Compose    *Composition    `json:"compose,omitempty"`
+	SkillID string          `json:"skill_id"`
+	Version string          `json:"version"`
+	Kind    Kind            `json:"kind"`
+	Input   json.RawMessage `json:"input_schema,omitempty"`
+	Output  json.RawMessage `json:"output_schema,omitempty"`
+	Pre     []string        `json:"preconditions,omitempty"`
+	Post    []string        `json:"postconditions,omitempty"`
+	Verify  []string        `json:"verify_assert"`
+	// Refute is the other half of the evidence: cases where the skill must
+	// **not** pass.
+	//
+	// verify_assert alone is one-sided, and one-sided evidence cannot tell
+	// "correctly passes" from "always passes". A skill whose assertion is
+	// `exit == 0` and whose payload always exits 0 has been shown to pass and
+	// has not been shown to be able to fail — and "cannot fail" is not a
+	// property anybody wants in a skill they are about to trust.
+	//
+	// So E1 requires both halves. This field is what makes the second half a
+	// claim the verifier can check rather than a sentence in a README.
+	Refute     []Refutation `json:"verify_refute,omitempty"`
+	OnFailure  string       `json:"on_failure,omitempty"`
+	Budget     core.Budget  `json:"budget"`
+	Effects    []string     `json:"effects,omitempty"`
+	Evidence   Evidence     `json:"evidence"`
+	Idempotent bool         `json:"idempotent"`
+	License    string       `json:"license"`
+	Deps       []string     `json:"deps,omitempty"` // content hashes, never version numbers
+	Provenance Provenance   `json:"provenance"`
+	Env        Env          `json:"env"`
+	Compose    *Composition `json:"compose,omitempty"`
+}
+
+// Refutation is one must-fail case.
+//
+// The skill is run with Input, and Assert must **not** hold on that run. If it
+// does hold, the skill passed a case it was supposed to fail — which means the
+// assertion does not discriminate, and the skill has not been verified.
+type Refutation struct {
+	Input  json.RawMessage `json:"input,omitempty"`
+	Assert string          `json:"assert"`
 }
 
 func bad(reason string) *core.Refusal {
@@ -135,6 +158,16 @@ func (m *Manifest) Validate() *core.Refusal {
 		// serial composition is the last step's stdout. That is not implemented
 		// yet, and until it is, an assertion here would be decoration.
 		return bad("kind=compose declares no verify_assert: a composition produces no observation of its own, and the children already carry theirs")
+	}
+	if m.Kind == KindCompose && len(m.Refute) != 0 {
+		// Same reason as verify_assert: a composition produces no observation
+		// of its own, so a must-fail case here would be a claim nothing reads.
+		return bad("kind=compose declares no verify_refute: a composition produces no observation of its own")
+	}
+	for i, r := range m.Refute {
+		if strings.TrimSpace(r.Assert) == "" {
+			return bad("verify_refute[" + itoa(i) + "] has no assert: a must-fail case with nothing to fail has no content")
+		}
 	}
 	if m.Kind != KindCompose && len(m.Verify) == 0 {
 		// Without an assertion there is nothing to verify against, and an

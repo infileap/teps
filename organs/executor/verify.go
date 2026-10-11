@@ -391,10 +391,36 @@ func truncatable(field string, obs Observed) bool {
 type Elevation struct {
 	Level  evidence.Level `json:"level"`
 	Reason string         `json:"reason"`
+	// Refutations is what the must-fail cases did, one entry per case.
+	//
+	// It is reported even when the elevation is refused, because "we tried to
+	// refute it and could not" is the single most useful sentence a reader can
+	// get about a skill — and dropping it on the refusal path would hide
+	// exactly the case that matters.
+	Refutations []Refutation `json:"refutations,omitempty"`
+}
+
+// Refutation is the outcome of one must-fail case.
+//
+// Held is the whole result: it is true when the named assertion did **not**
+// hold on the refuting input, which is what the skill was asked to demonstrate.
+type Refutation struct {
+	Assert  string  `json:"assert"`
+	Verdict Verdict `json:"verdict"`
+	Held    bool    `json:"held"`
+	Reason  string  `json:"reason,omitempty"`
 }
 
 // Elevated 报告这次执行是否真的改变了证据等级。
 func (e Elevation) Elevated() bool { return e.Level != "" }
+
+// NeedsRefutation 报告跑必败用例还有没有可能改变结论。
+//
+// 它存在是为了让调用方**不必重新推导 Elevate 自己的条件顺序** ——
+// 同一套顺序写两遍就是它们开始漂移的方式。
+func NeedsRefutation(j Judgement, declared evidence.Level) bool {
+	return evidence.Known(declared) && j.Verdict == VerdictOK && !evidence.AtLeast(declared, evidence.L1)
+}
 
 // Elevate 是 E0→E1 这一步的**唯一**判据，也是执行能碰到的唯一步。
 //
@@ -405,18 +431,39 @@ func (e Elevation) Elevated() bool { return e.Level != "" }
 //
 // 它**绝不**降级，也**绝不**一次跳到 E2 以上：E2 要的是第二个独立来源，
 // E3/E4 要的是复核与生产运行，一次本地执行提供不了其中任何一样。
-func Elevate(j Judgement, declared evidence.Level) Elevation {
+func Elevate(j Judgement, declared evidence.Level, refs []Refutation) Elevation {
+	e := Elevation{Refutations: refs}
 	if !evidence.Known(declared) {
-		return Elevation{Reason: "the declared evidence level is unknown (" + string(declared) + "): nothing is inferred from it"}
+		e.Reason = "the declared evidence level is unknown (" + string(declared) + "): nothing is inferred from it"
+		return e
 	}
 	if j.Verdict != VerdictOK {
-		return Elevation{Reason: "the verdict is " + string(j.Verdict) + ", not ok: no evidence is derived from an execution that did not verify"}
+		e.Reason = "the verdict is " + string(j.Verdict) + ", not ok: no evidence is derived from an execution that did not verify"
+		return e
 	}
 	if evidence.AtLeast(declared, evidence.L1) {
-		return Elevation{Reason: "the declaration is already " + string(declared) + ": one execution does not add a level"}
+		e.Reason = "the declaration is already " + string(declared) + ": one execution does not add a level"
+		return e
 	}
-	return Elevation{
-		Level:  evidence.L1,
-		Reason: "it really ran once in the sandbox and the verifier judged ok against the declared verify.assert",
+	// ★ One-sided evidence is not evidence.
+	//
+	// A skill whose assertion is `exit == 0` and whose payload always exits 0
+	// has been shown to pass. It has **not** been shown to be able to fail, and
+	// "cannot fail" is not a property anybody wants in a skill they are about to
+	// trust. So the second half is required, not encouraged: without a must-fail
+	// case that actually failed, this stays at E0.
+	if len(refs) == 0 {
+		e.Reason = "the declared assertions are one-sided: it has been shown to pass and has not been shown to be able to fail, so it stays at " + string(declared) + " — declare a verify_refute case whose assertion must NOT hold"
+		return e
 	}
+	for _, r := range refs {
+		if !r.Held {
+			e.Reason = "the must-fail case did not fail: with the refuting input, " + r.Assert + " still held (" + string(r.Verdict) + ")" +
+				" — the assertion does not discriminate, so passing it is not evidence"
+			return e
+		}
+	}
+	e.Level = evidence.L1
+	e.Reason = "it ran in the sandbox and the verifier judged ok against the declared verify.assert, and every must-fail case failed as it was required to"
+	return e
 }

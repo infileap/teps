@@ -402,25 +402,39 @@ echo
 echo "—— 执行器：技能真的被跑起来，成功与否由核验器说 ——"
 # 前两个技能的声明一模一样（同样的 budget、同样的两条 verify_assert），
 # 只有脚本内容不同：一个真的产出了声明里要的那个词，一个只是自己说自己成功。
-xman() { # xman <skill_id> <verify_assert-json> <budget_ms>
-  printf '{"skill_id":"%s","version":"1.0.0","kind":"script","verify_assert":%s,"budget":{"ms":%s},"evidence":"E0","idempotent":true,"license":"MIT","provenance":{"source":"handwritten"},"env":{"interpreter":"/bin/sh"}}' "$1" "$2" "$3"
+xman() { # xman <skill_id> <verify_assert-json> <budget_ms> [verify_refute-json]
+  # 第四个参数是可选的必败用例。省略它得到的是一份**单边**声明 ——
+  # 那种技能仍然注册得上，但到不了 E1，因为「通过」和「总是通过」它分不出来。
+  # ${4:-} 而不是 $4：脚本开了 set -u，而第四个参数**按设计是可选的** ——
+  # 省略它的调用（只有必过用例的声明）必须能跑，不能因为「读了一个没给的参数」而死。
+  refute=""
+  [ -n "${4:-}" ] && refute=",\"verify_refute\":$4"
+  printf '{"skill_id":"%s","version":"1.0.0","kind":"script","verify_assert":%s%s,"budget":{"ms":%s},"evidence":"E0","idempotent":true,"license":"MIT","provenance":{"source":"handwritten"},"env":{"interpreter":"/bin/sh"}}' "$1" "$2" "$refute" "$3"
 }
 xpub() { # xpub <key> <manifest> <files> -> skill_ref
   req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"$1\",\"body\":{\"manifest\":$2,\"files\":$3}}" |
     sed -n 's/.*"ref":"\([0-9a-f]\{64\}\)".*/\1/p'
 }
-xok=$(xpub x1 "$(xman runner.ok '["exit == 0","stdout contains \"RUNNER-OK\""]' 2000)" '{"run.sh":"printf RUNNER-OK\n"}')
+# runner.ok 现在**分辨输入**：喂它 REFUTE 它就拒绝。这是它配得上 E1 的前提 ——
+# 一个永远返回 0 的脚本被证明的是「它通过了」，而不是「它有能力失败」。
+RUNNER_OK_SH='read -r line\ncase $line in *REFUTE*) echo REFUSED-INPUT; exit 3;; esac\nprintf RUNNER-OK\n'
+xok=$(xpub x1 "$(xman runner.ok '["exit == 0","stdout contains \"RUNNER-OK\""]' 2000 '[{"input":{"marker":"REFUTE"},"assert":"exit == 0"}]')" "{\"run.sh\":\"$RUNNER_OK_SH\"}")
 xlie=$(xpub x2 "$(xman lie.self '["exit == 0","stdout contains \"RUNNER-OK\""]' 1500)" '{"run.sh":"printf FAIL; exit 0\n"}')
 xslow=$(xpub x3 "$(xman slow.one '["exit == 0"]' 300)" '{"run.sh":"sleep 5\n"}')
 xvague=$(xpub x4 "$(xman vague.one '["我大概成功了吧"]' 500)" '{"run.sh":"exit 0\n"}')
 xnobud=$(xpub x5 "$(xman no.budget '["exit == 0"]' 0)" '{"run.sh":"exit 0\n"}')
 xamb=$(xpub x6 "$(xman two.files '["exit == 0"]' 1000)" '{"a.sh":"exit 0\n","b.sh":"exit 0\n"}')
 xecho=$(xpub x7 "$(xman echo.stdin '["exit == 0"]' 1000)" '{"run.sh":"cat\n"}')
+# 单边声明：只有必过用例。它注册得上，但到不了 E1。
+xone=$(xpub x8 "$(xman runner.one '["exit == 0","stdout contains \"RUNNER-OK\""]' 2000)" "{\"run.sh\":\"$RUNNER_OK_SH\"}")
+# ★ 必败用例其实**会通过**：喂它空输入，`exit == 0` 照样成立。
+# 这不是「驳不倒」，这是「这条断言不分辨任何东西」—— 而那正是最该拦下的一种。
+xweak=$(xpub x9 "$(xman runner.weak '["exit == 0","stdout contains \"RUNNER-OK\""]' 2000 '[{"input":{},"assert":"exit == 0"}]')" "{\"run.sh\":\"$RUNNER_OK_SH\"}")
 if [ -n "$xok" ] && [ -n "$xlie" ] && [ -n "$xslow" ] && [ -n "$xvague" ] &&
-  [ -n "$xnobud" ] && [ -n "$xamb" ] && [ -n "$xecho" ]; then
-  printf '  ok    七个技能已注册（E0，canary）\n'
+  [ -n "$xnobud" ] && [ -n "$xamb" ] && [ -n "$xecho" ] && [ -n "$xone" ] && [ -n "$xweak" ]; then
+  printf '  ok    九个技能已注册（E0，canary）\n'
 else
-  printf '  FAIL  技能注册没拿到 ref：%s %s %s %s %s %s %s\n' "$xok" "$xlie" "$xslow" "$xvague" "$xnobud" "$xamb" "$xecho"
+  printf '  FAIL  技能注册没拿到 ref：%s %s %s %s %s %s %s %s %s\n' "$xok" "$xlie" "$xslow" "$xvague" "$xnobud" "$xamb" "$xecho" "$xone" "$xweak"
   fails=$((fails + 1))
 fi
 
@@ -439,6 +453,22 @@ else
 fi
 xelev=$(printf '%s' "$r" | sed -n 's/.*"ref":"\([0-9a-f]\{64\}\)".*/\1/p')
 expect "★ 一次真实的成功执行把证据从 E0 提到 E1" "$r" '"level":"E1","from":"E0","to":"E1"'
+# ★ 提级之所以成立，是因为它**真的被驳倒过**：那条必败用例跑起来断言不成立。
+# 报出来的是「我们试过驳倒它」这件事本身，不是一句「已提级」。
+expect "★ 必败用例的结果随提级一起报出来" "$r" '"refutations"'
+expect "★ 那条断言确实没成立（held）" "$r" '"held":true'
+expect "★ 并且指名是哪条断言" "$r" '"assert":"exit == 0"'
+
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xe1\",\"body\":{\"ref\":\"$xone\",\"attempt\":\"x-one\",\"task_class\":\"task_exec\",\"elevate\":true}}")
+expect "★ 单边证据不是证据：只有必过用例的技能到不了 E1" "$r" 'one-sided'
+expect "★ 而且理由说清缺的是什么" "$r" 'has not been shown to be able to fail'
+expect "★ 它仍然是一次成功的执行（判定没变，变的只是证据等级）" "$r" '"outcome":"ok"'
+expect "★ 它停在 E0" "$r" '"level":""'
+
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xe2\",\"body\":{\"ref\":\"$xweak\",\"attempt\":\"x-weak\",\"task_class\":\"task_exec\",\"elevate\":true}}")
+expect "★ 必败用例其实通过了 ⇒ 这条断言不分辨任何东西" "$r" 'does not discriminate'
+expect "★ 被驳倒的是「它分不出来」，不是「它做不到」" "$r" '"held":false'
+expect "★ 它也停在 E0" "$r" '"level":""'
 
 r=$(req '{"t":"skill.promote","v":1,"body":{"name":"runner.ok","from":"canary","to":"stable"}}')
 expect "★ 提级后的新 ref 才进得了 stable" "$r" "\"ref\":\"$xelev\""

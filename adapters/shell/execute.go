@@ -78,6 +78,48 @@ type elevationBody struct {
 	Ref     string        `json:"ref,omitempty"`
 	Reason  string        `json:"reason"`
 	Refused *core.Refusal `json:"refused,omitempty"`
+	// Refutations 是必败用例的结果，**拒绝提级时也照样报出来**：
+	// 「我们试过驳倒它，没驳倒」是关于一个技能最有用的那一句话，
+	// 而在拒绝路径上把它丢掉，丢掉的正是最要紧的那一种情况。
+	Refutations []executor.Refutation `json:"refutations,omitempty"`
+}
+
+// refute 跑一遍声明的必败用例。
+//
+// ★ 只有 failed 才算被驳倒。
+//
+// timeout 是关于时间的事实，refused 说明进程根本没起来，unknown 是判不了 ——
+// 三者都**不是**「这条断言被证明为假」。把它们算作驳倒，就是让一个坏掉的技能
+// 靠「跑不起来」拿到双边的证据，而那恰好是这套判据要防的东西。
+func (s *server) refute(m *store.Manifest, pkg *store.Package, refs []store.Refutation) []executor.Refutation {
+	out := make([]executor.Refutation, 0, len(refs))
+	for _, r := range refs {
+		names := make([]string, 0, len(pkg.Files))
+		for name := range pkg.Files {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		plan, refusal := executor.NewPlan(executor.Declaration{
+			SkillID: m.SkillID, Kind: string(m.Kind),
+			Interpreter: m.Env.Interpreter, Files: names,
+			Assert: []string{r.Assert}, BudgetMS: m.Budget.MS,
+			Input: r.Input,
+		})
+		if refusal != nil {
+			out = append(out, executor.Refutation{
+				Assert: r.Assert, Held: false,
+				Reason: "the must-fail case could not be planned: " + refusal.Reason,
+			})
+			continue
+		}
+		j := executor.Judge(plan.Assert, s.runSandbox(plan, pkg))
+		out = append(out, executor.Refutation{
+			Assert: r.Assert, Verdict: j.Verdict,
+			Held:   j.Verdict == executor.VerdictFailed,
+			Reason: j.Reason,
+		})
+	}
+	return out
 }
 
 // invokeResult 是 skill.invoke 的响应体。
@@ -291,10 +333,20 @@ func (s *server) handleExecute(f core.Frame, out *core.Frame) bool {
 		res.Elevation = &elevationBody{
 			Reason: "no elevation was requested: a stronger evidence claim is a write, and writes are asked for explicitly (elevate: true)",
 		}
-	} else if e := executor.Elevate(j, m.Evidence); !e.Elevated() {
-		res.Elevation = &elevationBody{Reason: e.Reason}
 	} else {
-		res.Elevation = s.elevate(m, pkg, e, req.Attempt)
+		// 便宜的条件先由 NeedsRefutation 判掉，省下一次真实执行；
+		// 但它判的是「还有没有可能改变结论」，不是「会不会提级」——
+		// 唯一的判据仍然只有 Elevate 一个。
+		var refs []executor.Refutation
+		if executor.NeedsRefutation(j, m.Evidence) {
+			refs = s.refute(m, pkg, m.Refute)
+		}
+		e := executor.Elevate(j, m.Evidence, refs)
+		if !e.Elevated() {
+			res.Elevation = &elevationBody{Reason: e.Reason, Refutations: e.Refutations}
+		} else {
+			res.Elevation = s.elevate(m, pkg, e, req.Attempt)
+		}
 	}
 
 	out.Body = mustJSON(res)
@@ -392,7 +444,10 @@ func (s *server) elevate(m *store.Manifest, pkg *store.Package, e executor.Eleva
 	for name, hash := range pkg.Files {
 		body, err := s.skills.CAS.Get(hash)
 		if err != nil {
-			return &elevationBody{Reason: "the payload could not be re-read for elevation: " + err.Error()}
+			return &elevationBody{
+				Reason:      "the payload could not be re-read for elevation: " + err.Error(),
+				Refutations: e.Refutations,
+			}
 		}
 		files[name] = body
 	}
@@ -403,8 +458,9 @@ func (s *server) elevate(m *store.Manifest, pkg *store.Package, e executor.Eleva
 		// 执行本身已经核验通过了，它的 resolution 也已经上链了。
 		// 提级失败不该把这次执行说成失败 —— 那不是事实。
 		return &elevationBody{
-			Reason:  "the execution verified ok, but the elevated claim was refused: " + refusal.Reason,
-			Refused: refusal,
+			Reason:      "the execution verified ok, but the elevated claim was refused: " + refusal.Reason,
+			Refused:     refusal,
+			Refutations: e.Refutations,
 		}
 	}
 	return &elevationBody{
@@ -412,6 +468,10 @@ func (s *server) elevate(m *store.Manifest, pkg *store.Package, e executor.Eleva
 		From:  string(m.Evidence),
 		To:    string(next.Evidence),
 		Ref:   res.Ref,
+		// ★ 必败用例的结果在**每条路径**上都要跟着走。
+		// 只在拒绝路径上报，等于把最要紧的那句话（「我们试过驳倒它，驳倒了」）
+		// 从它唯一能解释的那条路径上拿掉了 —— 我第一版就是这么写的。
+		Refutations: e.Refutations,
 		Reason: e.Reason + ": the same payload was registered again as " + res.Ref +
 			" and canary moved to it; the justification is the execution pair keyed by attempt " + attempt,
 	}
