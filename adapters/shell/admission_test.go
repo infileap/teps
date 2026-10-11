@@ -20,7 +20,11 @@ func testServer(t *testing.T) *server {
 	if ref != nil {
 		t.Fatalf("open pool: %s", ref.Reason)
 	}
-	return &server{log: lg, pools: ps}
+	ds, ref := newDecisionStore(lg)
+	if ref != nil {
+		t.Fatalf("open decisions: %s", ref.Reason)
+	}
+	return &server{log: lg, pools: ps, decisions: ds}
 }
 
 func TestAdmitWithoutANameReservesNothing(t *testing.T) {

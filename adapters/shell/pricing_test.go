@@ -116,3 +116,59 @@ func TestAnOfferAtCapacityIsSkippedButReported(t *testing.T) {
 		t.Fatalf("it must still be reported, got %d", len(skipped))
 	}
 }
+
+// ★ spent must be a sum over the same records as obs.
+//
+// If they were computed from different sources, one of them would eventually be
+// updated without the other — which is the failure this project has paid for
+// often enough to stop counting. The invariant is cheap to state and the only
+// way to keep it true is to derive both from the same walk.
+func TestSpentIsASumOverTheSameRecordsAsTheObservations(t *testing.T) {
+	s := testServer(t)
+	costs := []float64{2, 0, 5, 1}
+	for i, c := range costs {
+		ok := i%2 == 0
+		rec := executionRecord{
+			Rec: "execution", Attempt: "a", Skill: "runner.ok", TaskClass: "task_exec",
+			Cost: c,
+		}
+		if i > 0 {
+			rec.Attempt = "a" + string(rune('0'+i))
+		}
+		if _, ref := s.decisions.append(executionRecord{
+			Rec: "execution", Attempt: rec.Attempt, Skill: rec.Skill, TaskClass: rec.TaskClass,
+		}, rec.Attempt+keyIntent); ref != nil {
+			t.Fatalf("intent %d: %s", i, ref.Reason)
+		}
+		yes, no := true, false
+		if ok {
+			rec.OK = &yes
+		} else {
+			rec.OK = &no
+		}
+		rec.Verified = "verify_assert"
+		if _, ref := s.decisions.append(rec, rec.Attempt+keyResolution); ref != nil {
+			t.Fatalf("resolution %d: %s", i, ref.Reason)
+		}
+	}
+	if len(s.decisions.obs) != len(costs) {
+		t.Fatalf("want %d observations, got %d", len(costs), len(s.decisions.obs))
+	}
+	want := 0.0
+	for _, c := range costs {
+		want += c
+	}
+	if s.decisions.spent != want {
+		t.Fatalf("spent must be the sum of the recorded costs: want %v, got %v", want, s.decisions.spent)
+	}
+	// And it counts money only for attempts that concluded: an open intent has
+	// no cost on the chain, so it cannot contribute one here.
+	if _, ref := s.decisions.append(executionRecord{
+		Rec: "execution", Attempt: "still-open", Skill: "runner.ok", TaskClass: "task_exec",
+	}, "still-open"+keyIntent); ref != nil {
+		t.Fatalf("open intent: %s", ref.Reason)
+	}
+	if s.decisions.spent != want {
+		t.Fatalf("an open intent must not add to spent: want %v, got %v", want, s.decisions.spent)
+	}
+}
