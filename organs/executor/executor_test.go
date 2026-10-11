@@ -493,3 +493,93 @@ func TestNeedsRefutationAgreesWithElevate(t *testing.T) {
 		}
 	}
 }
+
+// ★ 「探针沉默」和「拿到但是空」是两件事。
+//
+// 前者是「这个进程根本没有跑起来」，后者是「它跑了，什么都没产出」。两者的
+// stdout 都是空字符串 —— 一个只读 stdout 的读者看到的完全一样。分得开它们的
+// 只有判定结果本身，所以判定结果必须不同。
+func TestASilentProbeIsNotAnEmptyResult(t *testing.T) {
+	silent := Judge([]string{`stdout == ""`}, Observed{Refused: true, Note: "no interpreter"})
+	empty := Judge([]string{`stdout == ""`}, Observed{Exit: 0, Stdout: ""})
+
+	if silent.Verdict != VerdictRefused {
+		t.Fatalf("a process that never started is not an execution result, got %q", silent.Verdict)
+	}
+	if empty.Verdict != VerdictOK {
+		t.Fatalf("「它跑了，什么都没打印」是一个成立的声明，got %q", empty.Verdict)
+	}
+	if silent.Verdict == empty.Verdict {
+		t.Fatal("the two facts must not share an answer: their stdout is identical and the verdict is all a reader has")
+	}
+	// 退出码也必须不同：沉默是被信号杀掉的 -1，空是 0。
+	silentObs := Observed{Refused: true, Exit: -1}
+	emptyObs := Observed{Exit: 0}
+	if silentObs.Exit != -1 || emptyObs.Exit != 0 {
+		t.Fatalf("the exit codes must differ too: silent=%d empty=%d", silentObs.Exit, emptyObs.Exit)
+	}
+}
+
+// ★ 一条不可能失败的断言不是一条检查。
+//
+// `stdout contains ""` 在**任何** stdout 上都是 true，包括一个什么都不打印的
+// 进程。它把「拿到了但是空的」读成「东西在那里」，而那条技能因此拿到 E1。
+// 判不了，不是判真 —— 这是 unknown 那一档存在的同一个理由。
+func TestAnAssertionThatCannotFailIsNotACheck(t *testing.T) {
+	j := Judge([]string{`stdout contains ""`}, Observed{Exit: 0, Stdout: ""})
+	if j.Verdict == VerdictOK {
+		t.Fatal("a needle that matches everything must not produce a pass")
+	}
+	if j.Verdict != VerdictUnknown {
+		t.Fatalf("it is unevaluable, not false: got %q", j.Verdict)
+	}
+	if !strings.Contains(j.Reason, "asserts nothing") {
+		t.Fatalf("the reason must say what is wrong with the assertion, got %q", j.Reason)
+	}
+	// 对照：非空针在一个空的 stdout 上确实是假 —— 那条断言是有内容的。
+	if got := Judge([]string{`stdout contains "X"`}, Observed{Exit: 0, Stdout: ""}).Verdict; got != VerdictFailed {
+		t.Fatalf("a non-empty needle that is absent is false, got %q", got)
+	}
+}
+
+// 对照：`== ""` 是合法的 —— 它说的正是「它什么都没打印」。
+// 这就是为什么只有 contains 的空针是空洞的。
+func TestAPrintedNothingClaimIsLegitimate(t *testing.T) {
+	if got := Judge([]string{`stdout == ""`}, Observed{Exit: 0, Stdout: ""}).Verdict; got != VerdictOK {
+		t.Fatalf("claiming the output is empty is a real claim, got %q", got)
+	}
+	if got := Judge([]string{`stdout != ""`}, Observed{Exit: 0, Stdout: ""}).Verdict; got != VerdictFailed {
+		t.Fatalf("and it can be false, got %q", got)
+	}
+}
+
+// 一条空洞的必败用例不是被驳倒 —— 它是判不了。
+// `Held` 要求 `VerdictFailed`，所以 `contains ""` 不能给一个技能双边证据。
+func TestAnEmptyNeedleRefutationIsNotARefutation(t *testing.T) {
+	j := Judge([]string{`stdout contains ""`}, Observed{Exit: 0, Stdout: ""})
+	if j.Verdict == VerdictFailed {
+		t.Fatal("unevaluable is not refuted")
+	}
+	e := Elevate(j, evidence.L0, []Refutation{{Assert: `stdout contains ""`, Verdict: j.Verdict, Held: j.Verdict == VerdictFailed}})
+	if e.Elevated() {
+		t.Fatal("a refutation that cannot fail must not buy two-sided evidence")
+	}
+	// 它停在**前一道**门上：判不了的运行不产生证据，所以根本走不到「这条必败
+	// 用例分不分辨」那一步。理由要说的是这件事，不是另一件。
+	if !strings.Contains(e.Reason, "unknown, not ok") {
+		t.Fatalf("an unevaluable run must be refused at the verdict gate, got %q", e.Reason)
+	}
+
+	// 走到「分不分辨」那一步的是另一种：必败用例的断言**仍然成立**。
+	j2 := Judge([]string{`stdout == ""`}, Observed{Exit: 0, Stdout: ""})
+	if j2.Verdict != VerdictOK {
+		t.Fatalf("the main run should hold, got %q", j2.Verdict)
+	}
+	e2 := Elevate(j2, evidence.L0, []Refutation{{Assert: `exit == 0`, Verdict: VerdictOK, Held: false}})
+	if e2.Elevated() {
+		t.Fatal("a refutation that still holds must not buy two-sided evidence")
+	}
+	if !strings.Contains(e2.Reason, "does not discriminate") {
+		t.Fatalf("the reason must say the case does not discriminate, got %q", e2.Reason)
+	}
+}

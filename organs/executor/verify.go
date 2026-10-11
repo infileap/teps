@@ -199,6 +199,18 @@ func evaluate(assert string, obs Observed) Check {
 			c.Detail = "contains needs a string on both sides"
 			return c
 		}
+		// ★ 空针匹配一切，所以它什么都没断言。
+		//
+		// `stdout contains ""` 在一个**什么都不打印**的进程上是 true —— 于是
+		// 「拿到了但是空的」被读成「东西在那里」，而这个技能拿到 E1。这不是
+		// 一条严格的断言，是一条**不可能失败的**断言，而一条不可能失败的断言
+		// 与一条没有断言之间，差别只在读的人以为自己检查过什么。
+		//
+		// 判不了，不是判真：这是 `unknown` 那一档存在的同一个理由。
+		if lit.str == "" {
+			c.Detail = "the needle is empty: an assertion that matches everything asserts nothing, and an assertion that cannot fail is not a check"
+			return c
+		}
 		if strings.Contains(left.str, lit.str) {
 			c.Result = ResultTrue
 			return c

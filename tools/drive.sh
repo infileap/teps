@@ -52,6 +52,17 @@ req() { # req <frame-json>
     -H 'Content-Type: application/x-ndjson' "$url"
 }
 
+reg_check() { # reg_check <label> <ref>
+  # 注册成功 = 拿到一个 64 位十六进制的 ref。用 'ok' 当判据是不对的：
+  # xpub 回的是 ref，不是状态词。
+  if printf '%s' "$2" | grep -qE '^[0-9a-f]{64}$'; then
+    printf '  ok    %s注册得上\n' "$1"
+  else
+    printf '  FAIL  %s没拿到 ref：%s\n' "$1" "$2"
+    fails=$((fails + 1))
+  fi
+}
+
 expect() { # expect <label> <response> <needle>
   if printf '%s' "$2" | grep -qF -- "$3"; then
     printf '  ok    %s\n' "$1"
@@ -1300,6 +1311,36 @@ r=$(req '{"t":"metrics.get","v":1}')
 expect "★ 顶层报出有多少个技能的后验是混的" "$r" '"mixed_skills":1'
 expect "★★ 能力乘积此刻未定义：可靠性这一项是不同问题的平均值" "$r" '"capability":{"defined":false'
 expect "★★ 并说清为什么——一个把这件事藏起来的乘积是没人会去查的数" "$r" 'average of different questions'
+
+echo
+echo "—— 探针沉默 ≠ 拿到但是空 ——"
+# ★ 两件事的 stdout 都是空字符串。一个只读 stdout 的读者看到的完全一样，
+#   所以判定结果必须不同 —— 那是读者唯一有的东西。
+xnil=$(xpub nil1 "$(xman empty.out '["stdout == \"\""]' 1000)" '{"run.sh":":"}')
+reg_check "什么都不打印的技能" "$xnil" 
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"ns1\",\"body\":{\"ref\":\"$xnil\",\"attempt\":\"n-empty\",\"task_class\":\"task_exec\"}}")
+expect "★「它跑了，什么都没打印」是一个成立的声明" "$r" '"outcome":"ok"'
+expect "★ 而它的 stdout 确实是空的" "$r" '"stdout":""'
+expect "★ 它不是被拒绝启动的" "$r" '"refused":false'
+
+# 一条**不可能失败的**断言不是一条检查：空针匹配一切。
+xvac=$(xpub vac1 "$(xman vacuous.one '["stdout contains \"\""]' 1000)" '{"run.sh":":"}')
+reg_check "空洞断言的技能" "$xvac" 
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"ns2\",\"body\":{\"ref\":\"$xvac\",\"attempt\":\"n-vacuous\",\"task_class\":\"task_exec\"}}")
+expect "★ 空针匹配一切，所以它什么都没断言" "$r" 'asserts nothing'
+expect "★ 判不了，不是判真" "$r" '"outcome":"unknown"'
+expect "★ 逐条断言报的是 unevaluable，不是 true" "$r" '"result":"unevaluable"'
+expect "★ 它因此拿不到任何证据等级" "$r" '"level":""'
+
+# 探针沉默：解释器根本不存在，进程没有起来。
+xdead=$(xpub dead1 '{"skill_id":"dead.probe","version":"1.0.0","kind":"script","verify_assert":["stdout == \"\""],"budget":{"ms":1000},"evidence":"E0","idempotent":true,"license":"MIT","provenance":{"source":"handwritten"},"env":{"interpreter":"/nonexistent/teps-probe"}}' '{"run.sh":":"}')
+reg_check "解释器不存在的技能" "$xdead" 
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"ns3\",\"body\":{\"ref\":\"$xdead\",\"attempt\":\"n-silent\",\"task_class\":\"task_exec\"}}")
+expect "★ 进程根本没起来，所以这不是一个执行结果" "$r" 'the execution did not happen'
+expect "★ 它是一个独立的判定，不是 failed" "$r" '"outcome":"refused"'
+expect "★ 机器可读的那一位也要置起来" "$r" '"refused":true'
+expect "★ 退出码是 -1，不是 0（空的 stdout 旁边那个 0 才是「跑了」）" "$r" '"exit":-1'
+expect "★ 它同样拿不到证据等级" "$r" '"level":""'
 
 echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
