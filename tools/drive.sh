@@ -430,11 +430,15 @@ xone=$(xpub x8 "$(xman runner.one '["exit == 0","stdout contains \"RUNNER-OK\""]
 # ★ 必败用例其实**会通过**：喂它空输入，`exit == 0` 照样成立。
 # 这不是「驳不倒」，这是「这条断言不分辨任何东西」—— 而那正是最该拦下的一种。
 xweak=$(xpub x9 "$(xman runner.weak '["exit == 0","stdout contains \"RUNNER-OK\""]' 2000 '[{"input":{},"assert":"exit == 0"}]')" "{\"run.sh\":\"$RUNNER_OK_SH\"}")
+# ★ 必败用例**超时**：喂 REFUTE 它就睡死过去。超时是关于时间的事实，
+# 不是「这条断言被证明为假」—— 算作驳倒就是让一个坏掉的技能靠「跑不完」拿到 E1。
+RUNNER_HANG_SH='read -r line\ncase $line in *REFUTE*) sleep 5; exit 0;; esac\nprintf RUNNER-OK\n'
+xtime=$(xpub x10 "$(xman runner.hangs '["exit == 0","stdout contains \"RUNNER-OK\""]' 300 '[{"input":{"marker":"REFUTE"},"assert":"exit == 0"}]')" "{\"run.sh\":\"$RUNNER_HANG_SH\"}")
 if [ -n "$xok" ] && [ -n "$xlie" ] && [ -n "$xslow" ] && [ -n "$xvague" ] &&
-  [ -n "$xnobud" ] && [ -n "$xamb" ] && [ -n "$xecho" ] && [ -n "$xone" ] && [ -n "$xweak" ]; then
-  printf '  ok    九个技能已注册（E0，canary）\n'
+  [ -n "$xnobud" ] && [ -n "$xamb" ] && [ -n "$xecho" ] && [ -n "$xone" ] && [ -n "$xweak" ] && [ -n "$xtime" ]; then
+  printf '  ok    十个技能已注册（E0，canary）\n'
 else
-  printf '  FAIL  技能注册没拿到 ref：%s %s %s %s %s %s %s %s %s\n' "$xok" "$xlie" "$xslow" "$xvague" "$xnobud" "$xamb" "$xecho" "$xone" "$xweak"
+  printf '  FAIL  技能注册没拿到 ref：%s %s %s %s %s %s %s %s %s %s\n' "$xok" "$xlie" "$xslow" "$xvague" "$xnobud" "$xamb" "$xecho" "$xone" "$xweak" "$xtime"
   fails=$((fails + 1))
 fi
 
@@ -464,6 +468,11 @@ expect "★ 单边证据不是证据：只有必过用例的技能到不了 E1" 
 expect "★ 而且理由说清缺的是什么" "$r" 'has not been shown to be able to fail'
 expect "★ 它仍然是一次成功的执行（判定没变，变的只是证据等级）" "$r" '"outcome":"ok"'
 expect "★ 它停在 E0" "$r" '"level":""'
+
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xe3\",\"body\":{\"ref\":\"$xtime\",\"attempt\":\"x-time\",\"task_class\":\"task_exec\",\"elevate\":true}}")
+expect "★ 必败用例超时：超时是关于时间的事实，不是被驳倒" "$r" '"held":false'
+expect "★ 那条必败用例的判定如实报成 timeout" "$r" '"verdict":"timeout"'
+expect "★ 于是它也停在 E0（跑不完不等于被证明为假）" "$r" '"level":""'
 
 r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"xe2\",\"body\":{\"ref\":\"$xweak\",\"attempt\":\"x-weak\",\"task_class\":\"task_exec\",\"elevate\":true}}")
 expect "★ 必败用例其实通过了 ⇒ 这条断言不分辨任何东西" "$r" 'does not discriminate'
