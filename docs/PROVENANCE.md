@@ -61,7 +61,34 @@
 | **本地复现** | ⬜ **未做——这是把 AI 因子从 🔴 变 🟢 的唯一途径** |
 | 第二批名字的核对 | ✅ 已做（`tools/check_provenance.py` → `PROVENANCE-CHECK.md`） |
 
-⚠️ 本文档的核对结论**引用了外部链接的标题**，而不是逐篇精读全文。
+### ★ 第一节的结论现在可复跑了（2026-10-12）
+
+上面那张表曾经是「引用了外部链接的标题」。现在它是 `tools/check_provenance.py --citations`
+的输出，在 [`PROVENANCE-CITATIONS.md`](PROVENANCE-CITATIONS.md)：**那份文档引用的 14 个
+arXiv 编号，全部解析得到真实论文。**
+
+| 编号 | 被引用为 | **它实际上是什么** |
+|---|---|---|
+| `2605.03190` | **Spartacus-1B / Causal Monoid State Compression** | **VDCores: Resource Decoupled Programming and Execution for Asynchronous GPUs** |
+| `2605.05699` | 同一节的 KV Cache 压缩依据 | When Quantization Is Free: An **int4 KV Cache** That Outruns fp16 on **Apple Silicon** |
+
+**所以这批引用不是编的，是错配的。** 一篇 GPU 编程与执行的论文被引成了
+「用因果幺半群状态压缩完全替代 Softmax Attention 的 1.3B 模型」；
+一篇 Apple Silicon 上 int4 KV Cache 量化的论文被引成了「SSM+MLA 把 KV Cache 压到 2.73%」。
+
+★ **这比「查不到」更难发现**：编号是真的，链接是真的，arXiv 页面打得开——
+**只有把编号解析出来、读它的标题，才知道它讲的是别的事。**
+
+### ★ 探针自己的一个发现
+
+arXiv 的接口对 14 个编号回了 `totalResults: 14` 而**只给了 10 个 entry**，不报错。
+所以这份检查：**先跑一组对照编号**（`1706.03762` / `2303.08774`），
+**再对没解析到的逐个补查**，并把「批量与 totalResults 对不上」写进输出。
+
+> 一个对已知存在的编号也回「没有」的探针是坏的，而**它报出来的东西与「不存在」一模一样**。
+
+⚠️ 本文档的核对结论仍然是**标题级**的，不是逐篇精读全文。
+而且——**核对一篇论文说了什么，不是本地复现那个能力。** 硬规则不变：
 若要把某个模型正式纳入选型，**必须先本地复现，而不是先补引用。**
 
 ---
