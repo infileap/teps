@@ -112,6 +112,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
             drive.sh                             ★ 自由判据：只有 curl 驱动全流程
             drive_mcp.sh                         ★ 自由判据：只有 printf 的 JSON-RPC
             go · install_go.sh                   自包含工具链：包装器 + 重建
+            check_provenance.py                  ⚠️ **不是守卫**：要联网，核对 PROVENANCE 里的名字
 .toolchain/ go1.27.1                             gitignore，可重建
 ```
 
@@ -207,6 +208,15 @@ python3 tools/check_assertions.py  # ★ 存在性判据不许冒充一致性判
 ```
 
 守卫读数：**511 / 3000 行 · 0 / 0 依赖 · 6 / 12 公开类型 · 0 / 0 领域词**。
+
+**上面十条都在本地跑，不需要网络。** 另有一条**不是守卫**、只用于核对外部说法的工具：
+
+```sh
+python3 tools/check_provenance.py  # ⚠️ 要联网，约 5 分钟；核对 PROVENANCE 里的名字
+```
+
+它不进守卫清单，理由是：**一台跑不了的守卫不是守卫。** 一条只有在网络通的时候
+才给答案的检查，不能承担「这个仓库现在是不是对的」这件事。
 
 内核只有六个公开类型：`Frame` `Refusal` `Log` `Entry` `Budget` `Account`。
 `Account` 是**唯一持有可变值**的东西，理由是"检查与扣减必须是不可分割的一步"；

@@ -59,6 +59,7 @@
 | 引用核对 | ✅ 已完成（结论如上） |
 | 硬规则 | ✅ 已定 |
 | **本地复现** | ⬜ **未做——这是把 AI 因子从 🔴 变 🟢 的唯一途径** |
+| 第二批名字的核对 | ✅ 已做（`tools/check_provenance.py` → `PROVENANCE-CHECK.md`） |
 
 ⚠️ 本文档的核对结论**引用了外部链接的标题**，而不是逐篇精读全文。
 若要把某个模型正式纳入选型，**必须先本地复现，而不是先补引用。**
@@ -77,8 +78,62 @@ PaRSP · RectLoRA · SLoRA · Meta-UCF · DS-LoRA · RB-LoRA ·
 Titans Fast-Weight Neural Memory Adapter · δ-mem · SuperBake
 （另提 Kimi K3 · Nemotron 3 · Titans++ · HELM）
 
-**核对状态：未核实。** `web_search` 在本环境返回 `HTTP 402 Insufficient Balance`，
-所以**不是「查过没有」，是「查不了」**。
+**核对状态：已核对（2026-10-12）。** `web_search` 仍然返回 `HTTP 402 Insufficient Balance`，
+但**`curl` 出得去**，而 GitHub 与 arXiv 都有公开、稳定、可复现的接口。
+所以这一批不再走搜索 API：`tools/check_provenance.py` 直接问这两个索引，
+结果在 [`PROVENANCE-CHECK.md`](PROVENANCE-CHECK.md)。**33 个名字，0 个没查成。**
+
+### ★ 结果比「未核实」更糟：同名不是证据
+
+**两个数，必须分开说：**
+
+| 读数 | 值 | 谁算的 |
+|---|---|---|
+| 至少一侧 `SAME-NAME`（有一个名字完全相同的东西） | **23 / 33** | **工具** |
+| 其中最高命中是**一个完全不同的东西** | **14** | **我**（判断，不是计数） |
+
+★ 第一版我把这两个数混成了「14 个有名字完全相同的仓库」——
+**那正是这份文档在记录的错：一个判定声称的比它量到的多。**
+23 是索引给的，14 是我读描述读出来的，**它们必须长得不一样。**
+
+那 14 个是：
+
+| 名字 | 匹配到的东西 |
+|---|---|
+| `DS-LoRA` | 一块 **LoRaWAN 开发板**（Arduino） |
+| `SLoRA` | `slorado` —— 一个**纳米孔测序**工具 |
+| `HELM` | **Kubernetes** 的包管理器 |
+| `Lotus` | **Filecoin** 协议 |
+| `SuperBake` | 一个 **CakePHP** 仓库 |
+| `EDGE` | 一个 **.NET/Node.js** 进程内运行时 |
+| `SOLA` | **Solana** 区块链 |
+| `ESSA` | 一个博客系统 |
+| `ASCENT` | 一个 **HPC 可视化**运行时 |
+| `AGNN` | 一个视频目标分割网络 |
+| `DualPath` | 2017 年的 Keras 网络 |
+| `MMP` · `RB-LoRA` · `SPEE` | mmpose · 一个 ComfyUI 的 LoRA 键名转换器 · speech-to-speech |
+
+**只按名字核对，这 14 个全都会「通过」。**
+
+这是第一批那个坑的**反面**：
+
+- 第一批：**真实的名字 + 真实的论文 + 不属于它的指标**
+- 第二批：**真实的名字 + 真实的项目 + 完全不是那件事**
+
+两次都指向同一件事：**「存在」和「是它」是两个判据，而按名字核对只能回答前者。**
+
+### 另一头：确实对得上的那些
+
+`SlimInfer`（AAAI 2026，长上下文 LLM 推理的动态 token 剪枝）·
+`MOPD`（多教师 on-policy 蒸馏）· `OxyGent`（ACL 2026，多智能体）·
+`JoyAgent`（京东开源通用智能体）· `In-Place TTT`（ByteDance-Seed）·
+`KnapSpec`（kaist-flexml-lab）· `Infinite-Parameter LLMs`（arXiv）·
+`Kimi K3`（MoonshotAI）· `Nemotron 3` · `Titans++` · `δ-mem` ·
+`Parameter Updater Experts`。
+
+**这批名字里至少有一半是真东西。** 但「真东西」和「那份文档说的那件事」仍然是两个判据——
+`SlimInfer` 的标题是「通过动态 token 剪枝加速长上下文 LLM 推理」，
+而那份文档把它放在哪一节、声称它做了什么，这张表没有问。
 
 **形态与第一批相同**：具体到可以引用的名字 + 一个出处都没有。这不是说它们一定是假的，
 而是说**「未核实」和「已核实」必须长得不一样**——否则下一次有人引用这份清单时，
