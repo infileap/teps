@@ -87,6 +87,34 @@ arXiv 的接口对 14 个编号回了 `totalResults: 14` 而**只给了 10 个 e
 
 > 一个对已知存在的编号也回「没有」的探针是坏的，而**它报出来的东西与「不存在」一模一样**。
 
+### ★★ 第一批点名的两个模型：一个没有指称对象，另一个的数被搬到了最小的型号上
+
+由 `tools/check_provenance.py --models` 生成，见 [`PROVENANCE-MODELS.md`](PROVENANCE-MODELS.md)。
+
+**「首选」`Spartacus-1B-Instruct`（因果幺半群状态压缩，1.3B）在 GitHub 里 `total_count: 0`，
+机制名 `Causal Monoid State Compression` 也是 `total_count: 0`。**
+而那份文档给它配的那个出处（`2605.03190`）打开来是
+**`VDCores: Resource Decoupled Programming and Execution for Asynchronous GPUs`**——
+一篇讲 GPU 编程与执行的论文。**这个名字没有任何指称对象。**
+
+**「备选」`Zebra-Llama` 是真的**：NeurIPS 2025，`Zebra-Llama: Towards Extremely Efficient
+Hybrid Models`，作者 Mingyu Yang 等（AMD），代码在 `AMD-AGI/AMD-Hybrid-Models`。
+它确实报了 KV Cache 压缩率——**但那份文档把数字搬到了最小的型号上**：
+
+> it dramatically reduces KV cache size—down to **3.9%, 2%, and 2.73%** of the original
+> for the **1B, 3B, and 8B** variants, respectively
+
+| | 那份文档说的 | 论文说的 |
+|---|---|---|
+| 1B 的 KV Cache | **2.73%** | **3.9%** |
+| 3B 的 KV Cache | — | 2% |
+| 8B 的 KV Cache | — | **2.73%** ← 这个数是真的，但它是 8B 的 |
+
+★★ **这是比「查不到」更难发现的第三种错法**：链接是真的、数是真的、页面打得开、
+**那个数确实在论文里**——只有把三个型号的数字都读出来，才知道它被搬到了最小的那个型号上。
+第一批的「首选」没有指称对象，所以那个 `2.73%` 是**唯一一个能撑住论证的真数**，
+而它属于一个比目标大八倍的模型。
+
 ⚠️ 本文档的核对结论仍然是**标题级**的，不是逐篇精读全文。
 而且——**核对一篇论文说了什么，不是本地复现那个能力。** 硬规则不变：
 若要把某个模型正式纳入选型，**必须先本地复现，而不是先补引用。**

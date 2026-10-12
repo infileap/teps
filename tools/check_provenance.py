@@ -40,6 +40,7 @@
 """
 
 import argparse
+import html
 import json
 import re
 import sys
@@ -77,6 +78,41 @@ CITED = [
 # 第一次跑这份检查时批量接口对 14 个编号只回了 10 个 entry（而 totalResults 说 14），
 # 我差一点把 4 篇真实存在的论文记成「不存在」。
 CONTROL_IDS = ["1706.03762", "2303.08774"]
+
+# docs/PROVENANCE.md 第一节**点名**的两个模型。左边是那份文档怎么叫它，
+# 右边是它给的出处。这一节问的是另一类问题：**这个东西有没有指称对象，
+# 以及它引的那个数是不是它自己的。**
+#
+# ★ 两种错法形状不同，必须分开记：
+#   - 「引用指向另一个东西」（Spartacus-1B 的编号其实是一篇 GPU 论文）
+#   - 「数字是真的，但它属于另一个型号」（Zebra-Llama 的 2.73% 是 8B 的，1B 是 3.9%）
+# 后一种更难发现：链接是真的、数是真的、页面打得开，**只有把三个型号的数字都读出来，
+# 才知道那个数被搬到了最小的那个型号上。**
+MODEL_CLAIMS = [
+    {
+        "name": "Spartacus-1B-Instruct",
+        "as_called": "首选：因果幺半群状态压缩，1.3B",
+        "repo": "Spartacus-1B",
+        "source": "https://arxiv.org/abs/2605.03190",
+        "quote": None,
+    },
+    {
+        "name": "Causal Monoid State Compression",
+        "as_called": "（同一个首选模型的机制名）",
+        "repo": "Causal Monoid State Compression",
+        "source": None,
+        "quote": None,
+    },
+    {
+        "name": "Zebra-Llama",
+        "as_called": "备选：SSM + MLA，**1B 的 KV Cache 压到 2.73%**",
+        "repo": "Zebra-Llama",
+        "source": "https://proceedings.neurips.cc/paper_files/paper/2025/hash/7089237e828d55febd85a8d07f89e102-Abstract-Conference.html",
+        # ★ 论文原句。工具**重新抓一次**并核对这句话还在不在：
+        # 结论必须能被重跑，而不是被抄进文档里。
+        "quote": "down to 3.9%, 2%, and 2.73% of the original for the 1B, 3B, and 8B variants",
+    },
+]
 
 UA = "teps-provenance-check/1.0 (+local reproduction; not a crawler)"
 # GitHub 未认证搜索是 10 次/分钟。留出余量。
@@ -201,6 +237,92 @@ def arxiv_titles(ids):
             if i in one_try:
                 titles[i] = one_try[i]
     return titles, notes
+
+
+def render_models(rows):
+    out = []
+    out.append("# 第一批点名的两个模型：它们有没有指称对象")
+    out.append("")
+    out.append("由 `tools/check_provenance.py --models` 生成。**这不是核对论文说了什么，")
+    out.append("更不是本地复现那个能力。** 它只回答两个问题：这个名字在索引里有没有对应物，")
+    out.append("以及它引的那个数**是不是它自己的**。")
+    out.append("")
+    out.append("| 文档怎么叫它 | GitHub 仓库命中 | 出处可达 | 出处标题 |")
+    out.append("|---|---|---|---|")
+    for r in rows:
+        out.append(
+            "| `%s`<br>%s | %s | %s | %s |"
+            % (
+                r["name"],
+                r["as_called"],
+                ("`total_count: %d`" % r["gh_total"]) if r["gh_total"] is not None else "_查不成_",
+                ("✅" if r["reachable"] else ("❌ `%s`" % r["fetch_error"] if r.get("fetch_error") else "❌")),
+                ("`%s`" % r["title"]) if r["title"] else "—",
+            )
+        )
+    out.append("")
+    out.append("## ★ 那句被引的话，重新抓一次")
+    out.append("")
+    for r in rows:
+        if not r["quote"]:
+            continue
+        out.append("**%s** 的出处里，" % r["name"])
+        out.append("")
+        out.append("> %s" % r["quote"])
+        out.append("")
+        if r.get("fetch_error"):
+            out.append(
+                "**没查成**（`%s`）——所以这一行既不是「在」也不是「不在」，"
+                "**它是没查**。重跑到能查为止。" % r["fetch_error"]
+            )
+        else:
+            out.append(
+                "**重新抓取后这句话%s。**"
+                % ("仍在" if r["quote_found"] else "**已经不在了** —— 这条结论需要重查")
+            )
+        out.append("")
+    return "\n".join(out) + "\n"
+
+
+def check_models():
+    rows = []
+    for m in MODEL_CLAIMS:
+        row = dict(m)
+        row["gh_total"] = None
+        row["reachable"] = False
+        row["title"] = None
+        row["quote_found"] = False
+        row["gh_error"] = None
+        row["fetch_error"] = None
+        try:
+            data = fetch(
+                "https://api.github.com/search/repositories?q=%s&per_page=1"
+                % urllib.parse.quote(m["repo"]),
+                "application/vnd.github+json",
+            )
+            row["gh_total"] = json.loads(data).get("total_count")
+        except CheckError as e:
+            row["gh_error"] = str(e)
+        time.sleep(GITHUB_GAP_S)
+        if m["source"]:
+            try:
+                # fetch 返回的就是 str。**第一版在这里调了 .decode**，
+                # 于是 AttributeError 被一个裸 except 吞掉，
+                # 把「我自己的代码错了」报成了「页面打不开」——
+                # 而这两件事在报告里长得一模一样。所以现在错误要**被记下来**。
+                page = fetch(m["source"], "text/html")
+                row["reachable"] = True
+                t = re.search(r"<title>(.*?)</title>", page, re.S | re.I)
+                if t:
+                    row["title"] = html.unescape(re.sub(r"\s+", " ", t.group(1)).strip())
+                if m["quote"]:
+                    flat = html.unescape(re.sub(r"<[^>]+>", " ", page))
+                    flat = re.sub(r"\s+", " ", flat)
+                    row["quote_found"] = m["quote"] in flat
+            except CheckError as e:
+                row["fetch_error"] = str(e)
+        rows.append(row)
+    return rows
 
 
 def render_citations(titles, notes):
@@ -330,7 +452,18 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="只查前 N 个（省配额）")
     ap.add_argument("--out", default="docs/PROVENANCE-CHECK.md")
     ap.add_argument("--citations", action="store_true", help="核对第一批引用的 arXiv 编号")
+    ap.add_argument("--models", action="store_true", help="核对第一批点名的两个模型有没有指称对象")
     args = ap.parse_args()
+
+    if args.models:
+        text = render_models(check_models())
+        if args.out == "-":
+            print(text)
+        else:
+            with open(args.out, "w", encoding="utf-8") as f:
+                f.write(text)
+            print("wrote %s" % args.out, file=sys.stderr)
+        return 0
 
     if args.citations:
         try:
