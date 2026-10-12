@@ -716,6 +716,19 @@ r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"tp1\",\"body\":{\"manifest\"
 autoRef=$(printf '%s' "$r" | sed -n 's/.*"ref":"\([0-9a-f]\{64\}\)".*/\1/p')
 expect "★ 搜索的结果被注册成了一个技能" "$r" '"channel":"canary"'
 expect "★ 它从未运行过，所以是 E0 —— 不是默认值，是唯一为真的答案" "$r" '"evidence":"E0"'
+
+# ★ 组合不许洗白孩子的证据等级。
+#   组合本身不产生任何观测——它没有自己的进程、没有自己的断言。所以它没有
+#   自己的证据等级：它的等级是孩子们的最小值。这一条在文档里写了很久，
+#   而在代码里从来没被检查过。
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp13\",\"body\":{\"manifest\":{\"skill_id\":\"comb.launder\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E1\",\"license\":\"MIT\",\"provenance\":{\"source\":\"x\"},\"deps\":[\"$cA\",\"$cB\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$cA\",\"$cB\"]}},\"files\":{}}}")
+expect "★ 两个 E0 孩子组成的组合不许声明 E1" "$r" 'cannot claim more trust'
+expect "★ 拒绝说出孩子里最弱的那一个是谁" "$r" 'minimum is E0'
+expect "★ 也说出它自己声称的是什么" "$r" 'declares E1'
+cLaunder=$(xpub cp14 "$(xmanC comb.honest serial "[\"$cA\",\"$cB\"]" "[\"$cA\",\"$cB\"]")" '{}')
+reg_check "诚实的组合（声明 E0）" "$cLaunder"
+r=$(req "{\"t\":\"skill.resolve\",\"v\":1,\"body\":{\"ref\":\"$cLaunder\"}}")
+expect "★ 它的等级就是孩子里最弱的那个" "$r" '"evidence":"E0"'
 if [ -n "$autoRef" ] && [ "$autoRef" != "$tA" ] && [ "$autoRef" != "$tB" ]; then
   printf '  ok    ★ 它是一个新的制品：ref 与任何孩子都不同\n'
 else

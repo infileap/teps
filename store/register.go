@@ -166,16 +166,52 @@ func (s *Store) Register(reg Registration) (*Result, *core.Refusal) {
 	// 2. deps must be present. A skill cannot depend on something the store
 	// does not have, and a dep that cannot be read is worse than a missing one.
 	var depLicenses []string
+	var depEvidence []Evidence
 	for _, d := range m.Deps {
 		_, dm, ref := s.Resolve(d)
 		if ref != nil {
 			return fail("deps", ref)
 		}
 		depLicenses = append(depLicenses, dm.License)
+		depEvidence = append(depEvidence, dm.Evidence)
 	}
 	res.Steps = append(res.Steps, Step{
 		Name: "deps", OK: true, Detail: strconv.Itoa(len(m.Deps)) + " resolved",
 	})
+
+	// 2b. ★ 组合不许洗白孩子的证据等级。
+	//
+	// 组合本身不产生任何观测 —— 它没有自己的进程、没有自己的断言，它的判定是
+	// 孩子们的判定的合成。所以它**没有自己的证据等级**：它的等级就是孩子们的
+	// 最小值。这一条在文档里写了很久，而在代码里从来没被检查过，于是一份
+	// 由两个 E0 孩子组成的组合可以声明 E1 并被接受。
+	//
+	// 这正是证据阶梯存在的理由：让「我信它」这件事不能靠写一行字得到。
+	//
+	// ★ 但 `min(children)` 是**天花板**，不是等级。这两件事必须分开：
+	//
+	//   - 「每个零件都跑过」 —— 孩子的最小值，一个已经挣到的性质
+	//   - 「这个东西整体跑过」 —— 组合自己的运行记录，而**注册时它必然是空的**
+	//
+	// 一个刚注册的组合从未作为一条链跑过，所以它的等级就是它声明的那个（E0）。
+	// 拿孩子的等级顶上去，就是用「零件都行」冒充「整条链行」—— 那正是证据阶梯
+	// 存在的理由，只不过方向相反。
+	//
+	// 所以这里只**检查**声明不超上限，入账仍然用声明值。
+	if m.Kind == KindCompose {
+		ceiling := MinEvidenceAll(depEvidence)
+		if evidenceRank(m.Evidence) > evidenceRank(ceiling) {
+			return fail("evidence", &core.Refusal{
+				Code: core.CodeBadRequest,
+				Reason: "this composition declares " + string(m.Evidence) + " but its children's minimum is " + string(ceiling) +
+					": a composition produces no observation of its own, so it cannot claim more trust than the least trusted part it is made of",
+			})
+		}
+		res.Steps = append(res.Steps, Step{
+			Name: "evidence", OK: true,
+			Detail: "ceiling from children: " + string(ceiling) + ", declared " + string(m.Evidence),
+		})
+	}
 
 	// 3. license closure
 	cl, ref := SolveLicense(m.License, depLicenses)

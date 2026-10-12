@@ -949,3 +949,76 @@ func TestResolveKeepsTheFourAnswersApart(t *testing.T) {
 		t.Fatalf("a blob written to another recipe must name the normalization: %v", ref)
 	}
 }
+
+// ★ 组合不许洗白孩子的证据等级。
+//
+// 组合本身不产生任何观测 —— 它没有自己的进程、没有自己的断言。所以它不能
+// 声称比它所由组成的最弱那一部分更高的信任。这一条在文档里写了很久，而在
+// 代码里从来没被检查过：一份由两个 E0 孩子组成的组合可以声明 E1 并被接受。
+//
+// ★ 而 `min(children)` 是**天花板**，不是等级。注册时组合从未作为一条链跑过，
+// 所以它的等级仍然是它声明的那个。用孩子的等级顶上去，就是用「零件都行」
+// 冒充「整条链行」—— 那正是证据阶梯存在的理由，只不过方向相反。
+func TestACompositionCannotLaunderItsChildrensEvidence(t *testing.T) {
+	s := tmpStore(t)
+	child := func(id string, lvl Evidence) string {
+		m := &Manifest{
+			SkillID: id, Version: "1.0.0", Kind: KindScript,
+			Verify: []string{"exit == 0"}, Budget: core.Budget{MS: 1000},
+			Evidence: lvl, Idempotent: true, License: "MIT",
+			Provenance: Provenance{Source: "handwritten"},
+			Env:        Env{Interpreter: "/bin/sh"},
+		}
+		res, ref := s.Register(regWith(m, map[string][]byte{"run.sh": []byte("exit 0\n")}))
+		if ref != nil {
+			t.Fatalf("child %s: %s", id, ref.Reason)
+		}
+		return res.Ref
+	}
+	e0a, e0b := child("laun.a", E0), child("laun.b", E0)
+	e1a := child("laun.c", E1)
+
+	compose := func(id string, lvl Evidence, kids ...string) (*Result, *core.Refusal) {
+		m := &Manifest{
+			SkillID: id, Version: "1.0.0", Kind: KindCompose,
+			Evidence: lvl, License: "MIT", Deps: kids,
+			Provenance: Provenance{Source: "handwritten"},
+			Compose:    &Composition{Op: OpSerial, Children: kids},
+		}
+		return s.Register(regWith(m, map[string][]byte{}))
+	}
+
+	// 两个 E0 孩子组成的组合声明 E1：拒绝。
+	_, ref := compose("laun.liar", E1, e0a, e0b)
+	if ref == nil {
+		t.Fatal("a composition of E0 children must not be allowed to declare E1")
+	}
+	if !strings.Contains(ref.Reason, "cannot claim more trust") {
+		t.Fatalf("the refusal must say what is wrong, got %q", ref.Reason)
+	}
+
+	// 声明 E0：接受，而且**入账是 E0** —— 它从未作为一条链跑过。
+	res, ref := compose("laun.honest", E0, e0a, e0b)
+	if ref != nil {
+		t.Fatalf("declaring the truth must be accepted: %s", ref.Reason)
+	}
+	if res.Evidence != E0 {
+		t.Fatalf("a composition that has never run is E0, got %q", res.Evidence)
+	}
+
+	// ★ 天花板不是等级：孩子的等级**不会**顶上去。
+	// 组合声明 E0 而孩子是 E1 —— 入账仍是 E0。
+	res2, ref := compose("laun.ceiling", E0, e1a)
+	if ref != nil {
+		t.Fatalf("E0 is below the ceiling: %s", ref.Reason)
+	}
+	if res2.Evidence != E0 {
+		t.Fatalf("the ceiling must not be promoted to the level: got %q, want E0", res2.Evidence)
+	}
+
+	// 而声明等于天花板是允许的（存储层面它不超过上限）。
+	// 它是否**真的**跑过是链的事，不是店的事 —— 店只核它看得见的那一半。
+	if _, ref := compose("laun.atceiling", E1, e1a); ref != nil {
+		t.Fatalf("declaring exactly the ceiling is not a lie about the children: %s", ref.Reason)
+	}
+}

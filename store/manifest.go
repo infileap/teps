@@ -281,3 +281,12 @@ func (m *Manifest) ManifestHash() (string, *core.Refusal) {
 func (m *Manifest) Verified() bool {
 	return evidence.AtLeast(m.Evidence, E1)
 }
+
+// evidenceRank is the forwarder for evidence.Rank, so this file can compare two
+// levels without importing the ladder directly — the store reads the ladder
+// through exactly one door (manifest.go), which is what keeps the store and the
+// memory from drifting apart on what E2 means.
+func evidenceRank(l Evidence) int {
+	r, _ := evidence.Rank(l)
+	return r
+}
