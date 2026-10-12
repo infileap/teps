@@ -84,6 +84,11 @@ type composeResult struct {
 	Reason     string        `json:"reason"`
 	Steps      []composeStep `json:"steps"`
 	Open       int           `json:"open"`
+	// Ceiling is the most this composition could ever claim: the minimum of its
+	// children's levels. It is reported rather than left implicit because
+	// "why is this still E0" is a question a reader should not have to answer
+	// by reading four manifests.
+	Ceiling string `json:"ceiling,omitempty"`
 }
 
 // composeSkillName names a composition in the posterior table.
@@ -265,6 +270,39 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 		preps = append(preps, prepared{pkg: pkg, man: man, decl: decl})
 	}
 
+	// ★ 组合的等级天花板：孩子里最弱的那个。
+	//
+	// 它在这里算出来，是为了让下面那条拒绝能说出**具体**的数，而不是一句
+	// 「组合不能提级」——一个说不出上限的拒绝，读者不知道该往哪儿走。
+	ceiling := store.E0
+	{
+		evs := make([]store.Evidence, 0, len(preps))
+		for _, pr := range preps {
+			evs = append(evs, pr.man.Evidence)
+		}
+		ceiling = store.MinEvidenceAll(evs)
+	}
+
+	// ★ `elevate` 曾经在这里被接受然后**静默忽略**。
+	//
+	// composeBody 有 Elevate 字段，而 composeResult 里没有 elevation，代码里也
+	// 没有任何地方读它 —— 一个调用方传了 elevate: true，拿到 200，什么都没发生。
+	// 那是最坏的一种 API 谎言：不是拒绝，也不是做到，是**看起来做到了**。
+	//
+	// 真话是：组合没有自己的断言。它的判定是 JudgeComposition 对孩子们判定的
+	// 合成，而不是对组合自己输出的核验 —— 所以没有一条「应该不成立」的断言
+	// 可以拿来给它自己挣证据。它的等级就是孩子们给它设的天花板。
+	//
+	// 拒绝要说清三件事：为什么、上限是多少、以及真正的路在哪。
+	if req.Elevate {
+		out.Err = core.Refuse(core.CodeBadRequest,
+			"elevate is not something a composition can do: a composition declares no verify_assert and no verify_refute, "+
+				"because its judgement is a composition of its children's judgements rather than a verification of its own output — "+
+				"there is no assertion of its own for a run to earn evidence against. Its level is the ceiling its children set, which for this "+
+				strconv.Itoa(len(preps))+" children is "+string(ceiling)+". Raise the children, and this composition's ceiling rises with them.")
+		return true
+	}
+
 	if req.Ref == "" {
 		// Inline: the shape is the only identity available, so make it a real
 		// one — and compute it here, after the children have been resolved, so
@@ -292,9 +330,10 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 	}
 	res := composeResult{
 		Attempt: req.Attempt, Op: graph.Op,
-		Intent: &chainRef{Seq: seq, Head: head},
-		Steps:  []composeStep{},
-		Open:   open,
+		Intent:  &chainRef{Seq: seq, Head: head},
+		Steps:   []composeStep{},
+		Open:    open,
+		Ceiling: string(ceiling),
 	}
 
 	// stepRules 收集每一步自己的规则身份。组合没有自己的断言，

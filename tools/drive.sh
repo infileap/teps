@@ -596,12 +596,26 @@ else
 fi
 
 r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cc1\",\"body\":{\"attempt\":\"c-ser\",\"task_class\":\"task_exec\",\"composition\":{\"op\":\"serial\",\"children\":[\"$cA\",\"$cB\"]},\"input\":{\"n\":1}}}")
+expect "★ 组合报出它的等级天花板（孩子里最弱的那个）" "$r" '"ceiling":"E0"'
+
 expect "★ 串行组合跑起来了" "$r" '"op":"serial"'
 expect "★ 第一步判定 ok" "$r" "{\"index\":0,\"ref\":\"$cA\",\"attempt\":\"c-ser#0\",\"outcome\":\"ok\""
 expect "★ 第二步也 ok —— 这一条同时证明它读到了第一步的输出" "$r" "{\"index\":1,\"ref\":\"$cB\",\"attempt\":\"c-ser#1\",\"outcome\":\"ok\""
 expect "总判定由核验器署名（组合不重新求值孩子的断言）" "$r" '"verified_by":"verify_assert"'
 expect "组合的意图先上链" "$r" '"intent":{"seq"'
+
 expect "组合的结论也上链了" "$r" '"resolution":{"seq"'
+
+# ★ elevate 曾经在这里被接受然后**静默忽略**：composeBody 有 Elevate 字段，
+#   而 composeResult 里没有 elevation，代码里也没有任何地方读它 —— 传了
+#   elevate: true，拿到 200，什么都没发生。那是最坏的一种 API 谎言：
+#   不是拒绝，也不是做到，是**看起来做到了**。
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"ce1\",\"body\":{\"attempt\":\"c-elev\",\"task_class\":\"task_exec\",\"elevate\":true,\"composition\":{\"op\":\"serial\",\"children\":[\"$cA\",\"$cB\"]},\"input\":{\"n\":1}}}")
+expect "★ 组合不能提级，而它现在说出来而不是装作做到了" "$r" 'not something a composition can do'
+expect "★ 拒绝说清为什么：它没有自己的断言" "$r" 'no assertion of its own'
+expect "★ 拒绝给出**具体**的上限（说不出上限的拒绝，读者不知道该往哪儿走）" "$r" 'for this 2 children is E0'
+expect "★ 并指出真正的路" "$r" 'Raise the children'
+expect "★ 被拒的调用不留痕迹：链上没有这次尝试" "$r" '"code":"bad_request"' 
 
 r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cc2\",\"body\":{\"attempt\":\"c-par\",\"task_class\":\"task_exec\",\"composition\":{\"op\":\"parallel\",\"children\":[\"$cA\",\"$cB\"]},\"input\":{\"n\":1}}}")
 expect "★ 并行时第二个孩子拿不到第一个的输出，于是判失败" "$r" "{\"index\":1,\"ref\":\"$cB\",\"attempt\":\"c-par#1\",\"outcome\":\"failed\""
