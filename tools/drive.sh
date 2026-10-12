@@ -1257,6 +1257,17 @@ b=json.load(sys.stdin)["body"]
 n=b["observations"]; ok=b["successes"]; raw=b["raw_rate"]; mean=b["mean"]; gap=b["decay_gap"]
 print("ok" if n and abs(raw-ok/n)<1e-4 and abs(gap-(mean-raw))<1e-4 else f"BAD n={n} ok={ok} raw={raw} mean={mean} gap={gap}")
 ' 2>&1 <<<"$r2")
+# ★ 同一个数在两处必须是同一个数：metrics 与 arbiter.state 各报一次 raw_rate，
+#   而两条路径各自算一遍 —— 只断言「它出现过」正是「存在性判据冒充一致性判据」。
+arb_raw=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["raw_rate"])' <<<"$r2")
+r3=$(req '{"t":"metrics.get","v":1}')
+met_raw=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["reliability"]["raw_rate"])' <<<"$r3")
+if [ -n "$arb_raw" ] && [ "$arb_raw" = "$met_raw" ]; then
+  printf '  ok    ★★ metrics 与 arbiter.state 报的 raw_rate 是同一个数（两条路径各算一遍）\n'
+else
+  printf '  FAIL  ★★ 两处 raw_rate 不一致：metrics=%s arbiter=%s\n' "$met_raw" "$arb_raw"
+  fails=$((fails + 1))
+fi
 if [ "$chk" = "ok" ]; then
   printf '  ok    ★★ 两个读数出自同一批记录：raw = ok/n，且 decay_gap = mean − raw\n'
 else
