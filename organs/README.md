@@ -457,6 +457,20 @@ Money:  int64(ms*r.MoneyPerMS + tok*r.MoneyPerToken),
 
 现在真的跑一遍孩子的必败用例，只有它**确实被驳倒**时才算数。第二类单边单独报出，理由含 `a declaration is not a refutation`。
 
+### 资格要用掉才算走完
+
+提级到 E1 只是拿到了**进 stable 的资格**。走完全程还要把它冻结：
+
+```
+规划器找到 typ.split;typ.tag（没人告诉它）
+  → 发布成 auto.tag（E0，canary）
+  → 跑通：同一个输入下 typ.tag 单跑印 SOLO、链上印 CHAINED
+  → 每个孩子都能证明自己会失败 ⇒ 提级到 E1（新 ref）
+  → skill.promote canary → stable
+```
+
+★ **这条链没有任何人写过，也没有任何人告诉过系统它存在。** 五步里每一步的判据都不同，而每一步都能失败。
+
 ### 组合第一次到了天花板
 
 `typ.split` / `typ.tag` 原先只有 `exit == 0`，而它们的载荷**永远退出 0** —— 那份声明不可能被证伪。所以它们到不了 E1，整条链也就到不了天花板。
