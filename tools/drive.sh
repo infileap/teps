@@ -700,6 +700,18 @@ xtyp() { # xtyp <skill_id> <in-json> <out-json>
 }
 tA=$(xpub t1 "$(xtyp typ.split '["doc"]' '["lines"]')" '{"run.sh":"cat; echo -n TAIL\n"}')
 tB=$(xpub t2 "$(xtyp typ.tag '["lines"]' '["tagged"]')" '{"run.sh":"grep -q TAIL && echo -n CHAINED || echo -n SOLO\n"}')
+
+# ★ 天花板跟着孩子走，不是恒为 E0。
+#
+# 这一条是补一条漏网的变异写的：上面 compose 段里孩子全是 E0，于是
+# 「天花板恒为 E0（根本不数孩子）」与真实现给出同一个答案，变异活了下来。
+# **用所有答案都一样的输入，测不出一个会分辨答案的检查** —— 这是本项目
+# 同一个形状第三次出现（前两次是证据上限取 min 还是 first、以及变异脚本
+# 自己把活下来的变异报成被抓住）。
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cce1\",\"body\":{\"attempt\":\"c-ceil\",\"task_class\":\"task_exec\",\"composition\":{\"op\":\"serial\",\"children\":[\"$tA\",\"$tB\"]},\"input\":{\"n\":1}}}")
+expect "★ 两个 E1 孩子 ⇒ 天花板是 E1，不是恒为 E0" "$r" '"ceiling":"E1"'
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cce2\",\"body\":{\"attempt\":\"c-ceil2\",\"task_class\":\"task_exec\",\"elevate\":true,\"composition\":{\"op\":\"serial\",\"children\":[\"$tA\",\"$tB\"]},\"input\":{\"n\":1}}}")
+expect "★ 拒绝里的上限也跟着孩子走" "$r" 'for this 2 children is E1'
 tC=$(xpub t3 "$(xtyp typ.wrap '["tagged"]' '["final"]')" '{"run.sh":"cat; echo -n WRAPPED\n"}')
 
 r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"tp0\",\"body\":{\"ref\":\"$tB\",\"attempt\":\"tp-alone\",\"task_class\":\"task_exec\",\"input\":{}}}")
