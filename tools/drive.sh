@@ -771,6 +771,16 @@ expect "★★ 提级后的制品解析出来就是 E1 —— 组合第一次不
 r=$(req "{\"t\":\"skill.resolve\",\"v\":1,\"body\":{\"ref\":\"$cTag\"}}")
 expect "★ 而它提级前那一份仍然是 E0（提级是新增一份，不是改写旧的）" "$r" '"evidence":"E0"' 
 
+# ★ 提级到 E1 只是拿到了进 stable 的资格；资格要**用掉**才算走完。
+#
+# 这是整条路第一次走到终点：规划器找到一条链 → 发布 → 跑通 → 提级 → 冻结成 stable。
+r=$(req '{"t":"skill.promote","v":1,"body":{"name":"auto.tag","from":"canary","to":"stable"}}')
+expect "★★ 提级后的组合才进得了 stable" "$r" "\"ref\":\"$cElev\""
+expect "★ 冻结的是 stable 指针" "$r" '"channel":"stable"'
+r=$(req "{\"t\":\"skill.resolve\",\"v\":1,\"body\":{\"ref\":\"$cElev\"}}")
+expect "★★ 被冻结的那份是 kind=compose 的 E1 制品 —— 规划器找到的链第一次真的走完全程" "$r" '"kind":"compose"'
+expect "★★ 它的证据等级就是 E1" "$r" '"evidence":"E1"'
+
 
 # ★ 组合不许洗白孩子的证据等级。
 #   组合本身不产生任何观测——它没有自己的进程、没有自己的断言。所以它没有
