@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"sort"
 	"strconv"
+	"strings"
 
 	"teps/core"
+	"teps/evidence"
 	"teps/organs/executor"
 	"teps/organs/planner"
 	"teps/store"
@@ -89,6 +91,10 @@ type composeResult struct {
 	// "why is this still E0" is a question a reader should not have to answer
 	// by reading four manifests.
 	Ceiling string `json:"ceiling,omitempty"`
+	// Elevation reports what this run did to the composition's evidence claim.
+	// It is present only when the caller asked (elevate: true) — a write with a
+	// default is not a write anybody chose.
+	Elevation *elevationBody `json:"elevation,omitempty"`
 }
 
 // composeSkillName names a composition in the posterior table.
@@ -184,6 +190,11 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 	// refs: a ref changes when a child is re-published, and an identity that
 	// moves on re-publication is the ref-keying mistake wearing a different hat.
 	identity := composeSkillName(req.Composition.Op)
+	// self is the composition's own manifest, when it was addressed by ref.
+	// An inline composition has none: it is a graph someone passed in, not a
+	// thing with a name, so there is nothing to re-register and nothing to
+	// elevate.
+	var self *store.Manifest
 	if req.Ref != "" {
 		if len(req.Composition.Children) != 0 {
 			out.Err = core.Refuse(core.CodeBadRequest,
@@ -211,6 +222,7 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 		// Grouped by the composition's own name, exactly as skill.invoke groups
 		// by skill_id — see the note on `identity` below.
 		identity = man.SkillID
+		self = man
 	}
 
 	// A composition is a skill, so it can be a child. Expand any child that is
@@ -283,24 +295,27 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 		ceiling = store.MinEvidenceAll(evs)
 	}
 
-	// ★ `elevate` 曾经在这里被接受然后**静默忽略**。
+	// ★ `elevate` 曾经在这里被接受然后**静默忽略**：composeBody 有 Elevate 字段，
+	// 而 composeResult 里没有 elevation，代码里也没有任何地方读它 —— 传了
+	// elevate: true，拿到 200，什么都没发生。那是最坏的一种 API 谎言：
+	// 不是拒绝，也不是做到，是**看起来做到了**。
 	//
-	// composeBody 有 Elevate 字段，而 composeResult 里没有 elevation，代码里也
-	// 没有任何地方读它 —— 一个调用方传了 elevate: true，拿到 200，什么都没发生。
-	// 那是最坏的一种 API 谎言：不是拒绝，也不是做到，是**看起来做到了**。
+	// 上一轮我把它明确拒绝了，理由写的是「组合没有自己的断言，所以一次运行没有
+	// 东西可挣」。那句话对了一半：组合确实没有 verify_assert，但一次链式运行
+	// **确实产生一个观测** —— 每一个孩子都在这次链产出的数据上成立、顺序对、
+	// 线接对了。那就是对组合的核验，而它能失败（任何一个孩子都能失败）。
 	//
-	// 真话是：组合没有自己的断言。它的判定是 JudgeComposition 对孩子们判定的
-	// 合成，而不是对组合自己输出的核验 —— 所以没有一条「应该不成立」的断言
-	// 可以拿来给它自己挣证据。它的等级就是孩子们给它设的天花板。
+	// 所以拒绝是临时的诚实，不是终局。这一轮把它建成真的：
 	//
-	// 拒绝要说清三件事：为什么、上限是多少、以及真正的路在哪。
-	if req.Elevate {
-		out.Err = core.Refuse(core.CodeBadRequest,
-			"elevate is not something a composition can do: a composition declares no verify_assert and no verify_refute, "+
-				"because its judgement is a composition of its children's judgements rather than a verification of its own output — "+
-				"there is no assertion of its own for a run to earn evidence against. Its level is the ceiling its children set, which for this "+
-				strconv.Itoa(len(preps))+" children is "+string(ceiling)+". Raise the children, and this composition's ceiling rises with them.")
-		return true
+	//   组合的两边性**继承自孩子**。一个孩子是两边的，当且仅当它声明了
+	//   verify_refute。任何一个孩子是单边的，整条链就是单边的 —— 它被证明
+	//   能通过，没有被证明有能力失败。这与「组合的证据是孩子的最小值」是
+	//   同一条原则，只是用在另一个维度上。
+	oneSided := make([]string, 0)
+	for _, pr := range preps {
+		if len(pr.man.Refute) == 0 {
+			oneSided = append(oneSided, pr.man.SkillID)
+		}
 	}
 
 	if req.Ref == "" {
@@ -439,12 +454,76 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 		res.Resolution = &chainRef{Seq: seq, Head: head}
 		res.Open = open
 		out.Seq, out.Rev = seq, seq
+
+		if req.Elevate {
+			res.Elevation = s.elevateCompose(self, ceiling, total.Verdict, oneSided, req.Attempt)
+		}
 	} else {
 		res.Reason = total.Reason + " — the composition is left open on the chain on purpose"
 		out.Seq, out.Rev = seq, seq
 	}
 	out.Body = mustJSON(res)
 	return true
+}
+
+// elevateCompose raises a published composition to its ceiling.
+//
+// It is the composition's counterpart to skill.invoke's elevation, and the two
+// differ in exactly one place: a script earns its level by running its own
+// assertions, while a composition earns its ceiling by **every child being
+// two-sided and the chain verifying**. A composition has no assertion of its
+// own, so the thing that could have been shown to fail is the chain — and a
+// chain whose children are one-sided has never been shown to be able to fail
+// either.
+//
+// Four refusals, each naming a different fact:
+func (s *server) elevateCompose(self *store.Manifest, ceiling store.Evidence, verdict executor.Verdict, oneSided []string, attempt string) *elevationBody {
+	if self == nil {
+		return &elevationBody{
+			Reason: "an inline composition has no manifest: it is a graph that was passed in, not a thing with a name, so there is nothing to register a higher claim about. Publish it first (skill.publish with kind=compose) and then elevate that ref",
+		}
+	}
+	if verdict != executor.VerdictOK {
+		return &elevationBody{
+			Reason: "the chain did not verify (" + string(verdict) + "): a composition earns its ceiling by running, and this run did not succeed",
+		}
+	}
+	if len(oneSided) > 0 {
+		return &elevationBody{
+			Reason: "this chain is one-sided: " + strconv.Itoa(len(oneSided)) + " of its children declare no verify_refute (" +
+				strings.Join(oneSided, ", ") + "). A composition inherits its two-sidedness from its children — " +
+				"the chain has been shown to pass and has not been shown to be able to fail, so there is nothing here to elevate",
+		}
+	}
+	if rankOf(self.Evidence) >= rankOf(ceiling) {
+		return &elevationBody{
+			Level: string(self.Evidence),
+			From:  string(self.Evidence), To: string(self.Evidence),
+			Reason: "this composition is already at its ceiling (" + string(ceiling) + "): every child is two-sided and the chain verified, and there is no higher claim the children would support",
+		}
+	}
+	next := *self
+	next.Evidence = ceiling
+	res, refusal := s.skills.Register(store.Registration{Manifest: &next, Files: map[string][]byte{}})
+	if refusal != nil {
+		return &elevationBody{
+			Reason:  "the chain verified, but the elevated claim was refused: " + refusal.Reason,
+			Refused: refusal,
+		}
+	}
+	return &elevationBody{
+		Level: string(ceiling), From: string(self.Evidence), To: string(ceiling), Ref: res.Ref,
+		Reason: "every child is two-sided and the chain verified, so the composition reached the ceiling its children set: the same payload was registered again as " +
+			res.Ref + " and canary moved to it; the justification is the chain run keyed by attempt " + attempt,
+	}
+}
+
+// rankOf reads the ladder through one door. The store has its own forwarder for
+// the same reason: a second reading of the ladder is a second opinion about what
+// the rungs mean.
+func rankOf(l store.Evidence) int {
+	r, _ := evidence.Rank(l)
+	return r
 }
 
 // payloadNames returns a payload's file names in a stable order.

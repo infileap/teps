@@ -76,7 +76,7 @@ head1=""
 
 echo
 echo "—— hello：服务端自报 epoch ——"
-start "$chain"
+start "$chain" -ms 180000
 r=$(req '{"t":"hello","v":1}')
 expect "应答类型是 welcome" "$r" '"t":"welcome"'
 expect "epoch 从 1 开始" "$r" '"epoch":1'
@@ -146,7 +146,7 @@ echo
 echo "—— 重启：epoch 增长，位置与幂等键都要活着 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null
-start "$chain"
+start "$chain" -ms 180000
 r=$(req '{"t":"hello","v":1}')
 expect "epoch 增长到 2" "$r" '"epoch":2'
 r=$(req '{"t":"status","v":1}')
@@ -611,11 +611,9 @@ expect "组合的结论也上链了" "$r" '"resolution":{"seq"'
 #   elevate: true，拿到 200，什么都没发生。那是最坏的一种 API 谎言：
 #   不是拒绝，也不是做到，是**看起来做到了**。
 r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"ce1\",\"body\":{\"attempt\":\"c-elev\",\"task_class\":\"task_exec\",\"elevate\":true,\"composition\":{\"op\":\"serial\",\"children\":[\"$cA\",\"$cB\"]},\"input\":{\"n\":1}}}")
-expect "★ 组合不能提级，而它现在说出来而不是装作做到了" "$r" 'not something a composition can do'
-expect "★ 拒绝说清为什么：它没有自己的断言" "$r" 'no assertion of its own'
-expect "★ 拒绝给出**具体**的上限（说不出上限的拒绝，读者不知道该往哪儿走）" "$r" 'for this 2 children is E0'
-expect "★ 并指出真正的路" "$r" 'Raise the children'
-expect "★ 被拒的调用不留痕迹：链上没有这次尝试" "$r" '"code":"bad_request"' 
+expect "★ 内联组合没有清单可重新注册 —— 它是一个传进来的图，不是一个有名字的东西" "$r" 'an inline composition has no manifest'
+expect "★ 提级失败不把这次执行说成失败（执行确实成功了）" "$r" '"outcome":"ok"'
+expect "★ 而且它说清真正的路：先发布，再提级那个 ref" "$r" 'Publish it first' 
 
 r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cc2\",\"body\":{\"attempt\":\"c-par\",\"task_class\":\"task_exec\",\"composition\":{\"op\":\"parallel\",\"children\":[\"$cA\",\"$cB\"]},\"input\":{\"n\":1}}}")
 expect "★ 并行时第二个孩子拿不到第一个的输出，于是判失败" "$r" "{\"index\":1,\"ref\":\"$cB\",\"attempt\":\"c-par#1\",\"outcome\":\"failed\""
@@ -711,7 +709,7 @@ tB=$(xpub t2 "$(xtyp typ.tag '["lines"]' '["tagged"]')" '{"run.sh":"grep -q TAIL
 r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cce1\",\"body\":{\"attempt\":\"c-ceil\",\"task_class\":\"task_exec\",\"composition\":{\"op\":\"serial\",\"children\":[\"$tA\",\"$tB\"]},\"input\":{\"n\":1}}}")
 expect "★ 两个 E1 孩子 ⇒ 天花板是 E1，不是恒为 E0" "$r" '"ceiling":"E1"'
 r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"cce2\",\"body\":{\"attempt\":\"c-ceil2\",\"task_class\":\"task_exec\",\"elevate\":true,\"composition\":{\"op\":\"serial\",\"children\":[\"$tA\",\"$tB\"]},\"input\":{\"n\":1}}}")
-expect "★ 拒绝里的上限也跟着孩子走" "$r" 'for this 2 children is E1'
+expect "★ 提级响应里的天花板也跟着孩子走" "$r" '"ceiling":"E1"' 
 tC=$(xpub t3 "$(xtyp typ.wrap '["tagged"]' '["final"]')" '{"run.sh":"cat; echo -n WRAPPED\n"}')
 
 r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"tp0\",\"body\":{\"ref\":\"$tB\",\"attempt\":\"tp-alone\",\"task_class\":\"task_exec\",\"input\":{}}}")
@@ -739,9 +737,26 @@ r=$(req '{"t":"compose.propose","v":1,"body":{"from":["doc"],"to":["tagged"],"ta
 expect "★ 可靠性地板把链剪掉，并说明理由" "$r" 'below the floor'
 
 r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"tp1\",\"body\":{\"manifest\":{\"skill_id\":\"auto.tag\",\"version\":\"1.0.0\",\"kind\":\"compose\",\"evidence\":\"E0\",\"license\":\"MIT\",\"provenance\":{\"source\":\"planner\"},\"deps\":[\"$tA\",\"$tB\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$tA\",\"$tB\"]}},\"files\":{}}}")
+cTag=$(printf '%s' "$r" | sed -n 's/.*"ref":"\([0-9a-f]\{64\}\)".*/\1/p')
+
 autoRef=$(printf '%s' "$r" | sed -n 's/.*"ref":"\([0-9a-f]\{64\}\)".*/\1/p')
 expect "★ 搜索的结果被注册成了一个技能" "$r" '"channel":"canary"'
 expect "★ 它从未运行过，所以是 E0 —— 不是默认值，是唯一为真的答案" "$r" '"evidence":"E0"'
+
+# ★ 组合的两边性继承自孩子。
+#
+# 这一条是这一轮的核心：组合没有自己的 verify_assert，所以「它有没有能力失败」
+# 只能来自孩子。任何一个孩子是单边的，整条链就是单边的 —— 它被证明能通过，
+# 没有被证明有能力失败。而 $tA/$tB 正是单边的（xtyp 只声明了 verify_assert）。
+#
+# 于是旗舰组合 auto.tag 提不了级。这不是拒绝的借口，是一个真实的能力缺口：
+# **要让组合能提级，先让每个孩子能证明自己会失败。**
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"ce2\",\"body\":{\"ref\":\"$cTag\",\"attempt\":\"c-elev2\",\"task_class\":\"task_exec\",\"elevate\":true,\"input\":{\"n\":1}}}")
+expect "★ 已发布的组合可以尝试提级（内联的不行）" "$r" '"elevation":{'
+expect "★★ 孩子是单边的 ⇒ 整条链是单边的，没有东西可提" "$r" 'this chain is one-sided'
+expect "★ 并点名是哪几个孩子，而不是只说「有孩子不合格」" "$r" 'typ.split'
+expect "★ 它同时说清这条规则是从哪儿来的" "$r" 'inherits its two-sidedness from its children' 
+
 
 # ★ 组合不许洗白孩子的证据等级。
 #   组合本身不产生任何观测——它没有自己的进程、没有自己的断言。所以它没有
