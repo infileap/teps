@@ -1268,6 +1268,23 @@ else
   printf '  FAIL  ★★ 两处 raw_rate 不一致：metrics=%s arbiter=%s\n' "$met_raw" "$arb_raw"
   fails=$((fails + 1))
 fi
+# ★ 与自己一致不等于正确。
+#   `gap == mean − raw` 只验了算术：把 meanOf 改成只数第一个键，mean 与 gap
+#   一起偏移，那条等式照样成立。要抓住它，需要**外部参照**——
+#   同一个响应里那些 posteriors 行的平均值。
+avg=$(python3 -c '
+import json,sys
+b=json.load(sys.stdin)["body"]
+rows=b["posteriors"]
+want=sum(r["mean"] for r in rows)/len(rows) if rows else 0.0
+print("ok" if abs(want-b["mean"])<1e-4 else "BAD rows=%d mean=%s avg=%s" % (len(rows), b["mean"], want))
+' 2>&1 <<<"$r2")
+if [ "$avg" = "ok" ]; then
+  printf '  ok    ★★ mean 确实等于那些 posterior 行的平均值（不是只数了第一个）\n'
+else
+  printf '  FAIL  ★★ mean 与它自己报出来的行对不上：%s\n' "$avg"
+  fails=$((fails + 1))
+fi
 if [ "$chk" = "ok" ]; then
   printf '  ok    ★★ 两个读数出自同一批记录：raw = ok/n，且 decay_gap = mean − raw\n'
 else
