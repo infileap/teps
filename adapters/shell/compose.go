@@ -311,10 +311,23 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 	//   verify_refute。任何一个孩子是单边的，整条链就是单边的 —— 它被证明
 	//   能通过，没有被证明有能力失败。这与「组合的证据是孩子的最小值」是
 	//   同一条原则，只是用在另一个维度上。
+	// ★ 声明了一条必败用例，与**持有一条**必败用例，是两件事。
+	//
+	// 第一版只数了 `len(pr.man.Refute) == 0`，于是「声明了但驳不倒」的孩子
+	// 也算两边的 —— 那正是「存在性判据冒充一致性判据」。所以这里真的跑一遍：
+	// 一条必败用例只有在它**确实被驳倒**时才算数。
 	oneSided := make([]string, 0)
+	notRefuted := make([]string, 0)
 	for _, pr := range preps {
 		if len(pr.man.Refute) == 0 {
 			oneSided = append(oneSided, pr.man.SkillID)
+			continue
+		}
+		for _, r := range s.refute(pr.man, pr.pkg, pr.man.Refute) {
+			if !r.Held {
+				notRefuted = append(notRefuted, pr.man.SkillID)
+				break
+			}
 		}
 	}
 
@@ -456,7 +469,7 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 		out.Seq, out.Rev = seq, seq
 
 		if req.Elevate {
-			res.Elevation = s.elevateCompose(self, ceiling, total.Verdict, oneSided, req.Attempt)
+			res.Elevation = s.elevateCompose(self, ceiling, total.Verdict, oneSided, notRefuted, req.Attempt)
 		}
 	} else {
 		res.Reason = total.Reason + " — the composition is left open on the chain on purpose"
@@ -477,7 +490,7 @@ func (s *server) handleSkillCompose(f core.Frame, out *core.Frame) bool {
 // either.
 //
 // Four refusals, each naming a different fact:
-func (s *server) elevateCompose(self *store.Manifest, ceiling store.Evidence, verdict executor.Verdict, oneSided []string, attempt string) *elevationBody {
+func (s *server) elevateCompose(self *store.Manifest, ceiling store.Evidence, verdict executor.Verdict, oneSided, notRefuted []string, attempt string) *elevationBody {
 	if self == nil {
 		return &elevationBody{
 			Reason: "an inline composition has no manifest: it is a graph that was passed in, not a thing with a name, so there is nothing to register a higher claim about. Publish it first (skill.publish with kind=compose) and then elevate that ref",
@@ -493,6 +506,13 @@ func (s *server) elevateCompose(self *store.Manifest, ceiling store.Evidence, ve
 			Reason: "this chain is one-sided: " + strconv.Itoa(len(oneSided)) + " of its children declare no verify_refute (" +
 				strings.Join(oneSided, ", ") + "). A composition inherits its two-sidedness from its children — " +
 				"the chain has been shown to pass and has not been shown to be able to fail, so there is nothing here to elevate",
+		}
+	}
+	if len(notRefuted) > 0 {
+		return &elevationBody{
+			Reason: "this chain is one-sided in a different way: " + strconv.Itoa(len(notRefuted)) + " of its children declare a verify_refute that did not hold (" +
+				strings.Join(notRefuted, ", ") + "). A declaration is not a refutation — the child was asked to fail and did not, " +
+				"so the chain has still not been shown to be able to fail",
 		}
 	}
 	if rankOf(self.Evidence) >= rankOf(ceiling) {

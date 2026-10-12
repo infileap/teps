@@ -170,7 +170,7 @@ func TestOneOneSidedChildBlocksACompositionsElevation(t *testing.T) {
 		Compose:    &store.Composition{Op: "serial", Children: []string{childA, childB}}}
 
 	// Every child two-sided: the chain verified, so it reaches its ceiling.
-	e := s.elevateCompose(self, evidence.L1, executor.VerdictOK, nil, "att-a")
+	e := s.elevateCompose(self, evidence.L1, executor.VerdictOK, nil, nil, "att-a")
 	// To is set only by an elevation that happened: a refusal leaves it empty,
 	// so this is the assertion that separates "it refused" from "it worked".
 	if e.To != string(evidence.L1) || e.Ref == "" {
@@ -178,7 +178,7 @@ func TestOneOneSidedChildBlocksACompositionsElevation(t *testing.T) {
 	}
 
 	// One one-sided child: the whole chain is one-sided.
-	e = s.elevateCompose(self, evidence.L1, executor.VerdictOK, []string{"child.one"}, "att-b")
+	e = s.elevateCompose(self, evidence.L1, executor.VerdictOK, []string{"child.one"}, nil, "att-b")
 	if e.To != "" || e.Ref != "" {
 		t.Fatalf("one one-sided child must block the elevation, got to=%q ref=%q", e.To, e.Ref)
 	}
@@ -208,17 +208,17 @@ func TestEachComposeElevationRefusalNamesADifferentFact(t *testing.T) {
 		Compose:    &store.Composition{Op: "serial", Children: []string{childA, childB}}}
 
 	// 1. An inline composition has nothing to re-register.
-	if e := s.elevateCompose(nil, evidence.L1, executor.VerdictOK, nil, "a"); e.Refused != nil ||
+	if e := s.elevateCompose(nil, evidence.L1, executor.VerdictOK, nil, nil, "a"); e.Refused != nil ||
 		!strings.Contains(e.Reason, "inline composition has no manifest") {
 		t.Fatalf("nil self must say there is no manifest, got: %s", e.Reason)
 	}
 	// 2. A chain that did not verify earned nothing.
-	if e := s.elevateCompose(self, evidence.L1, executor.VerdictFailed, nil, "a"); e.Refused != nil ||
+	if e := s.elevateCompose(self, evidence.L1, executor.VerdictFailed, nil, nil, "a"); e.Refused != nil ||
 		!strings.Contains(e.Reason, "did not verify") {
 		t.Fatalf("a failed chain must say it did not verify, got: %s", e.Reason)
 	}
 	// 3. Already at the ceiling is not a failure — it is nothing to do.
-	e := s.elevateCompose(self, evidence.L0, executor.VerdictOK, nil, "a")
+	e := s.elevateCompose(self, evidence.L0, executor.VerdictOK, nil, nil, "a")
 	if e.Refused != nil {
 		t.Fatalf("already at the ceiling is not a refusal: %s", e.Reason)
 	}
@@ -243,4 +243,37 @@ func registerTestChild(t *testing.T, st *store.Store, id string) string {
 		t.Fatalf("register %s: %s", id, refusal.Reason)
 	}
 	return res.Ref
+}
+
+// ★ Declaring a refutation is not the same as holding one.
+//
+// The first version of elevateCompose counted `len(man.Refute) == 0`, so a child
+// that *declared* a refutation which did not hold still counted as two-sided.
+// That is the same defect as an existence check standing in for a consistency
+// check — and it was found by a mutation, not by a test.
+func TestADeclaredRefutationThatDoesNotHoldIsStillOneSided(t *testing.T) {
+	s := testServer(t)
+	st, err := store.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	s.skills = st
+	childA := registerTestChild(t, st, "child.a")
+	childB := registerTestChild(t, st, "child.b")
+	self := &store.Manifest{SkillID: "comb.two", Version: "1", Kind: store.KindCompose,
+		Evidence: evidence.L0, License: "MIT",
+		Provenance: store.Provenance{Source: "test"},
+		Deps:       []string{childA, childB},
+		Compose:    &store.Composition{Op: "serial", Children: []string{childA, childB}}}
+
+	e := s.elevateCompose(self, evidence.L1, executor.VerdictOK, nil, []string{"child.b"}, "att-c")
+	if e.To != "" || e.Ref != "" {
+		t.Fatalf("a child whose refutation did not hold must block the elevation, got to=%q", e.To)
+	}
+	if !strings.Contains(e.Reason, "declaration is not a refutation") {
+		t.Fatalf("the refusal must say a declaration is not a refutation, got: %s", e.Reason)
+	}
+	if !strings.Contains(e.Reason, "child.b") {
+		t.Fatalf("it must name the child, got: %s", e.Reason)
+	}
 }
