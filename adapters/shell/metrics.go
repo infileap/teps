@@ -111,6 +111,9 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 		}
 		reliability["defined"] = true
 		reliability["mean"] = round(sum / float64(len(tbl)))
+		// 同一批记录的两个读数：一个折过，一个没折。
+		reliability["raw_rate"] = round(rawRate(successes, observations))
+		reliability["decay_gap"] = round(sum/float64(len(tbl)) - rawRate(successes, observations))
 		// The weakest link is the number that matters for a product: a chain is
 		// as reliable as its worst step, and an average hides exactly that.
 		reliability["weakest"] = round(weakest)

@@ -231,3 +231,72 @@ func TestTheSuccessCountIsOverTheSameRecordsAsTheObservations(t *testing.T) {
 			before, s.decisions.ok, beforeObs, len(s.decisions.obs))
 	}
 }
+
+// ★ The posterior mean and the raw success rate are two readings of the same
+// records: one folds with forgetting, one does not.
+//
+// They are supposed to differ — forgetting is deliberate — but until now
+// nothing reported the difference, so "this number has been decayed" lived only
+// in a comment. A reader of the number could not tell.
+func TestTheTwoReadingsComeFromTheSameRecords(t *testing.T) {
+	s := testServer(t)
+	verdicts := []bool{true, true, false, true, false, true}
+	for i, ok := range verdicts {
+		attempt := "two" + string(rune('0'+i))
+		if _, ref := s.decisions.append(executionRecord{
+			Rec: "execution", Attempt: attempt, Skill: "runner.ok", TaskClass: "task_exec",
+		}, attempt+keyIntent); ref != nil {
+			t.Fatalf("intent %d: %s", i, ref.Reason)
+		}
+		yes, no := true, false
+		rec := executionRecord{
+			Rec: "execution", Attempt: attempt, Skill: "runner.ok", TaskClass: "task_exec",
+			Verified: "verify_assert",
+		}
+		if ok {
+			rec.OK = &yes
+		} else {
+			rec.OK = &no
+		}
+		if _, ref := s.decisions.append(rec, attempt+keyResolution); ref != nil {
+			t.Fatalf("resolution %d: %s", i, ref.Reason)
+		}
+	}
+	n := len(s.decisions.obs)
+	if n != len(verdicts) {
+		t.Fatalf("want %d observations, got %d", len(verdicts), n)
+	}
+	want := 0.0
+	for _, ok := range verdicts {
+		if ok {
+			want++
+		}
+	}
+	want /= float64(n)
+	if got := rawRate(s.decisions.ok, n); got != want {
+		t.Fatalf("rawRate must be the undecayed ratio: want %v, got %v", want, got)
+	}
+	// The decayed reading is a different number on the same records — and it is
+	// lower here, because the two failures are the most recent and forgetting
+	// weights recent evidence more.
+	tbl := s.decisions.table()
+	mean := meanOf(tbl)
+	if mean == want {
+		t.Fatalf("with a decay of %v the two readings should differ on these records, both were %v", arbiter.DefaultDecay, want)
+	}
+	if mean > want {
+		t.Fatalf("the recent evidence here is two failures, so the decayed mean must be lower: mean %v, raw %v", mean, want)
+	}
+}
+
+func TestRawRateWithNoObservationsIsZeroNotNaN(t *testing.T) {
+	// 0/0 has no value. Reporting NaN there would put a non-number in a JSON
+	// document, and reporting 1.0 would claim a perfect record for a system
+	// that has never run.
+	if got := rawRate(0, 0); got != 0 {
+		t.Fatalf("an empty record has no rate: got %v", got)
+	}
+	if got := meanOf(arbiter.Table{}); got != 0 {
+		t.Fatalf("an empty table has no mean: got %v", got)
+	}
+}

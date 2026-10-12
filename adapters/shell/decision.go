@@ -285,6 +285,30 @@ func (s *server) arbiterRank(f core.Frame, out *core.Frame) {
 	out.Body = mustJSON(map[string]any{"ranked": rows, "skipped": skipped})
 }
 
+// meanOf is the average posterior mean over a table: the decayed reading.
+func meanOf(tbl arbiter.Table) float64 {
+	if len(tbl) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, p := range tbl {
+		sum += p.Mean()
+	}
+	return sum / float64(len(tbl))
+}
+
+// rawRate is the undecayed success rate: successes over observations.
+//
+// It is the same records the posterior folds, read without forgetting. The two
+// are supposed to differ — forgetting is deliberate — but reporting only the
+// decayed one hides how much work the forgetting is doing.
+func rawRate(ok, n int) float64 {
+	if n == 0 {
+		return 0
+	}
+	return float64(ok) / float64(n)
+}
+
 // metaAt 把 Tag 换回那条报价的账。Tag 是索引的十进制写法，由 resolveOffers 打上。
 func metaAt(meta []map[string]any, tag string) map[string]any {
 	i, err := strconv.Atoi(tag)
@@ -417,6 +441,13 @@ func (s *server) arbiterState(f core.Frame, out *core.Frame) {
 			"mean": round(p.Mean()), "upper": round(p.UpperBound()),
 			"rules": rules[k], "mixed": len(rules[k]) > 1,
 			"observations": n, "open": open, "spent": round(spent),
+			// ★ 后验的 mean 与原始成功率是**同一批记录的两个读数**。
+			//
+			// mean 是带遗忘折出来的（DefaultDecay = 0.98），raw 是不折的。
+			// 两者不同是设计使然——遗忘是故意的。但在此之前**没有任何地方
+			// 报过这个差**，于是「这个数是折过的」这句话只活在注释里。
+			"raw_rate":  round(rawRate(s.decisions.ok, n)),
+			"decay_gap": round(p.Mean() - rawRate(s.decisions.ok, n)),
 		})
 		return
 	}
@@ -430,6 +461,12 @@ func (s *server) arbiterState(f core.Frame, out *core.Frame) {
 	}
 	out.Body = mustJSON(map[string]any{
 		"posteriors": rows, "observations": n, "open": open, "spent": round(spent),
+		"successes": s.decisions.ok,
+		"raw_rate":  round(rawRate(s.decisions.ok, n)),
+		// mean 与 raw_rate 是同一批记录的两个读数：一个折过，一个没折。
+		// 两个都报，decay_gap 才是可算的 —— 只说「这是折过的」等于没说。
+		"mean":         round(meanOf(tbl)),
+		"decay_gap":    round(meanOf(tbl) - rawRate(s.decisions.ok, n)),
 		"mixed_skills": mixedSkills(rules),
 	})
 }

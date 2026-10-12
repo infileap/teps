@@ -1244,6 +1244,25 @@ r=$(req '{"t":"arbiter.state","v":1,"body":{"skill":"runner.ok","task_class":"ta
 expect "★ 链上记着这次执行花了多少钱（否则链会声称每次执行都免费）" "$r" '"spent":2'
 r=$(req '{"t":"metrics.get","v":1}')
 expect "★ 可靠性报告与花费一起给（便宜但不可靠和可靠但付不起是两个答案）" "$r" '"spent":2'
+
+# ★ 后验的 mean 与原始成功率是同一批记录的两个读数：一个折过，一个没折。
+#   两者不同是设计使然（遗忘是故意的），但在此之前没有任何地方报过这个差 ——
+#   「这个数是折过的」那句话只活在注释里。
+expect "★ 原始成功率与折过的均值一起报出来" "$r" '"raw_rate":'
+expect "★ 并报出它们差多少（遗忘做了多少工作，是可以说出来的）" "$r" '"decay_gap":'
+r2=$(req '{"t":"arbiter.state","v":1,"body":{}}')
+chk=$(python3 -c '
+import json,sys
+b=json.load(sys.stdin)["body"]
+n=b["observations"]; ok=b["successes"]; raw=b["raw_rate"]; mean=b["mean"]; gap=b["decay_gap"]
+print("ok" if n and abs(raw-ok/n)<1e-4 and abs(gap-(mean-raw))<1e-4 else f"BAD n={n} ok={ok} raw={raw} mean={mean} gap={gap}")
+' 2>&1 <<<"$r2")
+if [ "$chk" = "ok" ]; then
+  printf '  ok    ★★ 两个读数出自同一批记录：raw = ok/n，且 decay_gap = mean − raw\n'
+else
+  printf '  FAIL  ★★ 两个读数对不上：%s\n' "$chk"
+  fails=$((fails + 1))
+fi
 spent_metrics=$(jspent <<<"$r")
 r2=$(req '{"t":"arbiter.state","v":1,"body":{"skill":"runner.ok","task_class":"task_exec"}}')
 spent_arbiter=$(jspent <<<"$r2")
