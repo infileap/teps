@@ -693,11 +693,20 @@ r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp12\",\"body\":{\"manifest\
 expect "★ 组合不许声明自己无从对证的断言" "$r" 'no observation of its own'
 echo
 echo "—— 规划器：让系统提议一条没人写过的链 ——"
-xtyp() { # xtyp <skill_id> <in-json> <out-json>
-  printf '{"skill_id":"%s","version":"1.0.0","kind":"script","input_schema":%s,"output_schema":%s,"verify_assert":["exit == 0"],"budget":{"ms":2000},"evidence":"E1","idempotent":true,"license":"MIT","provenance":{"source":"handwritten"},"env":{"interpreter":"/bin/sh"}}' "$1" "$2" "$3"
+# ★ 一个孩子是两边的，当且仅当它**有能力失败**。
+#
+# 规划器找到的这两个孩子原先只有 `exit == 0`，而它们的载荷永远退出 0 ——
+# 那份声明**不可能被证伪**，所以它们到不了 E1，整条链也就到不了天花板。
+#
+# 所以这一轮让它们真的能失败：载荷分辨一个标记，喂 REFUSE 就退出非零。
+# 于是「必过用例通过 + 必败用例被驳倒」两件事都成立，链才第一次真的能提级。
+xtyp() { # xtyp <skill_id> <in-json> <out-json> [verify_refute-json]
+  refute=""
+  [ -n "${4:-}" ] && refute=",\"verify_refute\":$4"
+  printf '{"skill_id":"%s","version":"1.0.0","kind":"script","input_schema":%s,"output_schema":%s,"verify_assert":["exit == 0"],"budget":{"ms":2000},"evidence":"E1","idempotent":true,"license":"MIT","provenance":{"source":"handwritten"},"env":{"interpreter":"/bin/sh"}%s}' "$1" "$2" "$3" "$refute"
 }
-tA=$(xpub t1 "$(xtyp typ.split '["doc"]' '["lines"]')" '{"run.sh":"cat; echo -n TAIL\n"}')
-tB=$(xpub t2 "$(xtyp typ.tag '["lines"]' '["tagged"]')" '{"run.sh":"grep -q TAIL && echo -n CHAINED || echo -n SOLO\n"}')
+tA=$(xpub t1 "$(xtyp typ.split '["doc"]' '["lines"]' '[{"input":{"input":"REFUSE"},"assert":"exit == 0"}]')" '{"run.sh":"in=$(cat)\ncase $in in *REFUSE*) exit 3;; esac\nprintf %s \"$in\"; printf TAIL\n"}')
+tB=$(xpub t2 "$(xtyp typ.tag '["lines"]' '["tagged"]' '[{"input":{"input":"REFUSE"},"assert":"exit == 0"}]')" '{"run.sh":"in=$(cat)\ncase $in in *REFUSE*) exit 5;; esac\ncase $in in *TAIL*) printf CHAINED;; *) printf SOLO;; esac\n"}')
 
 # ★ 天花板跟着孩子走，不是恒为 E0。
 #
@@ -753,9 +762,14 @@ expect "★ 它从未运行过，所以是 E0 —— 不是默认值，是唯一
 # **要让组合能提级，先让每个孩子能证明自己会失败。**
 r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"ce2\",\"body\":{\"ref\":\"$cTag\",\"attempt\":\"c-elev2\",\"task_class\":\"task_exec\",\"elevate\":true,\"input\":{\"n\":1}}}")
 expect "★ 已发布的组合可以尝试提级（内联的不行）" "$r" '"elevation":{'
-expect "★★ 孩子是单边的 ⇒ 整条链是单边的，没有东西可提" "$r" 'this chain is one-sided'
-expect "★ 并点名是哪几个孩子，而不是只说「有孩子不合格」" "$r" 'typ.split'
-expect "★ 它同时说清这条规则是从哪儿来的" "$r" 'inherits its two-sidedness from its children' 
+expect "★★ 每个孩子都能证明自己会失败 ⇒ 组合第一次真的到了天花板" "$r" '"to":"E1"'
+expect "★ 提级是一次真的写：它报出了新的 ref" "$r" '"ref":"'
+expect "★ 并说清依据：每个孩子都是两边的，且链核验通过" "$r" 'every child is two-sided and the chain verified'
+cElev=$(printf '%s' "$r" | sed -n 's/.*"ref":"\([0-9a-f]\{64\}\)".*/\1/p')
+r=$(req "{\"t\":\"skill.resolve\",\"v\":1,\"body\":{\"ref\":\"$cElev\"}}")
+expect "★★ 提级后的制品解析出来就是 E1 —— 组合第一次不只是 E0" "$r" '"evidence":"E1"'
+r=$(req "{\"t\":\"skill.resolve\",\"v\":1,\"body\":{\"ref\":\"$cTag\"}}")
+expect "★ 而它提级前那一份仍然是 E0（提级是新增一份，不是改写旧的）" "$r" '"evidence":"E0"' 
 
 
 # ★ 组合不许洗白孩子的证据等级。
