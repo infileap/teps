@@ -1022,3 +1022,58 @@ func TestACompositionCannotLaunderItsChildrensEvidence(t *testing.T) {
 		t.Fatalf("declaring exactly the ceiling is not a lie about the children: %s", ref.Reason)
 	}
 }
+
+// ★ `min` 与「取第一个」只在**等级不同**时才分得出来。
+//
+// 上面那组夹具里孩子的等级都相同（E0+E0、E1+E1），于是「上限取第一个孩子」
+// 这条变异活了下来 —— 一个检查只在它的输入有差异时才与它的变异不同，而我只
+// 用没有差异的输入测过它。这是这个项目反复栽的同一个形状：**用所有答案都
+// 一样的输入，测不出一个会分辨答案的检查。**
+//
+// 所以这里的孩子等级必须**不同**，而且两种顺序都要测 —— 否则「取第一个」
+// 在一个顺序上碰巧是对的。
+func TestTheCeilingIsTheMinimumNotTheFirst(t *testing.T) {
+	s := tmpStore(t)
+	child := func(id string, lvl Evidence) string {
+		m := &Manifest{
+			SkillID: id, Version: "1.0.0", Kind: KindScript,
+			Verify: []string{"exit == 0"}, Budget: core.Budget{MS: 1000},
+			Evidence: lvl, Idempotent: true, License: "MIT",
+			Provenance: Provenance{Source: "handwritten"},
+			Env:        Env{Interpreter: "/bin/sh"},
+		}
+		res, ref := s.Register(regWith(m, map[string][]byte{"run.sh": []byte("exit 0\n")}))
+		if ref != nil {
+			t.Fatalf("child %s: %s", id, ref.Reason)
+		}
+		return res.Ref
+	}
+	weak, strong := child("mix.weak", E0), child("mix.strong", E1)
+
+	for _, order := range [][]string{{weak, strong}, {strong, weak}} {
+		m := &Manifest{
+			SkillID: "mix.combo", Version: "1.0.0", Kind: KindCompose,
+			Evidence: E1, License: "MIT", Deps: order,
+			Provenance: Provenance{Source: "handwritten"},
+			Compose:    &Composition{Op: OpSerial, Children: order},
+		}
+		_, ref := s.Register(regWith(m, map[string][]byte{}))
+		if ref == nil {
+			t.Fatalf("a mixed pair whose minimum is E0 must not carry E1, order %v", order)
+		}
+		if !strings.Contains(ref.Reason, "minimum is E0") {
+			t.Fatalf("the refusal must name the minimum, not whichever child came first: %q", ref.Reason)
+		}
+	}
+
+	// 对照：整组都是 E1 时，E1 是允许的 —— 否则上一条会被「一律拒绝」满足。
+	m := &Manifest{
+		SkillID: "mix.allstrong", Version: "1.0.0", Kind: KindCompose,
+		Evidence: E1, License: "MIT", Deps: []string{strong},
+		Provenance: Provenance{Source: "handwritten"},
+		Compose:    &Composition{Op: OpSerial, Children: []string{strong}},
+	}
+	if _, ref := s.Register(regWith(m, map[string][]byte{})); ref != nil {
+		t.Fatalf("all-strong children permit the ceiling: %s", ref.Reason)
+	}
+}
