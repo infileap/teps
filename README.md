@@ -59,11 +59,19 @@ mv .teps ~/teps
 
 | 因子 | 就绪度 | 依据 |
 |---|---|---|
-| 算力 | 🟡 有点子无实现 | 注册表还没有 | 
-| Skill | 🟢 设计完整 | 本仓库的 ABI 与技能店规格 |
-| **AI** | 🔴 本地那半悬空 | 引用的 1B 模型论文里，关键指标是嫁接的（见 `docs/PROVENANCE.md`）|
+| 算力 | 🟢 **已在闭环里** | `organs/pool/` 登记表 + 租约 + 准入；`arbiter.rank` 的钱由池算。**加一台机器 = 加一条注册表项** |
+| Skill | 🟢 设计完整 | 本仓库的 ABI 与技能店规格；双边证据、规则身份、组合不洗白孩子 |
+| **AI** | 🔴 **不在回路里** | 47 个项目文件里 **0 处模型调用、0 个 key、0 处环境读取、0 处出站请求**（`tools/check_nomodel.py`）|
 
-但 **AI 的外部那半（L3 API）真实可用**。
+★ **算力那一行此前写着「注册表还没有」，而它已经写了好几轮了**——又是同一个形状：
+**一个事实写在文档里，代码往前走了。** 所以这张表现在也有一台守卫在看着（见下）。
+
+★★ **AI 那一行的读法要精确**：「AI 可换」不是一句主张，它现在是**平凡的真**——
+**这个仓库里没有模型可换。** 67 个 Go 文件里没有一处会调用模型；`net/http`
+只用作内核自己的 `POST /k` 传输；`exec.Command` 只用在执行器里（那是技能，不是模型）。
+
+⇒ 设计里的 `AI × 算力 × Skill`，**AI 那一项目前是常数 1，不是因子**。
+这不是「未核实」，是「不在回路里」——两件事的修法完全不同。
 
 ⇒ **启动顺序：AI 先租（API）· 算力用几台开发机 · Skill 自己造（唯一真正的活）。**
 **MVP 今天就能开始，不必等一个 1B 模型。**
@@ -108,6 +116,8 @@ tools/      check_kernel.py                      四条内核守卫，可跑
             check_frames.py                      帧类型 ↔ 契约不许漂移
             check_organs.py                      器官 ↔ 两份文档的状态表不许漂移
             check_assertions.py                  ★ 断言里的 JSON 值片段不许互相是前缀
+            check_nomodel.py                     ★ 自由判据的 AI 那一半：删掉模型还能跑吗
+            check_all.sh                         ★ 上面这些的唯一入口（含守卫自检）
             check_format.sh                      gofmt 干净，别让 diff 里混进重排
             drive.sh                             ★ 自由判据：只有 curl 驱动全流程
             drive_mcp.sh                         ★ 自由判据：只有 printf 的 JSON-RPC
@@ -193,12 +203,17 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | **每次成功花多少钱** ★★ | ✅ 花费与成功率各自都有定义，但**「每次成功花了多少钱」是第三个事实**，而它恰恰是唯一能回答「这件事值不值得做」的那个。`metrics.get` 报 `cost{spent, successes, per_success}`。**分母为零时它没有定义**——一个没有成功的每次成功成本，是一个装扮成数字的除零；那条断言只能放在驱动脚本**最开头**问，因为一旦有东西跑成功过，那个状态就再也回不来了 |
 | **提议 → 运行的链接** ★★ | ✅ 提议的**形状就是它的身份**（`planner.ShapeID` = `sha256(op ‖ 孩子…)`），而这个哈希**能从任何已发布的清单重算出来**——不另存一份身份。`accuracy` 因此第一次有定义；能力乘积第一次有值：`0.5714 × 1.0 × 0.5542 = 0.3167` |
 
-### 证据（九条命令，可复跑）
+### 证据（可复跑）
 
 ```sh
-tools/go test ./...                # 十四个包，312 个测试
-bash tools/drive.sh                # 449/449，全程只有 curl
+bash tools/check_all.sh            # ★ 八台守卫 + 测试 + 守卫自检，一条命令
+bash tools/drive.sh                # 461/461，全程只有 curl
 bash tools/drive_mcp.sh            # 21/21，全程只有 printf 的 JSON-RPC
+```
+
+`check_all.sh` 里的八台，单独跑也行：
+
+```sh
 bash tools/check_format.sh         # gofmt 干净
 python3 tools/check_kernel.py      # 四条内核守卫
 python3 tools/check_contract.py    # 文档与代码的拒绝码不许漂移
@@ -206,11 +221,19 @@ python3 tools/check_adapters.py    # 翻译器不许 import 内核
 python3 tools/check_frames.py      # 帧类型与契约必须一一对上
 python3 tools/check_organs.py      # 器官与两份文档的状态表必须一一对上
 python3 tools/check_assertions.py  # ★ 存在性判据不许冒充一致性判据
+python3 tools/check_nomodel.py     # ★ 自由判据的 AI 那一半：删掉模型还能跑吗
 ```
 
-守卫读数：**511 / 3000 行 · 0 / 0 依赖 · 6 / 12 公开类型 · 0 / 0 领域词**。
+★ **为什么要有 `check_all.sh`**：守卫此前只有一份**清单**，而清单要靠人一条一条敲。
+少敲一条，那台守卫就静悄悄地不再守了——**而它的输出看起来和「全部通过」一样，
+因为它根本没有输出。** 一个只在有人记得时才跑的检查，报不出「没有人记得」。
 
-**上面十条都在本地跑，不需要网络。** 另有一条**不是守卫**、只用于核对外部说法的工具：
+`check_all.sh` 里还有一项**守卫自检**：注入一处违规，`check_nomodel.py` 必须变红。
+**一台永远绿的守卫与一台从来没跑过的守卫，输出一模一样。**
+
+守卫读数：**516 / 3000 行 · 0 / 0 依赖 · 6 / 12 公开类型 · 0 / 0 领域词**。
+
+**上面全部在本地跑，不需要网络。** 另有一条**不是守卫**、只用于核对外部说法的工具：
 
 ```sh
 python3 tools/check_provenance.py  # ⚠️ 要联网，约 5 分钟；核对 PROVENANCE 里的名字
