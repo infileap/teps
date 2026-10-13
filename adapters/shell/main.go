@@ -41,6 +41,7 @@ type server struct {
 	decisions *decisionStore
 	reflexes  *reflexStore
 	pools     *poolStore
+	breakers  *breakerStore
 	tasks     *taskStore
 }
 
@@ -111,6 +112,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	brk, ref := newBreakerStore(lg)
+	if ref != nil {
+		fmt.Fprintln(os.Stderr, "shell adapter: "+ref.Reason)
+		os.Exit(1)
+	}
+
 	s := &server{
 		log:       lg,
 		acct:      core.NewAccount(core.Budget{MS: *ms, Tokens: *tokens, Money: *money}),
@@ -121,6 +128,7 @@ func main() {
 		reflexes:  rfx,
 		tasks:     tsk,
 		pools:     pl,
+		breakers:  brk,
 	}
 
 	if *addr != "" {
@@ -239,6 +247,9 @@ func (s *server) handle(f core.Frame) core.Frame {
 		return out
 	}
 	if s.handlePool(f, &out) {
+		return out
+	}
+	if s.handleBreaker(f, &out) {
 		return out
 	}
 

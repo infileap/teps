@@ -1473,6 +1473,36 @@ expect "★ 沉默与超时是互斥的（没起来就不可能超时）" "$r" '
 expect "★ 它同样拿不到证据等级" "$r" '"level":""'
 
 echo
+echo "—— 脚本宿主监督：熔断 ——"
+# 阈值是 3。上面已经失败过一次（n-silent），再两次就开闸。
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"ns4\",\"body\":{\"ref\":\"$xdead\",\"attempt\":\"n-silent2\",\"task_class\":\"task_exec\"}}")
+expect "第二次宿主失败仍然照跑（阈值是 3，不是 1）" "$r" '"outcome":"refused"'
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"ns5\",\"body\":{\"ref\":\"$xdead\",\"attempt\":\"n-silent3\",\"task_class\":\"task_exec\"}}")
+expect "第三次宿主失败仍然照跑" "$r" '"outcome":"refused"'
+
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"ns6\",\"body\":{\"ref\":\"$xdead\",\"attempt\":\"n-silent4\",\"task_class\":\"task_exec\"}}")
+expect "★ 第四次不再 spawn：宿主连续三次没有回来" "$r" 'circuit_open'
+expect "★ 拒绝说清这是宿主坏了，不是技能坏了" "$r" 'it is the thing that runs skills failing'
+expect "★ 而且它把还要等多少毫秒写出来（没有数字的「等一下」不可执行）" "$r" 'ms left'
+expect "★ 它是可重试的：条件会过期，而理由里写明了等多久" "$r" '"retryable":true'
+# ★ 被熔断的尝试什么都没做，不该在链上留下 intent。
+r=$(req '{"t":"audit.tail","v":1,"body":{"limit":50}}')
+case "$r" in
+  *'n-silent4'*) printf '  FAIL  ★ 被熔断的尝试不该在链上留下 intent\n'; fails=$((fails + 1)) ;;
+  *) printf '  ok    ★ 被熔断的尝试什么都没做，链上也没有它的 intent\n' ;;
+esac
+
+r=$(req '{"t":"breaker.state","v":1}')
+expect "★ 熔断表说这个宿主是开着的" "$r" '"state":"open"'
+expect "★ 而且把它据以判断的两个数一起报出来（让人能核，而不是信）" "$r" '"threshold":3'
+expect "冷却时长也在" "$r" '"cooldown_ms":30000'
+expect "状态里带上理由" "$r" 'did not come back'
+
+# ★ 一个宿主坏了，不该把别的宿主一起关掉。
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"ns7\",\"body\":{\"ref\":\"$xok\",\"attempt\":\"n-after-open\",\"task_class\":\"task_exec\"}}")
+expect "★ 另一个宿主完全不受影响（坏的是那个解释器，不是这台机器）" "$r" '"outcome":"ok"'
+
+echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null

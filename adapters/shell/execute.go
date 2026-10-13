@@ -283,6 +283,15 @@ func (s *server) handleExecute(f core.Frame, out *core.Frame) bool {
 		strategy = strategyInvoke
 	}
 
+	// 熔断：宿主连续失败到阈值就不再 spawn。
+	// 位置在 intent **之前**是有意的 —— 一次被熔断的尝试什么都没做，
+	// 在链上留下一条 intent 会让「开着的意图」这个信号被稀释。
+	// 槽已经在上面占住了，defer 会把它还回去。
+	if refusal := s.allowHost(plan.Interpreter); refusal != nil {
+		out.Err = refusal
+		return true
+	}
+
 	// intent 先上链。哪怕下面这一步把进程跑崩、或者根本回不来，
 	// 链上留下的是「尝试过、没有结论」，而不是一处静悄悄的空白。
 	seq, head, open, refusal := s.observe(req.Attempt+keyIntent, observeBody{
@@ -295,6 +304,9 @@ func (s *server) handleExecute(f core.Frame, out *core.Frame) bool {
 
 	obs := s.runSandbox(plan, pkg)
 	j := executor.Judge(plan.Assert, obs)
+	// 宿主自己的失败（没起来 / 没回来）记进熔断；技能自己判 failed 不算 ——
+	// 那是技能在如实报告它做不到，是系统在工作，不是系统坏了。
+	s.recordTrip(plan.Interpreter, string(j.Verdict), req.Attempt)
 
 	res := &invokeResult{
 		Attempt: req.Attempt, Skill: m.SkillID, TaskClass: req.TaskClass,

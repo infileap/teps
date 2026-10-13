@@ -30,6 +30,7 @@ const (
 	CodeQuotaExhausted   = "quota_exhausted"
 	CodeLicenseConflict  = "license_conflict"
 	CodeLeaseHeld        = "lease_held"
+	CodeCircuitOpen      = "circuit_open"
 	CodeShadowNested     = "shadow_nested"
 	CodeFrameTooLarge    = "frame_too_large"
 	CodeRecoveryRequired = "recovery_required"
@@ -47,8 +48,12 @@ var retryable = map[string]bool{
 	CodeQuotaExhausted:  false,
 	CodeLicenseConflict: false,
 	CodeLeaseHeld:       true,
-	CodeShadowNested:    false,
-	CodeFrameTooLarge:   false,
+	// circuit_open is true for the same reason lease_held is: the condition is
+	// temporary and the reason string names the wait. A retry can succeed — it
+	// just cannot succeed yet, and a client that reads the reason knows that.
+	CodeCircuitOpen:   true,
+	CodeShadowNested:  false,
+	CodeFrameTooLarge: false,
 	// A chain that does not match will not match on the next attempt either.
 	// A retry flag must never promise a retry that cannot succeed, so this is
 	// false even though it is the most "recoverable-looking" code here.
