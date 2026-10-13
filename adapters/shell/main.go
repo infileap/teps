@@ -201,56 +201,31 @@ func (s *server) httpHandler(w http.ResponseWriter, r *http.Request) {
 func (s *server) handle(f core.Frame) core.Frame {
 	out := core.Frame{T: f.T, V: core.ProtocolVersion, ID: f.ID}
 
-	if strings.HasPrefix(f.T, "session.") {
-		if s.handleSession(f, &out) {
+	// 分派走 claims()，而 claims() 也是 `ops` 的回答。
+	// 顺序是承重的：表里排在前面的先认领（`skill.invoke` / `skill.compose`
+	// 必须排在 `skill.` 之前，否则技能店会用「未知帧类型」回答它们）。
+	// ★ 记下**哪条认领匹配上了**，即使它的处理器随后拒绝了这一帧。
+	//
+	// 这是唯一同时知道两件事的地方：「有没有哪个族认领这个前缀」与
+	// 「族里有没有这个 op」。处理器只知道自己那一族，所以它对族内未知 op
+	// 回 false（那是对的：它不认这一帧），而帧落到 default 时，
+	// default 不能声称「没有族认领」—— 那是假话。
+	var claimed string
+	for _, c := range s.claims() {
+		if c.Exact != "" {
+			if f.T != c.Exact {
+				continue
+			}
+			claimed = c.Exact
+		} else {
+			if !strings.HasPrefix(f.T, c.Prefix) {
+				continue
+			}
+			claimed = c.Prefix
+		}
+		if c.Handle(f, &out) {
 			return out
 		}
-	}
-
-	// skill.invoke must be claimed before handleSkill: the skill store owns
-	// skill.publish/resolve/list/promote and would answer this one with
-	// "unknown frame type". The dispatcher stays the only place that knows
-	// which handler owns which frame type.
-	if s.handleExecute(f, &out) {
-		return out
-	}
-
-	if strings.HasPrefix(f.T, "skill.") {
-		if s.handleSkill(f, &out) {
-			return out
-		}
-	}
-
-	if s.handleKnowledge(f, &out) {
-		return out
-	}
-
-	if s.handleDistill(f, &out) {
-		return out
-	}
-	if s.handleIntake(f, &out) {
-		return out
-	}
-	if s.handleEscalation(f, &out) {
-		return out
-	}
-	if s.handleReflex(f, &out) {
-		return out
-	}
-	if s.handleDecision(f, &out) {
-		return out
-	}
-	if s.handleAudit(f, &out) {
-		return out
-	}
-	if s.handleMetrics(f, &out) {
-		return out
-	}
-	if s.handlePool(f, &out) {
-		return out
-	}
-	if s.handleBreaker(f, &out) {
-		return out
 	}
 
 	switch f.T {
@@ -302,7 +277,18 @@ func (s *server) handle(f core.Frame) core.Frame {
 		out.Body = mustJSON(map[string]any{"epoch": s.log.Epoch()})
 
 	default:
-		out.Err = core.Refuse(core.CodeBadRequest, "unknown frame type "+f.T)
+		// ★ 两个不同的事实，两句不同的话。
+		//
+		// 此前两边回的都是 "unknown frame type <t>"，于是「有没有族认领这个
+		// 前缀」与「族里有没有这个 op」在协议上无法区分 —— ops 的循环断言
+		// 因此对 13 个族全部假红（一条分辨不出任何东西的断言）。
+		if claimed != "" {
+			out.Err = core.Refuse(core.CodeBadRequest,
+				"unknown op "+f.T+" in the family "+claimed+": the family is claimed but has no such op")
+		} else {
+			out.Err = core.Refuse(core.CodeBadRequest,
+				"unknown frame type "+f.T+": no family claims this prefix")
+		}
 	}
 	return out
 }

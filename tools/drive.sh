@@ -1059,6 +1059,9 @@ jlast() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["entri
 jhead() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["head"])'; }
 jmoney() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["left"]["money"])'; }
 jfirst() { python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["ranked"][0]["action"])'; }
+jfamilies() { python3 -c 'import json,sys
+for f in json.load(sys.stdin)["body"]["families"]:
+    print(f.get("type") or (f["prefix"] + "probe"))'; }
 jspent() { python3 -c 'import json,sys; b=json.load(sys.stdin)["body"]; print(b.get("spent", b.get("reliability",{}).get("spent","")))'; }
 
 r=$(req '{"t":"audit.tail","v":1,"body":{"limit":3}}')
@@ -1580,6 +1583,33 @@ expect "stable 指针跨重启仍在" "$r" "\"stable\":\"$skref\""
 expect "canary 指针跨重启仍在" "$r" "\"canary\":\"$skref\""
 r=$(req "{\"t\":\"skill.resolve\",\"v\":1,\"body\":{\"ref\":\"$skref\"}}")
 expect "内容仍在 CAS 里可读" "$r" '"skill_id":"read.file"'
+
+echo
+echo "—— ops：内核自报它能收哪些帧 ——"
+r=$(req '{"t":"ops","v":1}')
+expect "★ 有一个帧专门回答「你能收哪些帧」" "$r" '"families"'
+expect "★ 它报的第一个族是会话（表的顺序是承重的）" "$r" '{"note":"会话状态机'
+expect "★ 它把前缀族报成 prefix" "$r" '"prefix":"session."'
+expect "★ 也报具体帧类型" "$r" '"type":"skill.invoke"'
+expect "★ 并说清报的是族，不是每个 op" "$r" 'the ops inside a family are the family'
+expect "★ 它自报协议版本" "$r" '"protocol"'
+# ★ 最要紧的一条：**ops 报的每一个族，分派都真的认领**。
+# 这一条不能靠"ops 里出现了 X"来断言 —— 那是存在性判据。
+# 要从 ops 的回答里取出全部族，逐个发一帧，看内核认不认。
+printf '%s' "$r" | jfamilies > "$tmp/opsfamilies"
+n=0
+while read -r t; do
+  [ -z "$t" ] && continue
+  rr=$(req "{\"t\":\"$t\",\"v\":1}")
+  case "$rr" in
+    # ★ 判据是那句「没有哪个族认领这个前缀」。族认领了前缀、只是族里没有这个
+    # op 时，回的是不带这句话的 "unknown frame type" —— 两个事实两句话。
+    *'no family claims this prefix'*)
+      printf '  FAIL  ★ ops 报的族 %s 分派并不认领\n' "$t"; fails=$((fails + 1)) ;;
+    *) n=$((n + 1)) ;;
+  esac
+done < "$tmp/opsfamilies"
+printf '  ok    ★★ ops 报的每一个族都真的被分派认领（逐个发帧验证，%s 个）\n' "$n"
 
 echo
 echo "—— bye ——"

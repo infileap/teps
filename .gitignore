@@ -5,3 +5,7 @@
 .mutbak/
 __pycache__/
 *.pyc
+
+# go build ./... 会把 package main 的产物写到当前目录
+/teps-mcp
+/shell
