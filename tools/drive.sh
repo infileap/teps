@@ -1503,6 +1503,56 @@ r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"ns7\",\"body\":{\"ref\":\"$xo
 expect "★ 另一个宿主完全不受影响（坏的是那个解释器，不是这台机器）" "$r" '"outcome":"ok"'
 
 echo
+echo "—— AI 可换：模型是一个技能，不是一个依赖 ——"
+# ★ 这一节证明的是**结构**，不是能力。
+#
+# 设计里的「AI 可换」此前是一句主张。它现在有了机制：**模型走的是技能那条路**——
+# 同一个 executor、同一个核验器、同一把预算、同一条证据阶梯。
+# 换模型 = 换一个 ref，内核一行不改。
+#
+# 下面这两个「模型」是**桩**：它们不联网、输出是确定的。
+# 它们证明的是「一个模型放得进这套 ABI」，不是「这个模型行」。
+# 能力层仍然是 🔴，这条不变。
+# ★ 载荷里**不能有双引号**：`files` 的值是 JSON 字符串，而 `$VAR` 代进去时
+# 它内部的 `\"` 不会被重新转义 —— 于是 `printf "{\"reply\":\"A\"}"` 会让
+# 那个 JSON 在第一个内层引号处断开（`invalid character '{' after object key:value pair`）。
+# 所以「模型」回的是不带引号的纯文本；它证明的是结构，不是输出格式。
+MODEL_A_SH='read -r line\ncase $line in *REFUTE*) exit 3;; esac\nprintf REPLY-A\n'
+MODEL_B_SH='read -r line\ncase $line in *REFUTE*) exit 3;; esac\nprintf REPLY-B\n'
+xma=$(xpub ma "$(xman model.a '["exit == 0","stdout contains \"REPLY-A\""]' 2000 '[{"input":{"marker":"REFUTE"},"assert":"exit == 0"}]')" "{\"run.sh\":\"$MODEL_A_SH\"}")
+xmb=$(xpub mb "$(xman model.b '["exit == 0","stdout contains \"REPLY-B\""]' 2000 '[{"input":{"marker":"REFUTE"},"assert":"exit == 0"}]')" "{\"run.sh\":\"$MODEL_B_SH\"}")
+if [ -n "$xma" ] && [ -n "$xmb" ]; then
+  printf '  ok    两个「模型」按普通技能注册（内容寻址，两个不同的 ref）\n'
+else
+  printf '  FAIL  模型技能注册没拿到 ref：%s %s\n' "$xma" "$xmb"
+  fails=$((fails + 1))
+fi
+
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"ma1\",\"body\":{\"ref\":\"$xma\",\"attempt\":\"m-a\",\"task_class\":\"chat\",\"elevate\":true}}")
+expect "★ 模型跑在同一个执行器上" "$r" '"outcome":"ok"'
+expect "★ 它由同一个核验器判定，不是自证" "$r" '"verified_by":"verify_assert"'
+expect "★ 它拿到的证据等级走同一把阶梯" "$r" '"to":"E1"'
+expect "★ 必败用例也跑了（模型也得证明自己会失败）" "$r" '"held":true'
+r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"mb1\",\"body\":{\"ref\":\"$xmb\",\"attempt\":\"m-b\",\"task_class\":\"chat\"}}")
+expect "★ 换模型就是换一个 ref：另一个 ref 跑另一个模型" "$r" '"outcome":"ok"'
+
+# ★ 两个模型是两个 skill_id ⇒ 后验分开记 ⇒ 系统能学会哪个更好。
+r=$(req '{"t":"arbiter.state","v":1,"body":{"skill":"model.a","task_class":"chat"}}')
+expect "★ 后验按模型分开记（所以系统能学会哪个更好）" "$r" '"mean"'
+r=$(req '{"t":"arbiter.state","v":1,"body":{"skill":"model.b","task_class":"chat"}}')
+expect "★ 另一个模型是另一条记录" "$r" '"mean"'
+r=$(req '{"t":"metrics.get","v":1}')
+expect "★ 度量把两个模型算进同一套可靠性里" "$r" '"reliability"'
+
+# ★ 而内核里仍然一行模型调用都没有：**依赖的是 ABI，不是那个模型**。
+if python3 tools/check_nomodel.py >/dev/null 2>&1; then
+  printf '  ok    ★★ 内核里仍然 0 处模型调用：模型是载荷，不是依赖\n'
+else
+  printf '  FAIL  ★★ 内核里出现了模型调用\n'
+  fails=$((fails + 1))
+fi
+
+echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null
