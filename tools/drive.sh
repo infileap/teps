@@ -1588,7 +1588,16 @@ echo
 echo "—— ops：内核自报它能收哪些帧 ——"
 r=$(req '{"t":"ops","v":1}')
 expect "★ 有一个帧专门回答「你能收哪些帧」" "$r" '"families"'
-expect "★ 它报的第一个族是会话（表的顺序是承重的）" "$r" '{"note":"会话状态机'
+# ★ 「第一个族是会话」必须**按位置**断言。
+# 用 expect 查子串是不行的：它无论这个族排在第几都通过 ——
+# 我原先就是这么写的，而一条「把整张表倒过来」的变异因此活了下来。
+first_family=$(python3 -c 'import json,sys; f=json.load(sys.stdin)["body"]["families"][0]; print(f.get("prefix") or f.get("type"))' <<<"$r")
+if [ "$first_family" = "session." ]; then
+  printf '  ok    ★ 它报的第一个族是会话（表的顺序是承重的：第一条认领的胜出）\n'
+else
+  printf '  FAIL  ★ 第一个族应该是 session.，实际是 %s\n' "$first_family"
+  fails=$((fails + 1))
+fi
 expect "★ 它把前缀族报成 prefix" "$r" '"prefix":"session."'
 expect "★ 也报具体帧类型" "$r" '"type":"skill.invoke"'
 expect "★ 并说清报的是族，不是每个 op" "$r" 'the ops inside a family are the family'
