@@ -67,7 +67,7 @@ def paths_in(text):
     return found
 
 
-def problems_for_paths(label, text, must_exist=True):
+def problems_for_paths(label, text, lenient=True):
     """★ 只报「看起来是文件、却不在仓库里」的 token。
 
     这里的难点是反引号里的东西**不区分路径与代码**：`tools/install_go.sh` 是路径，
@@ -75,9 +75,14 @@ def problems_for_paths(label, text, must_exist=True):
     判据：一个 token 是候选路径，当且仅当它**存在**，或者它的最后一段带扩展名
     （有 `.`）。于是 `tools/call` 被跳过，`adapters/nope/missing.go` 被抓到。
 
-    诚实说明这条判据的**已知漏网**：一个拼错的**目录**（`adapters/she11`）
-    既不存在、最后一段也没有 `.`，会被跳过。这是为消除误报付的价，
-    写在这里以免下一个人以为它守得住那一种。
+    ★ 散文用**宽松**判据（存在，或最后一段带扩展名），因为反引号里既有路径
+    也有方法名（`tools/call` 与 `tools/install_go.sh` 前缀一模一样）。
+    它的已知漏网是一个拼错的**目录**，写在这里以免下一个人以为它守得住那一种。
+
+    ★ 代码用**严格**判据（lenient=False）：`server.json` 的 `_meta.launch` 里
+    每个路径形状的 token 都真的会被执行，所以那里没有豁免 ——
+    这正是「把 `./adapters/mcp` 打错成 `./adapters/nope`」唯一能被抓到的地方，
+    而那个错**就是命令跑不起来的原因**。
     """
     out = []
     for p in sorted(paths_in(text)):
@@ -89,10 +94,9 @@ def problems_for_paths(label, text, must_exist=True):
         if exists:
             continue
         last = p.rstrip("/").rsplit("/", 1)[-1]
-        if "." not in last:
+        if lenient and "." not in last:
             continue  # 不是文件形状：多半是方法名或目录引用，不判
-        if must_exist:
-            out.append("%s 提到 %s，而它不在仓库里" % (label, p))
+        out.append("%s 提到 %s，而它不在仓库里" % (label, p))
     return out
 
 
@@ -128,7 +132,11 @@ def run():
         out += problems_for_server(doc)
         launch = ((doc.get("_meta") or {}).get("io.github.infileap/teps") or {}).get("launch") or {}
         blob = " ".join(launch.get("build", []) + [launch.get("run", "")])
-        out += problems_for_paths("server.json 的 _meta.launch", blob)
+        # ★ launch 那一块**不是散文，是代码**：那里的每一个路径形状的 token
+        # 都真的会被执行。所以对它用严格判据（不做扩展名豁免）——
+        # 这正是「把 ./adapters/mcp 打错成 ./adapters/nope」唯一能被抓到的地方，
+        # 而那个错**就是命令跑不起来的原因**。
+        out += problems_for_paths("server.json 的 _meta.launch", blob, lenient=False)
     if os.path.exists(CLIENTS):
         out += problems_for_paths("docs/CLIENTS.md", open(CLIENTS, encoding="utf-8").read())
     else:
@@ -154,6 +162,8 @@ def self_test():
         out.append("SELF-TEST  不存在的路径没被抓到（它还看得见吗）")
     if problems_for_paths("SELF-TEST", "see .out/teps-mcp"):
         out.append("SELF-TEST  .out/ 是构建产物目录，不该被当路径核")
+    if not problems_for_paths("SELF-TEST", "go build ./adapters/nope", lenient=False):
+        out.append("SELF-TEST  严格判据下，一个不存在的目录没被抓到（它还看得见吗）")
     # ★ 这一半最要紧：证明「看见了会红」。
     out.append("SELF-TEST  注入的违规（这一条必须让它退出 1）")
     return out
