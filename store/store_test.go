@@ -1077,3 +1077,35 @@ func TestTheCeilingIsTheMinimumNotTheFirst(t *testing.T) {
 		t.Fatalf("all-strong children permit the ceiling: %s", ref.Reason)
 	}
 }
+
+// ★ Two rules that look like one, and only one of them is enforced here.
+//
+// `tools/check_nomodel.py` says content may call a model — it only forbids the
+// *engine* from depending on one. This says a *skill* may not fetch at all.
+// They are different rules about different things, and conflating them produces
+// a plan that cannot be carried out: "rent an API and ship it as a skill" is
+// exactly the path this refusal forbids.
+//
+// The reason is not security, it is reproducibility: a content-addressed skill
+// whose behaviour depends on what a remote server says today is not the same
+// skill tomorrow, and the hash would still claim it is.
+func TestASkillThatFetchesAtRuntimeIsRefused(t *testing.T) {
+	m := goodManifest()
+	m.Env.Network = true
+	ref := m.Validate()
+	if ref == nil {
+		t.Fatal("env.network=true must be refused: a skill that fetches at runtime is not reproducible")
+	}
+	if ref.Code != core.CodeBadRequest {
+		t.Fatalf("want bad_request, got %s", ref.Code)
+	}
+	if !strings.Contains(ref.Reason, "reproducible") {
+		t.Fatalf("the refusal must say why, got: %s", ref.Reason)
+	}
+	// The consequence, stated where somebody changing this will read it:
+	// a model reached over the network cannot be a skill. A model in this
+	// system is a local program.
+	if !strings.Contains(ref.Reason, "env.network must be false") {
+		t.Fatalf("the refusal must name the field, got: %s", ref.Reason)
+	}
+}

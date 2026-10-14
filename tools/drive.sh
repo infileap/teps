@@ -1556,6 +1556,13 @@ else
 fi
 
 echo
+echo "—— 一个会在运行时取网的技能不是可复现的 ——"
+r=$(req '{"t":"skill.publish","v":1,"key":"net1","body":{"manifest":{"skill_id":"net.fetcher","version":"1.0.0","kind":"script","verify_assert":["exit == 0"],"budget":{"ms":1000},"evidence":"E0","idempotent":true,"license":"MIT","provenance":{"source":"planner"},"env":{"interpreter":"/bin/sh","network":true}},"files":{"run.sh":"exit 0\n"}}}')
+expect "★ env.network=true 被拒" "$r" 'env.network must be false'
+expect "★ 理由说的是可复现性，不是安全" "$r" 'not reproducible'
+expect "★ 拒绝点名那个字段" "$r" '"code":"bad_request"'
+
+echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null
