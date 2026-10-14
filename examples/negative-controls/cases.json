@@ -1,0 +1,109 @@
+{
+  "_": [
+    "成对的负控。每一条都是**两半**：一半必须通过（must_pass），一半必须给出别的判定（must_fail）。",
+    "",
+    "为什么必须成对：一份只有必过用例的声明，证明的是「它通过了」；",
+    "没被证明的是「它有能力失败」。于是 `exit == 0` 的技能只要永远返回 0，",
+    "就能拿到 E1 —— 永远成功和正确地成功，在那份声明下分不出来。",
+    "",
+    "★ 但**只有 `failed` 算被驳倒**。`unknown`（判不了）、`timeout`（没按时回来）、",
+    "`refused`（进程根本没起来）都不是「这条断言被证明为假」。",
+    "所以每条负控自己声明它的 must_fail 期望哪一种 —— 并因此说清它在证明什么：",
+    "  期望 failed   ⇒ 证明这条断言**能失败**（这是一条真的负控）",
+    "  期望 unknown  ⇒ 证明这条断言**判不了**（它不是一个检查，这是另一种发现）",
+    "把两者混起来，就会让一个坏掉的技能靠「跑不起来」拿到双边证据。"
+  ],
+  "cases": [
+    {
+      "id": "exit-code-is-not-a-conclusion",
+      "catches": "退出码 0 被当成结论：命令报成功，产物却缺失。下游拿到一份空输入，给出一个看起来正常的错答案。",
+      "proves": "「退出码 0」与「产物存在」是两条判据。只判前者的技能在这一对上分得出来。",
+      "skill_id": "nc.produce",
+      "interpreter": "/bin/sh",
+      "budget_ms": 1000,
+      "files": {
+        "run.sh": "in=$(cat)\ncase $in in *empty*) exit 0;; esac\nprintf PAYLOAD\n"
+      },
+      "must_pass": {
+        "input": {},
+        "assert": "stdout contains \"PAYLOAD\"",
+        "expect": "ok"
+      },
+      "must_fail": {
+        "input": {
+          "mode": "empty"
+        },
+        "assert": "stdout contains \"PAYLOAD\"",
+        "expect": "failed"
+      }
+    },
+    {
+      "id": "empty-needle",
+      "catches": "空针匹配一切：`stdout contains \"\"` 在任何输出上都是 true，所以一个什么都不打印的技能被判 ok 并拿到 E1。",
+      "proves": "「它什么都没打印」是一个**合法**的声明（`== \"\"` 成立，而且它可以是假）；而 `contains \"\"` 不是一个检查——它判不了。",
+      "skill_id": "nc.silent",
+      "interpreter": "/bin/sh",
+      "budget_ms": 1000,
+      "files": {
+        "run.sh": "exit 0\n"
+      },
+      "must_pass": {
+        "input": {},
+        "assert": "stdout == \"\"",
+        "expect": "ok"
+      },
+      "must_fail": {
+        "input": {},
+        "assert": "stdout contains \"\"",
+        "expect": "unknown"
+      }
+    },
+    {
+      "id": "probe-silent-vs-empty",
+      "catches": "「探针沉默」与「拿到但是空」被折叠成一个结论：采集端根本没打回来时，如果代码把它当成「值是空」，下游就按默认值继续算。",
+      "proves": "一个**根本没起来**的探针与一个**跑完是空**的探针，判定必须不同（`refused` ≠ `ok`），而且 `refused` 不是一个「能失败」的证明。",
+      "skill_id": "nc.probe",
+      "interpreter": "/bin/sh",
+      "budget_ms": 1000,
+      "files": {
+        "run.sh": "printf ALIVE\n"
+      },
+      "must_pass": {
+        "input": {},
+        "assert": "stdout contains \"ALIVE\"",
+        "expect": "ok"
+      },
+      "must_fail": {
+        "input": {},
+        "assert": "exit != 0",
+        "expect": "failed"
+      }
+    },
+    {
+      "id": "truncated-tail",
+      "catches": "串行组合把上一步的 stdout 当输入，而规划器把它当 JSON 规范化：json.Decoder 只读第一个值就停，{\"n\":1}TAIL 变成 {\"n\":1}，尾巴没了，没有任何一处报错。",
+      "proves": "一条 `stdout contains X` 的断言**能失败**——这正是它作为检查与作为形式的分界。载荷只发出输入的**前 7 个字节**（`head -c 7`），这就是「解码器读到一半就停了」的形状：短输入完好无损地过去，长输入则在产物里少了尾巴，而两半给出的判定不同。",
+      "skill_id": "nc.forward",
+      "interpreter": "/bin/sh",
+      "budget_ms": 1000,
+      "files": {
+        "run.sh": "in=$(cat)\nprintf '%s' \"$in\" | head -c 7\n"
+      },
+      "must_pass": {
+        "input": {
+          "n": 1
+        },
+        "assert": "stdout contains \"n\"",
+        "expect": "ok"
+      },
+      "must_fail": {
+        "input": {
+          "n": 1,
+          "tail": "TAIL"
+        },
+        "assert": "stdout contains \"TAIL\"",
+        "expect": "failed"
+      }
+    }
+  ]
+}

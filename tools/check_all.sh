@@ -41,6 +41,7 @@ run check_organs.py   python3 tools/check_organs.py
 run check_assertions.py python3 tools/check_assertions.py
 run check_nomodel.py  python3 tools/check_nomodel.py
 run check_clients.py python3 tools/check_clients.py
+run check_examples.py python3 tools/check_examples.py
 
 echo
 echo "—— 测试 ——"
@@ -69,6 +70,7 @@ selfcheck() { # selfcheck <名字> <自检命令>
 }
 selfcheck "守卫自检 nomodel"  "TEPS_NOMODEL_SELF_TEST=1 python3 tools/check_nomodel.py"
 selfcheck "守卫自检 clients" "TEPS_CLIENTS_SELF_TEST=1 python3 tools/check_clients.py"
+selfcheck "守卫自检 examples" "TEPS_EXAMPLES_SELF_TEST=1 python3 tools/check_examples.py"
 
 echo
 if [ "$fails" -eq 0 ]; then

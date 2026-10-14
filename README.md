@@ -98,6 +98,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
             check_assertions.py                  ★ 断言里的 JSON 值片段不许互相是前缀
             check_nomodel.py                     ★ 自由判据的 AI 那一半：删掉模型还能跑吗
             check_clients.py                     ★ 接入面：server.json / CLIENTS.md / SKILL.md 三份文件对同一件事的说法
+            check_examples.py                    ★ 成对的负控：只有 failed 算被驳倒，其余三种各说清在证明什么
             check_all.sh                         ★ 上面这些的唯一入口（含守卫自检）
             check_format.sh                      gofmt 干净，别让 diff 里混进重排
             drive.sh                             ★ 自由判据：只有 curl 驱动全流程
@@ -179,6 +180,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | **判定规则的身份** ★★ | ✅ **一个后验不能在两套规则上折**。后验按 `(skill_id, task_class)` 分组，而 `skill_id` 与版本无关 ⇒ 同一句 `skill_id` 用不同断言重新发布后，新旧运行被折进同一个键，报出来的数是**两个不同问题的平均值**（`0.5` 可以是「一个程序一半时间能用」，也可以是「两个程序，一个总行一个从不行」）。`Plan.Rules = RuleID(asserts)`——**排序后**逐条写字节 + `0x00` 分隔符的 sha256：顺序故意不算身份（每条断言都必须成立，重排不可能改变判定），**身份应该追踪「什么改变了答案」，不是「什么改变了文本」**。`mixed_skills > 0` 时能力乘积**未定义** |
 | **内核自报它能收哪些帧** ★★ | ✅ `ops` 回的就是**分派用的那张表**（`adapters/shell/ops.go` 的 `claims()`）——分派与回答是同一张表，所以不可能漂移；再写一份 op 清单给它报就是**第二份拷贝，而第二份拷贝就是会烂掉的那一份**。★ 这张表立刻暴露一个潜伏缺陷：`handleExecute` 认领**三个**帧类型而只有两个被写下来过，`compose.propose` 可达**仅仅因为它恰好排在 `handleKnowledge` 之前**——**分派的顺序是承重的，而这件事此前没有任何地方写下来**。★ 第二个发现：族认领了前缀、族内未知 op 时处理器回 `false`，帧落到 `default`，而 `default` 说「没有族认领这个前缀」——**那是假话**。两件事两句话：`unknown op <t> in the family <prefix>` vs `unknown frame type <t>: no family claims this prefix`。★ 第三个发现：我那条「第一个族是会话」的断言用 `expect` 查子串，**无论那个族排在第几都通过**——一条「把整张表倒过来」的变异因此活了下来（**第八次**同一种失效） |
 | **随时接入** ★★ | ✅ `server.json`（MCP 2025-12-11 的 `ServerDetail` 形状）+ `docs/CLIENTS.md`（唯一的接入说明）+ `.agents/skills/teps/SKILL.md`。★ 照 `rea` 的教义：**技能供说明，服务器供工具，两件事分开**——`SKILL.md` 明说「装了这个技能**不等于**接上了服务器」。★ 一份说「怎么接」但命令跑不起来的文档，与一个「接受了参数却从不读」的字段是同一种失败：**不是拒绝，也不是做到，是看起来做到了**。所以有 `tools/check_clients.py` 核三份文件对同一件事的说法（含 `SKILL.md` 里必须有「does not register」那句） |
+| **成对的负控（离线可跑）** ★★ | ✅ `examples/negative-controls/`——**4 对**，每对必过 + 必败，只用 `curl` 与 `python3` 现建内核跑。★ 一条**只在必过那一半成立**的断言不是检查，是形式：它分辨不出任何东西。★ **只有 `failed` 算被驳倒**——`timeout` 是关于时间的事实、`refused` 说明进程根本没起来、`unknown` 是判不了；把三者算作驳倒，就是让一个坏掉的技能靠「跑不起来」拿到双边证据。所以每条自己声明期望哪一种，并因此说清它在证明什么。★ 负控**不是**「换个输入再跑一次看 `outcome`」，它是 `verify_refute` 的一条声明，结果在 `elevation.refutations[].held` 里——第一版读两次 `outcome`，两半拿到同一个数 |
 | **内容哈希是一个三元组** ★★★ | ✅ **算法 / 版本 / 归一化**。`Get` 用 sha256 重算并比对，而**算法是隐含的**——一个别的 64 位十六进制算法产出的摘要能通过形状检查，重算不符，于是调用方被告知 `recovery_required`「这些字节损坏了」。真话是「本店没有实现那个算法」。**两个不同的事实，一个码**，而第二个把读者送去一个不存在损伤的地方找损伤。现在摘要可以点名自己的算法（裸 64 位十六进制＝sha256，即磁盘与线上的形式），`Get` 与 `Has` 走同一个判定，`GetJSON` 还查**第三个腿**（字节完好但写在另一套归一化下＝同一个值在另一个身份下）。★ 顺着查出 `Resolve` 把**四个**事实压成同一句话：不存在 / 字节损坏 / 算法没有 / 归一化不同——只有第一个意味着「你要的东西不在这里」 |
 | **执行的花费落到链上** ★★ | ✅ 准入算出钱、仲裁器取了价，但 resolution 记录里的 `cost` 一直是 `0`——**链在声称每一次执行都是免费的**。现在它带上准入算出的那个数，`arbiter.state` 与 `metrics.get` 都报 `spent`，并有一条断言钉住**两处必须是同一个数**。报一个价不等于付那个价；**付了却不记下来同样是一句假话** |
 | **报价回答的是哪个问题** ★★ | ✅ 报价带 `expectation`：`attempt`（一次尝试）或 `success`（成功一次）。同一对报价按两个口径**排出不同的赢家**（A `0.585`/`0.576` vs B `0.650`/`0.550`）——两个数都不是错的，不问清就没法读。`cost` 永远是**真正进了效用函数**的那个数；`cost_per_attempt` 与 `cost_per_success` 都报出来。一个一次也不成功的动作**没有价格**，因为它什么都买不到 |
@@ -205,7 +207,8 @@ python3 tools/check_frames.py      # 帧类型与契约必须一一对上
 python3 tools/check_organs.py      # 器官与两份文档的状态表必须一一对上
 python3 tools/check_assertions.py  # ★ 存在性判据不许冒充一致性判据
 python3 tools/check_nomodel.py
-python3 tools/check_clients.py     # ★ 自由判据的 AI 那一半：删掉模型还能跑吗
+python3 tools/check_clients.py     # 接入面：三份文件对同一件事的说法
+python3 tools/check_examples.py    # 成对的负控：每一对两半，两半判定必须不同
 ```
 
 ★ **为什么要有 `check_all.sh`**：守卫此前只有一份**清单**，而清单要靠人一条一条敲。
