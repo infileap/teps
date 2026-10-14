@@ -18,6 +18,7 @@
 """
 import json
 import os
+import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -75,12 +76,68 @@ def problems_for(doc):
     return out
 
 
+
+# 一份会调模型的载荷，与一份负控，是同一条纪律的两个实例：
+# **它必须有能力失败**，否则一个永远成功的载荷与一份正确的声明长得一模一样。
+LOCAL_PAYLOAD = os.path.join(ROOT, "examples", "local-model", "main.py")
+LOCAL_RUNNER = os.path.join(ROOT, "examples", "local-model", "run.sh")
+
+
+def problems_for_local_model():
+    out = []
+    if not os.path.exists(LOCAL_PAYLOAD):
+        return ["没有 examples/local-model/main.py"]
+    if not os.path.exists(LOCAL_RUNNER):
+        return ["没有 examples/local-model/run.sh：光有载荷没有跑法"]
+
+    payload = open(LOCAL_PAYLOAD, encoding="utf-8").read()
+    runner = open(LOCAL_RUNNER, encoding="utf-8").read()
+
+    # 1. 载荷必须有能力失败。
+    #
+    # ★ 判据是**那一条分支**，不是「文件里出现过 refute 这个词」。
+    # 第一版写成 `if "refute" not in payload`，于是把 `body.get("refute")` 换成
+    # `False` 之后它照样通过 —— 文件里别处还有这个词（文档字符串里）。
+    # 又一次：**存在性判据冒充一致性判据**。
+    branch = re.search(
+        r"if\s+[^\n]*refute[^\n]*:\s*\n(?:[^\n]*\n){0,4}?\s*return\s+([1-9]\d*)",
+        payload)
+    if not branch:
+        out.append("local-model/main.py 里没有一条「读到 refute 就返回非零」的分支："
+                   "一个永远成功的载荷与一份正确的声明长得一模一样")
+    # 2. 跑法必须真的声明那条必败用例。
+    if "verify_refute" not in runner:
+        out.append("local-model/run.sh 没有声明 verify_refute："
+                   "载荷有能力失败，而没有人要求它展示")
+    # 3. 跑法不许在默认路径上。一条要跑三分钟的守卫会被从默认路径里拿掉，
+    #    然后就没有人跑它了 —— 那比没有守卫更糟，因为它看起来有。
+    check_all = os.path.join(ROOT, "tools", "check_all.sh")
+    if os.path.exists(check_all) and "local-model" in open(check_all, encoding="utf-8").read():
+        out.append("tools/check_all.sh 里跑了 examples/local-model：一次调用约 160 秒，"
+                   "一条要跑三分钟的守卫会被从默认路径里拿掉，然后就没有人跑它了")
+
+    # 4. ★ 载荷自己的超时不许短于它声明的预算。
+    #    短了的话，杀掉模型的是载荷而不是内核的硬时限 —— 于是「超时」这个判定
+    #    永远不会由内核给出，而链上那条「预算是硬时限」的话就成了一句空话。
+    m = re.search(r"timeout\s*=\s*(\d+)", payload)
+    b = re.search(r'"budget"\s*:\s*\{\s*"ms"\s*:\s*(\d+)', runner)
+    if m and b:
+        payload_ms = int(m.group(1)) * 1000
+        budget_ms = int(b.group(1))
+        if payload_ms < budget_ms:
+            out.append("local-model/main.py 的超时 %dms 短于它声明的预算 %dms："
+                       "那样杀掉模型的是载荷而不是内核的硬时限" % (payload_ms, budget_ms))
+    else:
+        out.append("读不出 local-model 的超时或预算：那条判据就没人守了")
+    return out
+
 def run():
     out = []
     if not os.path.exists(CASES):
         return ["没有 examples/negative-controls/cases.json"]
     doc = json.load(open(CASES, encoding="utf-8"))
     out += problems_for(doc)
+    out += problems_for_local_model()
     if not os.path.exists(RUNNER):
         out.append("没有 examples/negative-controls/run.sh：光有数据没有跑法，"
                    "别人拿到它也不知道怎么用")
