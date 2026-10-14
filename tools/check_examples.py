@@ -131,6 +131,64 @@ def problems_for_local_model():
         out.append("读不出 local-model 的超时或预算：那条判据就没人守了")
     return out
 
+RESIDENT_PAYLOAD = os.path.join(ROOT, "examples", "local-model", "resident.py")
+RESIDENT_RUNNER = os.path.join(ROOT, "examples", "local-model", "resident.sh")
+
+
+def problems_for_resident():
+    """常驻模型那一份：判据是「声明与载荷说的是同一件事」。"""
+    out = []
+    if not os.path.exists(RESIDENT_PAYLOAD) or not os.path.exists(RESIDENT_RUNNER):
+        return ["没有 examples/local-model/resident.py / resident.sh"]
+    payload = open(RESIDENT_PAYLOAD, encoding="utf-8").read()
+    runner = open(RESIDENT_RUNNER, encoding="utf-8").read()
+
+    # ★ 守卫读的是**源码**，而源码里的 artifact 是 `"'"$ARTIFACT"'"` ——
+    # 第一版因此把 `'` 当成哈希值，报出一句关于引号的话。
+    # 一个读不出被声明的东西的守卫，报的是它读的方式。
+    # 所以先把变量代进去：`NAME="value"` 的赋值各代一遍。
+    resolved = runner
+    for name, value in re.findall(r'^([A-Z][A-Z0-9_]*)="([^"]*)"', runner, re.M):
+        # 三种写法都要代：`$NAME`、`"$NAME"`、以及 shell 里跨引号的 `'"$NAME"'`
+        # （单引号字符串闭、展开变量、再开一个单引号）。
+        cross = "'" + '"$' + name + '"' + "'"
+        resolved = resolved.replace(cross, value)
+        resolved = resolved.replace('"$%s"' % name, value)
+        resolved = resolved.replace("$%s" % name, value)
+
+    branch = re.search(
+        r"if\s+[^\n]*refute[^\n]*:\s*\n(?:[^\n]*\n){0,4}?\s*return\s+([1-9]\d*)",
+        payload)
+    if not branch:
+        out.append("resident.py 里没有一条「读到 refute 就返回非零」的分支")
+
+    # ★★ 声明与载荷必须说的是同一个套接字。
+    # 分开了的话，`env.reaches` 声明的是 A，载荷连的是 B —— 而两个都会「通过」：
+    # 商店只核清单，载荷只连它自己那个地址。**同一件事两处写，只更新了一处。**
+    declared = re.findall(r'"socket"\s*:\s*"([^"]+)"', resolved)
+    connected = re.findall(r'SOCKET\s*=\s*"http://([^/"]+)', payload)
+    if not declared:
+        out.append("resident.sh 没有声明 env.reaches 的 socket")
+    elif not connected:
+        out.append("resident.py 里读不出它连的套接字")
+    else:
+        # tcp:127.0.0.1:18911 ↔ 127.0.0.1:18911
+        want = declared[0].split(":", 1)[1] if declared[0].startswith("tcp:") else declared[0]
+        if want not in connected[0]:
+            out.append("resident.sh 声明连 %s，而 resident.py 连的是 %s："
+                       "商店只核清单、载荷只连自己那个地址，两个都会「通过」"
+                       % (declared[0], connected[0]))
+
+    # ★ artifact 必须是真哈希。它是**声明**（商店核不了那个文件），
+    # 但一条「随便写点什么」的声明连复核的入口都没有。
+    arts = re.findall(r'"artifact"\s*:\s*"([^"]+)"', resolved)
+    if not arts:
+        out.append("resident.sh 的 env.reaches 里没有 artifact")
+    elif not re.fullmatch(r"[0-9a-f]{64}", arts[0]):
+        out.append("resident.sh 的 artifact 不是 64 位十六进制哈希：%s" % arts[0])
+    return out
+
+
 def run():
     out = []
     if not os.path.exists(CASES):
@@ -138,6 +196,7 @@ def run():
     doc = json.load(open(CASES, encoding="utf-8"))
     out += problems_for(doc)
     out += problems_for_local_model()
+    out += problems_for_resident()
     if not os.path.exists(RUNNER):
         out.append("没有 examples/negative-controls/run.sh：光有数据没有跑法，"
                    "别人拿到它也不知道怎么用")
