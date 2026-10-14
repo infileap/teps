@@ -67,7 +67,103 @@ func MinEvidenceAll(evs []Evidence) Evidence { return evidence.MinAll(evs) }
 type Env struct {
 	Interpreter string            `json:"interpreter"`
 	Packages    map[string]string `json:"packages,omitempty"`
-	Network     bool              `json:"network"`
+	// Network is true when the skill reaches **another host**.
+	//
+	// It is refused, and the reason is reproducibility rather than safety: an
+	// answer that depends on what a remote machine says today is not
+	// reproducible, while the content hash still claims the ref names one thing.
+	//
+	// This field used to be the whole story, and that was wrong in one
+	// direction. "Talks to a socket" covers two situations that differ in the
+	// only way that matters here:
+	//
+	//   - a remote host: not pinned, so not reproducible -> refused
+	//   - a socket on this machine: the thing behind it is part of this
+	//     machine's state, and a model file on this disk is pinned by its own
+	//     bytes -> reproducible, and refusing it made a local model
+	//     unpublishable
+	//
+	// Reaches is where the second case goes.
+	Network bool `json:"network"`
+	// Reaches names the local endpoints this skill talks to, each pinned by the
+	// hash of the thing behind it.
+	//
+	// "Talks to a local socket" without saying which one is a claim nothing
+	// checks, so each entry carries the artifact's digest. The store cannot
+	// verify that the file exists — it is outside the store — so this is a
+	// declaration like provenance.source, and it is treated as one: written
+	// down, required, and never mistaken for a check.
+	Reaches []Reach `json:"reaches,omitempty"`
+}
+
+// Reach is one local endpoint, pinned by what is behind it.
+type Reach struct {
+	// Socket is the endpoint: "unix:<path>", or "tcp:" on a loopback address.
+	Socket string `json:"socket"`
+	// Artifact is the content hash of the thing served there — a model file,
+	// most often. It is what makes a local reach reproducible instead of merely
+	// nearby.
+	Artifact string `json:"artifact"`
+}
+
+// validate refuses a reach that is not actually local, or not actually pinned.
+//
+// Both refusals are about the same thing: a manifest that says "local" while
+// naming something reachable, or names a socket without naming what is behind
+// it, is a claim nothing can check.
+func (e Env) validate() *core.Refusal {
+	seen := map[string]bool{}
+	for i, r := range e.Reaches {
+		if r.Socket == "" {
+			return bad("env.reaches[" + itoa(i) + "].socket is empty: a local reach with nothing named is a claim nothing checks")
+		}
+		if !isLoopback(r.Socket) {
+			return bad("env.reaches[" + itoa(i) + "].socket names " + r.Socket +
+				": that is not a loopback endpoint, so this is a remote reach wearing the local label — set env.network instead, and expect it to be refused")
+		}
+		if seen[r.Socket] {
+			return bad("env.reaches[" + itoa(i) + "].socket repeats " + r.Socket + ": one endpoint, one entry")
+		}
+		seen[r.Socket] = true
+		if r.Artifact == "" {
+			return bad("env.reaches[" + itoa(i) + "].artifact is empty: without the hash of what is behind the socket, \"local\" is a claim nothing checks")
+		}
+		if _, _, ok := ValidDigest(r.Artifact); !ok {
+			return bad("env.reaches[" + itoa(i) + "].artifact is not a content hash: " + r.Artifact)
+		}
+	}
+	return nil
+}
+
+// isLoopback reports whether a socket spec names this machine only.
+//
+// It is deliberately a whitelist. A blacklist would let "tcp:0.0.0.0:8080" and
+// every future spelling of a routable address through, and the failure it
+// guards is one where the manifest says local and the bytes go somewhere else.
+func isLoopback(spec string) bool {
+	if rest, ok := strings.CutPrefix(spec, "unix:"); ok {
+		return rest != ""
+	}
+	host, ok := strings.CutPrefix(spec, "tcp:")
+	if !ok {
+		return false
+	}
+	// Strip the port; the host is what decides.
+	i := strings.LastIndex(host, ":")
+	if i < 0 {
+		return false
+	}
+	port := host[i+1:]
+	if port == "" {
+		return false
+	}
+	host = host[:i]
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	switch host {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	}
+	return false
 }
 
 // Provenance records where a skill came from.
@@ -202,7 +298,10 @@ func (m *Manifest) Validate() *core.Refusal {
 		return bad("kind=compose declares no interpreter: it runs no process of its own, so this field would never be read")
 	}
 	if m.Env.Network {
-		return bad("env.network must be false: a skill that fetches at runtime is not reproducible")
+		return bad("env.network must be false: a skill that reaches another host at runtime is not reproducible — the answer depends on what that host says today, and the content hash still claims this ref names one thing")
+	}
+	if ref := m.Env.validate(); ref != nil {
+		return ref
 	}
 	if m.Provenance.Source == "" {
 		return bad("provenance.source is required")

@@ -195,7 +195,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 
 ```sh
 bash tools/check_all.sh            # ★ 九台守卫 + 测试 + 守卫自检，一条命令
-bash tools/drive.sh                # 481/481，全程只有 curl
+bash tools/drive.sh                # 486/486，全程只有 curl
 bash tools/drive_mcp.sh            # 21/21，全程只有 printf 的 JSON-RPC
 ```
 

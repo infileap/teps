@@ -1563,6 +1563,22 @@ expect "★ 理由说的是可复现性，不是安全" "$r" 'not reproducible'
 expect "★ 拒绝点名那个字段" "$r" '"code":"bad_request"'
 
 echo
+echo "—— 一个本地套接字是可复现的，一个远端主机不是 ——"
+# 一个装了本地模型的技能要够得着它的运行时，而那条路以前是布尔值挡死的：
+# 「连一个套接字」同时覆盖了「远端主机」（没钉住，不可复现）与「本机套接字」
+# （它背后的东西是本机状态的一部分，模型文件由自己的字节钉住）。
+DIGEST=$(printf 'a%.0s' $(seq 1 64))
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"reach1\",\"body\":{\"manifest\":{\"skill_id\":\"local.model\",\"version\":\"1.0.0\",\"kind\":\"script\",\"verify_assert\":[\"exit == 0\"],\"budget\":{\"ms\":1000},\"evidence\":\"E0\",\"idempotent\":true,\"license\":\"MIT\",\"provenance\":{\"source\":\"handwritten\"},\"env\":{\"interpreter\":\"/bin/sh\",\"reaches\":[{\"socket\":\"unix:/run/teps/model.sock\",\"artifact\":\"$DIGEST\"}]}},\"files\":{\"run.sh\":\"exit 0\\n\"}}}")
+expect "★ 本机套接字 + 被钉住的制品 ⇒ 可发布" "$r" '"ref":"'
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"reach2\",\"body\":{\"manifest\":{\"skill_id\":\"remote.wear\",\"version\":\"1.0.0\",\"kind\":\"script\",\"verify_assert\":[\"exit == 0\"],\"budget\":{\"ms\":1000},\"evidence\":\"E0\",\"idempotent\":true,\"license\":\"MIT\",\"provenance\":{\"source\":\"handwritten\"},\"env\":{\"interpreter\":\"/bin/sh\",\"reaches\":[{\"socket\":\"tcp:0.0.0.0:11434\",\"artifact\":\"$DIGEST\"}]}},\"files\":{\"run.sh\":\"exit 0\\n\"}}}")
+expect "★ 可路由的地址不是本机套接字" "$r" 'remote reach wearing the local label'
+expect "★ 它说的是「换一个字段，然后等着被拒」" "$r" 'set env.network instead'
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"reach3\",\"body\":{\"manifest\":{\"skill_id\":\"unpinned.local\",\"version\":\"1.0.0\",\"kind\":\"script\",\"verify_assert\":[\"exit == 0\"],\"budget\":{\"ms\":1000},\"evidence\":\"E0\",\"idempotent\":true,\"license\":\"MIT\",\"provenance\":{\"source\":\"handwritten\"},\"env\":{\"interpreter\":\"/bin/sh\",\"reaches\":[{\"socket\":\"unix:/run/teps/model.sock\"}]}},\"files\":{\"run.sh\":\"exit 0\\n\"}}}")
+expect "★ 没有制品哈希的「本地」是一句没人核的声明" "$r" 'a claim nothing checks'
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"reach4\",\"body\":{\"manifest\":{\"skill_id\":\"badhash.local\",\"version\":\"1.0.0\",\"kind\":\"script\",\"verify_assert\":[\"exit == 0\"],\"budget\":{\"ms\":1000},\"evidence\":\"E0\",\"idempotent\":true,\"license\":\"MIT\",\"provenance\":{\"source\":\"handwritten\"},\"env\":{\"interpreter\":\"/bin/sh\",\"reaches\":[{\"socket\":\"unix:/run/teps/model.sock\",\"artifact\":\"nothex\"}]}},\"files\":{\"run.sh\":\"exit 0\\n\"}}}")
+expect "★ 制品必须是一个内容哈希" "$r" 'is not a content hash'
+
+echo
 echo "—— 预算耗尽：给一个极小的额度 ——"
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null

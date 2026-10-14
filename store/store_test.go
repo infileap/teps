@@ -1109,3 +1109,114 @@ func TestASkillThatFetchesAtRuntimeIsRefused(t *testing.T) {
 		t.Fatalf("the refusal must name the field, got: %s", ref.Reason)
 	}
 }
+
+// ★ "Talks to a socket" covers two situations that differ in the only way that
+// matters here: a remote host is not pinned, and a socket on this machine is.
+//
+// The old boolean could not tell them apart, so it refused both — which made a
+// local model unpublishable, and that is the exact case this project needs.
+func TestALocalReachIsPublishableWhenItIsPinned(t *testing.T) {
+	s := tmpStore(t)
+	m := goodManifest()
+	m.Env.Reaches = []Reach{{
+		Socket:   "unix:/run/teps/model.sock",
+		Artifact: "9f2b1c" + strings.Repeat("0", 58),
+	}}
+	if _, ref := s.Register(regWith(m, nil)); ref != nil {
+		t.Fatalf("a loopback reach pinned by a digest must be publishable: %s", ref.Reason)
+	}
+}
+
+func TestARemoteReachIsStillRefused(t *testing.T) {
+	s := tmpStore(t)
+	m := goodManifest()
+	m.Env.Network = true
+	_, ref := s.Register(regWith(m, nil))
+	if ref == nil {
+		t.Fatal("reaching another host is not reproducible and must be refused")
+	}
+	// The reason must name reproducibility, not safety: the rule is about the
+	// ref naming one thing, and that is what a reader needs to know.
+	if !strings.Contains(ref.Reason, "not reproducible") {
+		t.Fatalf("the reason should be about reproducibility, got: %s", ref.Reason)
+	}
+	if !strings.Contains(ref.Reason, "another host") {
+		t.Fatalf("the reason should name the remote case, got: %s", ref.Reason)
+	}
+}
+
+// ★ A reach that names something routable is a remote reach wearing the local
+// label. The check is a whitelist on purpose: a blacklist would let every
+// future spelling of a routable address through.
+func TestAReachThatIsNotLoopbackIsRefused(t *testing.T) {
+	for _, spec := range []string{
+		"tcp:0.0.0.0:8080",
+		"tcp:10.0.0.5:11434",
+		"tcp:example.com:443",
+		"http://127.0.0.1:8080",
+		"127.0.0.1:8080",
+		"tcp:127.0.0.1",
+	} {
+		s := tmpStore(t)
+		m := goodManifest()
+		m.Env.Reaches = []Reach{{Socket: spec, Artifact: strings.Repeat("a", 64)}}
+		_, ref := s.Register(regWith(m, nil))
+		if ref == nil {
+			t.Fatalf("%q is not a loopback endpoint and must be refused", spec)
+		}
+		if !strings.Contains(ref.Reason, "remote reach wearing the local label") {
+			t.Fatalf("%q: want the local-label reason, got: %s", spec, ref.Reason)
+		}
+	}
+	// And the loopback spellings that ARE local.
+	for _, spec := range []string{
+		"unix:/run/teps/model.sock",
+		"tcp:127.0.0.1:11434",
+		"tcp:localhost:11434",
+		"tcp:[::1]:11434",
+	} {
+		s := tmpStore(t)
+		m := goodManifest()
+		m.Env.Reaches = []Reach{{Socket: spec, Artifact: strings.Repeat("a", 64)}}
+		if _, ref := s.Register(regWith(m, nil)); ref != nil {
+			t.Fatalf("%q is loopback and must be accepted: %s", spec, ref.Reason)
+		}
+	}
+}
+
+// ★ Without the artifact's hash, "local" is a claim nothing checks.
+func TestALocalReachMustNameWhatIsBehindIt(t *testing.T) {
+	cases := []struct{ name, socket, artifact, want string }{
+		{"no socket", "", strings.Repeat("a", 64), "a claim nothing checks"},
+		{"no artifact", "unix:/run/x.sock", "", "a claim nothing checks"},
+		{"artifact is not a hash", "unix:/run/x.sock", "nothex", "is not a content hash"},
+	}
+	for _, c := range cases {
+		s := tmpStore(t)
+		m := goodManifest()
+		m.Env.Reaches = []Reach{{Socket: c.socket, Artifact: c.artifact}}
+		_, ref := s.Register(regWith(m, nil))
+		if ref == nil {
+			t.Fatalf("%s: should have been refused", c.name)
+		}
+		if !strings.Contains(ref.Reason, c.want) {
+			t.Fatalf("%s: want %q, got: %s", c.name, c.want, ref.Reason)
+		}
+	}
+}
+
+func TestTheSameSocketTwiceIsRefused(t *testing.T) {
+	s := tmpStore(t)
+	m := goodManifest()
+	m.Env.Reaches = []Reach{
+		{Socket: "unix:/run/x.sock", Artifact: strings.Repeat("a", 64)},
+		{Socket: "unix:/run/x.sock", Artifact: strings.Repeat("b", 64)},
+	}
+	_, ref := s.Register(regWith(m, nil))
+	if ref == nil {
+		t.Fatal("one endpoint, one entry")
+	}
+	if !strings.Contains(ref.Reason, "one endpoint, one entry") {
+		t.Fatalf("got: %s", ref.Reason)
+	}
+}
