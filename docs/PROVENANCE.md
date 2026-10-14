@@ -45,7 +45,7 @@
 | **本地那半**（自研 1B / 边缘推理） | 🔴 **悬空** | 上述引用不可信，无本地复现 |
 | **外部那半**（L3 API） | 🟢 真实可用 | 可以直接调用并实测 |
 
-⇒ **这一句要撤回**。它写的时候没人核过另一条规则：`store/manifest.go` 拒收 `env.network: true`，逐字理由是「a skill that fetches at runtime is not reproducible」。**一份调模型的载荷可以是内容**（`tools/check_nomodel.py` 的边界按角色划，只守引擎），**但它发布不成技能**——两条规则长得像一条，而它们是两条。⇒ 结论改成：**在这个系统里，一个模型是一个本地程序，不是一次 API 调用**；「不必等一个 1B 模型」这句话因此不成立，因为能等的只有本地的那些。
+⇒ **这一句要撤回**。它写的时候没人核过另一条规则：`store/manifest.go` 拒收 `env.network: true`，逐字理由是「a skill that fetches at runtime is not reproducible」。**一份调模型的载荷可以是内容**（`tools/check_nomodel.py` 的边界按角色划，只守引擎），**但它发布不成技能**——两条规则长得像一条，而它们是两条。⇒ 结论改成：**在这个系统里，一个模型是一个本地程序，不是一次 API 调用**；「不必等一个 1B 模型」这句话因此不成立，因为能等的只有本地的那些。而那个本地程序**现在装好并实测过了**：`tools/install_llama.sh`（llama.cpp `b11617`）+ `/mnt/d/models/qwen2.5-7b-instruct-q3_k_m.gguf`，冷加载 ~93 秒、一次 8 token 调用 ~187 秒，回答是通顺的中文。
 
 **这不是退让，是把一个不可验证的前提换成可验证的前提。**
 外部那半今天就能跑出真实数字；本地那半需要先复现，才配进入设计依据。

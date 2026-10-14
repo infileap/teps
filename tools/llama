@@ -1,0 +1,13 @@
+#!/bin/sh
+# 项目内自包含的本地模型运行时包装器。
+#
+# 与 tools/go 同一个理由：运行时落在项目内、可整体搬走，且版本钉死。
+# 用法：tools/llama -m <模型.gguf> -p '提示' -n 64
+set -e
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+bin="$root/.toolchain/llama/llama-cli"
+if [ ! -x "$bin" ]; then
+    echo "tools/llama: 运行时不存在。先跑 tools/install_llama.sh" >&2
+    exit 1
+fi
+exec "$bin" "$@"
