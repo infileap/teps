@@ -40,6 +40,7 @@ run check_frames.py   python3 tools/check_frames.py
 run check_organs.py   python3 tools/check_organs.py
 run check_assertions.py python3 tools/check_assertions.py
 run check_nomodel.py  python3 tools/check_nomodel.py
+run check_clients.py python3 tools/check_clients.py
 
 echo
 echo "—— 测试 ——"
@@ -55,12 +56,19 @@ run "go test ./..." bash -c '
 echo
 # ★ 自检：守卫必须能失败。
 # 一台永远绿的守卫与一台从来没跑过的守卫，输出一模一样。
-if TEPS_NOMODEL_SELF_TEST=1 python3 tools/check_nomodel.py >/dev/null 2>&1; then
-  printf '  FAIL  %-22s 注入违规之后它仍然说通过 —— 这台守卫是绿的机器\n' "守卫自检"
-  fails=$((fails + 1))
-else
-  printf '  ok    %-22s 注入违规之后它红了\n' "守卫自检"
-fi
+# ★ 每一台**带自检**的守卫各检一次，不是只检一台：
+# 一个只验第一台的自检循环，会让第二台的自检永远不被跑 ——
+# 而它坏掉的样子与「通过」一模一样（它什么都不打印）。
+selfcheck() { # selfcheck <名字> <自检命令>
+  if eval "$2" >/dev/null 2>&1; then
+    printf '  FAIL  %-22s 注入违规之后它仍然说通过 —— 这台守卫是绿的机器\n' "$1"
+    fails=$((fails + 1))
+  else
+    printf '  ok    %-22s 注入违规之后它红了\n' "$1"
+  fi
+}
+selfcheck "守卫自检 nomodel"  "TEPS_NOMODEL_SELF_TEST=1 python3 tools/check_nomodel.py"
+selfcheck "守卫自检 clients" "TEPS_CLIENTS_SELF_TEST=1 python3 tools/check_clients.py"
 
 echo
 if [ "$fails" -eq 0 ]; then

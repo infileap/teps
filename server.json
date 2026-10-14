@@ -1,0 +1,39 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.infileap/teps",
+  "title": "TEPS",
+  "description": "A host-independent microkernel with a set of organs behind one protocol. The kernel owns integrity, not truth; every refusal is a value with a retry flag, and the whole chain is replayable.",
+  "version": "0.1.0",
+  "websiteUrl": "https://github.com/infileap/teps",
+  "repository": {
+    "url": "https://github.com/infileap/teps",
+    "source": "github"
+  },
+  "_meta": {
+    "io.github.infileap/teps": {
+      "sourceBuilt": true,
+      "note": "There is no published package: TEPS is built from source with the Go toolchain vendored inside this repository (tools/install_go.sh). This file therefore declares the server's identity and transport, and docs/CLIENTS.md carries the exact launch command. A package entry here would name a registry that does not hold this project, which is the 'looks like it worked' failure in manifest form.",
+      "kernelProtocolVersion": 1,
+      "adapterVersion": "0.1.0",
+      "launch": {
+        "build": [
+          "tools/install_go.sh",
+          "tools/go build -o .out/teps-shell ./adapters/shell",
+          "tools/go build -o .out/teps-mcp ./adapters/mcp"
+        ],
+        "run": ".out/teps-mcp -child .out/teps-shell -dir .out/chain"
+      }
+    }
+  },
+  "packages": [
+    {
+      "registryType": "github",
+      "identifier": "infileap/teps",
+      "version": "0.1.0",
+      "runtimeHint": "go",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
