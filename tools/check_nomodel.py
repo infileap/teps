@@ -142,18 +142,31 @@ def boundary_selftest():
 
     两侧都要有：引擎里的模型调用**必须**被选中；同一段文本放在内容目录里
     **必须**不被选中。只测一侧的边界与没有边界在观察上一样。
+
+    ★ 它**报出自己跑了几条探针**，而不是只在失败时说话。
+
+    为什么：一个只在失败时说话的检查，与一个**被删掉的**检查，输出完全一样
+    ——两者都什么都不打印。本项目在 `check_all.sh` 里已经为同一件事栽过一次
+    （「一个只验第一台的自检循环会让第二台的自检永远不被跑，而它坏掉的样子与
+    「通过」一模一样：它什么都不打印」）。所以这里的计数是承重的：
+    删掉任一侧的探针，这个数会变小。
     """
     out = []
     probe = 'import "github.com/sashabaranov/go-openai"'
     in_engine = "core/probe.go" in _select(["core/probe.go"])
     in_content = "examples/probe.go" in _select(["examples/probe.go"])
+    probes = 0
+    probes += 1
     if not in_engine:
         out.append("SELF-TEST  引擎里的文件没被选中：那这条守卫什么都没守")
+    probes += 1
     if in_content:
         out.append("SELF-TEST  内容目录里的文件被选中了："
                    "那一个正当的模型载荷会被当成依赖拒掉")
+    probes += 1
     if not scan(probe):
         out.append("SELF-TEST  引擎里的一处模型调用没被抓到")
+    print(f"自检：边界 {probes} 条探针（引擎侧必须选中、内容侧必须不选中、违规必须被抓到）。")
     return out
 
 
