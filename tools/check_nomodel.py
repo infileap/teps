@@ -62,8 +62,25 @@ ALLOWED_HTTP = [
 ]
 
 
-def project_files():
-    """项目自己的 Go 文件（不含 .toolchain，不含测试）。
+# ★ 边界是一个决定，不是一件事后观察到的巧合。
+#
+# 这条规则守的是「**引擎不依赖模型**」，不是「这个仓库里任何 Go 文件都不许
+# 提到模型」。两件事今天恰好落在同一批文件上，所以第一版写成 `git ls-files
+# '*.go'` 也能过——而它过掉的是**另一条规则**，只是那条规则今天还没有反例。
+#
+# 反例迟早会来，而且会是**正当**的：这个项目的论点就是「模型是一个技能，
+# 不是依赖」。于是一个真的模型载荷**应该**可以调模型，而它多半是一个脚本。
+# 按扩展名划界，会一边放它过去（`.sh` 不被扫），一边把同样正当的 Go 载荷
+# 拒掉（`.go` 被扫）——**两个方向都错，而错误的样子都是「通过」或「红」。**
+#
+# 所以边界按**角色**划：引擎是 `core/ organs/ adapters/ store/ evidence/`，
+# 内容不是。
+ENGINE_DIRS = ("core/", "organs/", "adapters/", "store/", "evidence/")
+CONTENT_DIRS = ("examples/", ".agents/", "tools/", "docs/")
+
+
+def engine_files():
+    """引擎自己的 Go 文件（不含 .toolchain，不含测试）。
 
     用 `git ls-files` 而不是遍历目录：未跟踪的文件不在这个仓库的承诺里，
     而守卫守的是承诺。这和本仓库其它守卫是同一条纪律。
@@ -73,8 +90,22 @@ def project_files():
     ).stdout.split()
     return [
         f for f in out
-        if not f.startswith(".toolchain/") and not f.endswith("_test.go")
+        if f.startswith(ENGINE_DIRS) and not f.endswith("_test.go")
     ]
+
+
+def scanned_summary(files):
+    """★ 一个数要带分母。
+
+    「0 处模型调用」如果不说清扫了什么，读的人分不出这两种情况：
+    整个仓库干净，还是**这台守卫只看了它恰好选中的那几个文件**。
+    本项目的度量那一条早就写过：一个没有分母的数不是一个很小的数，
+    它是一个不存在的数。
+    """
+    dirs = sorted({f.split("/")[0] + "/" for f in files})
+    skipped = [d for d in CONTENT_DIRS if not any(f.startswith(d) for f in files)]
+    return ("扫了 %d 个引擎文件（%s）；没扫 %s —— 那些是内容，不是引擎"
+            % (len(files), " ".join(dirs), " ".join(skipped)))
 
 
 def scan(text):
@@ -106,10 +137,35 @@ def http_uses(text):
     return left
 
 
+def boundary_selftest():
+    """证明边界是它说的那条，而不是「今天恰好没反例」。
+
+    两侧都要有：引擎里的模型调用**必须**被选中；同一段文本放在内容目录里
+    **必须**不被选中。只测一侧的边界与没有边界在观察上一样。
+    """
+    out = []
+    probe = 'import "github.com/sashabaranov/go-openai"'
+    in_engine = "core/probe.go" in _select(["core/probe.go"])
+    in_content = "examples/probe.go" in _select(["examples/probe.go"])
+    if not in_engine:
+        out.append("SELF-TEST  引擎里的文件没被选中：那这条守卫什么都没守")
+    if in_content:
+        out.append("SELF-TEST  内容目录里的文件被选中了："
+                   "那一个正当的模型载荷会被当成依赖拒掉")
+    if not scan(probe):
+        out.append("SELF-TEST  引擎里的一处模型调用没被抓到")
+    return out
+
+
+def _select(paths):
+    return [f for f in paths
+            if f.startswith(ENGINE_DIRS) and not f.endswith("_test.go")]
+
+
 def main():
-    files = project_files()
+    files = engine_files()
     if not files:
-        print("没有扫到任何项目文件：通过是平凡的真，不构成证据。")
+        print("没有扫到任何引擎文件：通过是平凡的真，不构成证据。")
         return 1
 
     problems = []
@@ -163,9 +219,10 @@ def main():
         # 而 `check_all.sh` 的自检项读到「注入违规之后它仍然说通过」。
         #
         # 两半都要有：模式那一半证明「它还看得见」，这一半证明「看见了会红」。
+        problems += boundary_selftest()
         problems.append("SELF-TEST  注入的违规（这一条必须让它退出 1）")
 
-    print(f"扫了 {len(files)} 个项目文件（不含 .toolchain 与 _test.go）。")
+    print(scanned_summary(files))
     if problems:
         print("\n这些地方会调用模型、或者会出站：")
         for p in problems:
