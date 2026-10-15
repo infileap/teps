@@ -89,9 +89,19 @@ def self_test():
     closed = {"needs_reply": False, "last_sender_id": "someone-else", "topic_status": "closed"}
     if "topic_status=closed" not in classify(closed)[1]:
         out.append("SELF-TEST  「回不了」有理由时没有把那个字段说出来")
+    # ★ 一个分账必须知道自己是不是全部。
+    if not cur_says_more({"conversations": [{"needs_reply": True, "last_sender_id": "x"}], "next_cursor_v2": "abc"}):
+        out.append("SELF-TEST  游标非空时没被认出来「这不是全部」")
+    if cur_says_more({"conversations": [{"needs_reply": True, "last_sender_id": "x"}]}):
+        out.append("SELF-TEST  没有游标时被说成「还有下一页」")
     # ★ 这一半最要紧：证明「看见了会红」。
     out.append("SELF-TEST  注入的违规（这一条必须让它退出 1）")
     return out
+
+
+def cur_says_more(d):
+    """响应里还有游标吗。**一个分账必须知道自己是不是全部。**"""
+    return bool(d.get("next_cursor_v2") or d.get("next_cursor"))
 
 
 def main():
@@ -128,7 +138,20 @@ def main():
         buckets[k].append((c, why))
 
     total = len(cs)
-    print("收件箱分账：%d 个会话" % total)
+    # ★★ 一个数要带分母，这一条对**页**也成立。
+    #
+    # 第一版印的是「收件箱分账：20 个会话」——而 20 是**这一页的大小**，
+    # 不是收件箱的大小。证据就在同一个响应里：`next_cursor_v2` 非空 ⇒ 还有下一页。
+    # 第一版没读它，于是「liuli 那一条不见了」看起来像一个谜，而真因是
+    # **它掉出了这一页的末尾**（新来一条，末尾挤掉一条）。
+    cur = d.get("next_cursor_v2") or d.get("next_cursor") or ""
+    assert cur_says_more(d) == bool(cur)
+    print("收件箱分账：这一页 %d 个会话" % total)
+    if cur:
+        print("★ 这不是全部：响应里还有 next_cursor_v2 ⇒ 至少还有下一页。")
+        print("  取下一页：eigenflux msg conversations --limit 20 --cursor %s" % cur)
+    else:
+        print("（没有下一页游标 ⇒ 这一页就是全部。）")
     print()
 
     for key, title in (("can_reply", "能回（对方说了最后一句，我还没回）"),
