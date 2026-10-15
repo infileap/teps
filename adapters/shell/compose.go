@@ -97,13 +97,28 @@ type composeResult struct {
 	Elevation *elevationBody `json:"elevation,omitempty"`
 }
 
-// composeSkillName names a composition in the posterior table.
+// composeSkillName is the **prefix** of a composition's posterior key, not the
+// key.
 //
-// A composition is not published yet, so it has no ref and no identity of its
-// own; its reliability is grouped by shape. That is a real limitation — two
-// different serial compositions share one posterior. It goes away the day a
-// composition can be registered as a skill and get a ref of its own, and it is
-// written down here so that day is not missed.
+// This comment used to say the opposite of what the code does. It read:
+//
+//	"A composition is not published yet, so it has no ref and no identity of
+//	 its own; its reliability is grouped by shape. That is a real limitation —
+//	 two different serial compositions share one posterior. It goes away the
+//	 day a composition can be registered as a skill and get a ref of its own,
+//	 and it is written down here so that day is not missed."
+//
+// The day came and the note stayed. A composition registered as a skill is now
+// grouped by its `skill_id`, and an inline composition by
+// `composeSkillName(op) + ":" + planner.ShapeID(op, children)[:12]` — the hash
+// of the chain's **shape**, so two different serial chains no longer share one
+// posterior. The long note at the call site explains why the identity is built
+// from the children's skill ids rather than their refs.
+//
+// It is left here, corrected, because the failure mode is worth more than the
+// correction: a note that describes a limitation is indistinguishable from a
+// note that describes a live one, and only the code can tell you which. This
+// repository has now paid that tuition ten times.
 func composeSkillName(op string) string { return "compose:" + op }
 
 // handleSkillCompose claims skill.compose.

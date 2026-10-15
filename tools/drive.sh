@@ -1443,6 +1443,72 @@ expect "★★ 能力乘积此刻未定义：可靠性这一项是不同问题�
 expect "★★ 并说清为什么——一个把这件事藏起来的乘积是没人会去查的数" "$r" 'average of different questions'
 
 echo
+echo "—— 一个内联组合的身份是它的形状 ——"
+# ★ composeSkillName 的注释曾经说：「两个不同的串行组合共用一个后验」。
+# 那句话是**真的**——直到代码往前走了而注释没动。现在身份是形状的哈希，
+# 所以这一节要证明两件事，而且**两件都要**：
+#   1. 两个**不同**的形状 ⇒ 两个后验（否则仲裁器把两条链的平均当成一条的性质）
+#   2. 同一个形状跑两次 ⇒ **还是那一个**后验（否则「每次运行都独一无二」，
+#      系统什么也学不到，而它的样子与「学得很好」一模一样）
+shapes() {
+  req '{"t":"arbiter.state","v":1,"body":{}}' | python3 -c '
+import json,sys
+rows = json.load(sys.stdin)["body"]["posteriors"]
+print("\n".join(sorted(r["skill"] for r in rows if r["skill"].startswith("compose:serial:"))))'
+}
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"sh1\",\"body\":{\"attempt\":\"c-shape-a1\",\"task_class\":\"task_exec\",\"composition\":{\"op\":\"serial\",\"children\":[\"$tA\",\"$tB\"]},\"input\":{\"n\":1}}}")
+after1=$(shapes)
+n1=$(printf '%s' "$after1" | grep -c 'compose:serial:' || true)
+
+# ★ 后验的键必须**能从清单重算出来**，而不是另存一份身份。
+# 形状 = sha256(op ‖ 0x00 ‖ 孩子的 skill_id ‖ 0x00 …) 的前 12 位十六进制 ——
+# 与 organs/planner 的 ShapeID 是同一条式子。孩子的 **skill_id** 而不是 ref：
+# ref 会在孩子重新发布时改变，而一个会随重新发布移动的身份就是 ref 键控换个说法。
+want="compose:serial:$(python3 -c '
+import hashlib
+h = hashlib.sha256()
+for part in ("serial", "typ.split", "typ.tag"):
+    h.update(part.encode()); h.update(b"\x00")
+print(h.hexdigest()[:12])')"
+if printf '%s' "$after1" | grep -qF "$want"; then
+  printf '  ok    ★★ 后验的键能从清单重算出来：%s\n' "$want"
+else
+  printf '  FAIL  ★★ 后验里没有那个能从清单重算出来的键 %s\n' "$want"
+  fails=$((fails + 1))
+fi
+
+# ★ 同一个形状再跑一次：**后验表不许变**。
+# 身份要是每次运行都独一无二，系统就永远学不到东西 —— 而它的样子与学得很好一样。
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"sh2\",\"body\":{\"attempt\":\"c-shape-a2\",\"task_class\":\"task_exec\",\"composition\":{\"op\":\"serial\",\"children\":[\"$tA\",\"$tB\"]},\"input\":{\"n\":1}}}")
+after2=$(shapes)
+if [ "$after2" = "$after1" ]; then
+  printf '  ok    ★★ 同一个形状跑第二次：身份**没有**变（每次运行都独一无二的身份不是身份）\n'
+else
+  printf '  FAIL  ★★ 同一个形状跑第二次，后验表变了\n'
+  fails=$((fails + 1))
+fi
+
+# ★ 换一个孩子 ⇒ 换一个形状 ⇒ 必须多出一个后验。
+# 两条链的可靠性被平均成一个数，就是「0.5」既能是「一条链一半时间能用」、
+# 也能是「两条链，一条总行一条总不行」的那个缺陷。
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"sh3\",\"body\":{\"attempt\":\"c-shape-b1\",\"task_class\":\"task_exec\",\"composition\":{\"op\":\"serial\",\"children\":[\"$tC\",\"$tB\"]},\"input\":{\"n\":1}}}")
+after3=$(shapes)
+n3=$(printf '%s' "$after3" | grep -c 'compose:serial:' || true)
+if [ "$n3" -gt "$n1" ]; then
+  printf '  ok    ★★ 换一个孩子 ⇒ 换一个形状 ⇒ 多出一个后验（%s → %s）\n' "$n1" "$n3"
+else
+  printf '  FAIL  ★★ 换了一个孩子的串行组合，后验没有分开（%s → %s）\n' "$n1" "$n3"
+  fails=$((fails + 1))
+fi
+# 形状里不许出现一个每次都变的东西（attempt / 时间戳 / 序号）。
+if printf '%s' "$after3" | grep -qE 'c-shape|attempt'; then
+  printf '  FAIL  ★★ 身份里混进了 attempt 一类每次都变的东西\n'
+  fails=$((fails + 1))
+else
+  printf '  ok    ★★ 身份里只有形状，没有每次都变的东西\n'
+fi
+
+echo
 echo "—— 探针沉默 ≠ 拿到但是空 ——"
 # ★ 两件事的 stdout 都是空字符串。一个只读 stdout 的读者看到的完全一样，
 #   所以判定结果必须不同 —— 那是读者唯一有的东西。
