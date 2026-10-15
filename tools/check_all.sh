@@ -38,6 +38,7 @@ run check_contract.py python3 tools/check_contract.py
 run check_adapters.py python3 tools/check_adapters.py
 run check_frames.py   python3 tools/check_frames.py
 run check_organs.py   python3 tools/check_organs.py
+run check_docs.py     python3 tools/check_docs.py
 run check_assertions.py python3 tools/check_assertions.py
 run check_nomodel.py  python3 tools/check_nomodel.py
 run check_clients.py python3 tools/check_clients.py
@@ -71,6 +72,8 @@ selfcheck() { # selfcheck <名字> <自检命令>
 selfcheck "守卫自检 nomodel"  "TEPS_NOMODEL_SELF_TEST=1 python3 tools/check_nomodel.py"
 selfcheck "守卫自检 clients" "TEPS_CLIENTS_SELF_TEST=1 python3 tools/check_clients.py"
 selfcheck "守卫自检 examples" "TEPS_EXAMPLES_SELF_TEST=1 python3 tools/check_examples.py"
+selfcheck "守卫自检 docs"     "TEPS_DOCS_SELF_TEST=1 python3 tools/check_docs.py"
+selfcheck "守卫自检 organs"   "TEPS_ORGANS_SELF_TEST=1 python3 tools/check_organs.py"
 
 echo
 if [ "$fails" -eq 0 ]; then

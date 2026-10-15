@@ -115,6 +115,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
             check_adapters.py                    翻译器不许 import 内核
             check_frames.py                      帧类型 ↔ 契约不许漂移
             check_organs.py                      器官 ↔ 两份文档的状态表不许漂移
+            check_docs.py                        任何一份 .md 里「做没做」的断言：⬜ 不指向存在的路径 · 状态表只在一处 · ✅ 点名了真实产物
             check_assertions.py                  ★ 断言里的 JSON 值片段不许互相是前缀
             check_nomodel.py                     ★ 自由判据的 AI 那一半：删掉模型还能跑吗
             check_clients.py                     ★ 接入面：server.json / CLIENTS.md / SKILL.md 三份文件对同一件事的说法
@@ -227,6 +228,7 @@ python3 tools/check_contract.py    # 文档与代码的拒绝码不许漂移
 python3 tools/check_adapters.py    # 翻译器不许 import 内核
 python3 tools/check_frames.py      # 帧类型与契约必须一一对上
 python3 tools/check_organs.py      # 器官与两份文档的状态表必须一一对上
+python3 tools/check_docs.py        # ★ 文档里「做没做」的三条断言（从 check_organs.py 分出来的）
 python3 tools/check_assertions.py  # ★ 存在性判据不许冒充一致性判据
 python3 tools/check_nomodel.py
 python3 tools/check_clients.py     # 接入面：三份文件对同一件事的说法
@@ -314,7 +316,7 @@ bash tools/drive.sh   # 找那一行：技能腐烂后第 N 次失败起被自�
 | `store` 的双门一致性测试 | 同一事实被两道门判成两个码 | 把 `Validate` 改回 `bad_request` → `one fact, two codes` |
 | `organs/arbiter` 的证伪点 | 「系统自己发现」变成一句声称 | 8 个变异（去掉遗忘、去掉探索、去掉 margin、毒化概率）全部被抓住 |
 | `organs/executor` 的四条纪律 | 执行者自证、判不了默认成功、无时限也放行 | 4 个变异全部被抓住（各 1–6 条 FAIL） |
-| `check_organs.py` 的方向五 | 「✅ 已做」在证据消失之后不会自己变红 | **判据不能是「守卫变红」**——把一条检查删掉，它当然不会变红。判据是：删掉这条检查 **并且** 注入它本该抓住的那个违规 ⇒ 守卫**漏网**。漏网证明了它是唯一抓住它的东西。3/3 是行为证据（有它则红、删它则漏） |
+| `check_docs.py` 的规则 3（原 `check_organs.py` 的方向五）| 「✅ 已做」在证据消失之后不会自己变红 | **判据不能是「守卫变红」**——把一条检查删掉，它当然不会变红。判据是：删掉这条检查 **并且** 注入它本该抓住的那个违规 ⇒ 守卫**漏网**。漏网证明了它是唯一抓住它的东西。3/3 是行为证据（有它则红、删它则漏） |
 
 ★★ **「把一条检查删掉」这一类变异的判据**：不能是「守卫变红」。
 **一个只在失败时说话的检查，与一个被删掉的检查，输出完全一样。**
