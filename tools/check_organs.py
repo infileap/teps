@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""器官守卫：organs/<x>/、两份文档的状态表、以及 ⬜ 的断言必须与代码一致。
+"""器官守卫：organs/<x>/、两份文档的状态表、以及「做没做」的断言必须与代码一致。
 
 规则
 ----
 1. `organs/` 下每一个含 .go 的目录，都必须在 `organs/README.md` 里被写到，
    并且在根 `README.md` 里被写到。
 2. 两份文档里出现的 `organs/<x>/` 或 `<x>/`（反引号内），都必须真的有那个目录。
+3. **`⬜` 的断言不许指向一个真实存在的路径** —— 一句「还没做」在功能落地之后
+   不会自己变红。
+4. 实现状态表只许有一处（README.md）。
+5. ★ **`✅` 的断言必须点名一个真实存在的产物**（只在「本地复现」那一格上）——
+   方向三的反面。**一句「已做」在证据消失之后也不会自己变红**：删掉那个例子、
+   重命名那个脚本、把那个能力撤回去，都不会让 ✅ 变成别的字。
 
 为什么这是一条结构性规则
 ------------------------
@@ -150,6 +156,31 @@ def main():
             if cells[0].endswith("实现"):
                 problems.append(
                     f"{rel}:{i} 在维护一份实现状态表：状态只许有一处（README.md）")
+
+    # 方向五：✅ 的断言必须点名一个真实存在的产物。
+    #
+    # 方向三管的是「⬜ 未做」在功能落地之后留很久。**反面一样要守**：
+    # 一句「✅ 已做」在证据消失之后也会原封不动地留很久 ——
+    # 删除一个例子、重命名一个脚本、把某个能力撤回去，都不会让那句 ✅ 变红。
+    #
+    # 判据是：**「本地复现」这一格里的 ✅ 必须点名至少一个存在的路径。**
+    # 只在这一格上，因为它是唯一一格在声明「有东西可以被跑」。
+    for doc in docs:
+        rel = os.path.relpath(doc, ROOT)
+        for i, line in enumerate(read(doc).splitlines(), 1):
+            if not (line.startswith("|") and "本地复现" in line and "✅" in line):
+                continue
+            named = [t for t in PATH_RE.findall(line)
+                     if ("/" in t) or t.endswith((".go", ".py", ".sh", ".md"))]
+            if not named:
+                problems.append(
+                    f"{rel}:{i} 说本地复现已做，却没有点名任何产物："
+                    f"一个没有产物的 ✅ 与一个 ⬜ 一样不可核")
+                continue
+            missing = [t for t in named if not os.path.exists(os.path.join(ROOT, t.rstrip("/")))]
+            if missing:
+                problems.append(
+                    f"{rel}:{i} 说本地复现已做，但它点名的 {'、'.join(missing)} 不存在")
 
     if problems:
         print(f"器官守卫：{len(problems)} 处不一致")
