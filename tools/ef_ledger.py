@@ -51,6 +51,21 @@ import sys
 ME = "367258391388618752"  # Teps
 
 
+def merge_docs(docs):
+    """把几页合成一个按 `conv_id` 去重的并集。
+
+    ★ 去重不是锦上添花：服务端在翻页之间动过，同一个会话可以出现在两页里，
+    而**同一个会话数两次会让分账比收件箱大**——那种错看起来只是数字偏大。
+    """
+    seen = {}
+    for d in docs:
+        for c in d.get("conversations") or []:
+            cid = c.get("conv_id")
+            if cid:
+                seen[cid] = c
+    return seen
+
+
 def classify(c):
     """把一条会话放进三类之一。判据只看服务端字段。"""
     if c.get("needs_reply"):
@@ -100,8 +115,27 @@ def self_test():
     #   第一版的回退把它读成了「还有」——一条回退就是一处会漂移的判据。
     if cur_says_more({"conversations": [], "next_cursor": "0", "next_cursor_v2": ""}):
         out.append("SELF-TEST  取完的那一页（next_cursor 是哨兵 \"0\"）被读成了「还有」")
+    # ★★ 而**哨兵那一支只在 `next_cursor_v2` 这个键不存在时才走到**。
+    #   上面那个样本带着 `next_cursor_v2: ""`，所以在 v2 那一支就返回了 ——
+    #   把 `"0"` 从 STOP_SENTINELS 里删掉，上面那条**照样通过**（我实测过）。
+    #   **一个样本必须打到规则所在的那一支**，否则它验的是另一条分支。
+    if cur_says_more({"conversations": [], "next_cursor": "0"}):
+        out.append("SELF-TEST  没有 v2 键、遗留游标是哨兵 \"0\" 时被读成了「还有」")
     if not cur_says_more({"conversations": [], "next_cursor": "1791635754373"}):
         out.append("SELF-TEST  没有 v2 键而遗留游标是真游标时，没被认出来")
+    # ★ 合并必须**去重**，而这一点只能用**有重叠的两页**证明。
+    #   实测那三页彼此没有重叠，所以「不去重」在那份数据上**观察不到**——
+    #   一个在手上数据里观察不到的判据，等于没验过。
+    got = merge_docs([
+        {"conversations": [{"conv_id": "a", "needs_reply": True, "last_sender_id": "x"},
+                           {"conv_id": "b", "needs_reply": True, "last_sender_id": "x"}]},
+        {"conversations": [{"conv_id": "b", "needs_reply": True, "last_sender_id": "x"},
+                           {"conv_id": "c", "needs_reply": True, "last_sender_id": "x"}]},
+    ])
+    if len(got) != 3:
+        out.append("SELF-TEST  重叠的两页没有去重：拿到 %d 个会话（要 3）" % len(got))
+    if len(merge_docs([{"conversations": []}])) != 0:
+        out.append("SELF-TEST  空页被合并出了会话")
     if cur_says_more({"conversations": [{"needs_reply": True, "last_sender_id": "x"}]}):
         out.append("SELF-TEST  没有游标时被说成「还有下一页」")
     # ★ 这一半最要紧：证明「看见了会红」。
@@ -178,13 +212,9 @@ def main():
         if not isinstance(cs, list):
             print("输入里没有 conversations 数组。", file=sys.stderr)
             return 1
-        if not cs:
-            continue
-        pages += 1
-        for c in cs:
-            cid = c.get("conv_id")
-            if cid:
-                seen[cid] = c
+        if cs:
+            pages += 1
+    seen = merge_docs(docs)
     if not seen:
         # ★ 一个空的分账与一个没取到数的分账，输出必须不同。
         print("conversations 是空的 —— 这不是「没有待办」，这是「没取到数」。")
