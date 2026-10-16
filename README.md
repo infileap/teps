@@ -120,6 +120,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
             check_nomodel.py                     ★ 自由判据的 AI 那一半：删掉模型还能跑吗
             check_clients.py                     ★ 接入面：server.json / CLIENTS.md / SKILL.md 三份文件对同一件事的说法
             check_examples.py                    ★ 成对的负控：只有 failed 算被驳倒，其余三种各说清在证明什么
+            ef_ledger.py                         ★ 收件箱分账：能回 / 等对方 / 回不了，且**不从前缀里猜**
             check_all.sh                         ★ 上面这些的唯一入口（含守卫自检）
             check_format.sh                      gofmt 干净，别让 diff 里混进重排
             drive.sh                             ★ 自由判据：只有 curl 驱动全流程

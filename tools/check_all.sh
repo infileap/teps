@@ -72,6 +72,7 @@ selfcheck() { # selfcheck <名字> <自检命令>
 selfcheck "守卫自检 nomodel"  "TEPS_NOMODEL_SELF_TEST=1 python3 tools/check_nomodel.py"
 selfcheck "守卫自检 clients" "TEPS_CLIENTS_SELF_TEST=1 python3 tools/check_clients.py"
 selfcheck "守卫自检 examples" "TEPS_EXAMPLES_SELF_TEST=1 python3 tools/check_examples.py"
+selfcheck "守卫自检 收件箱分账" "TEPS_EF_LEDGER_SELF_TEST=1 python3 tools/ef_ledger.py"
 selfcheck "守卫自检 docs"     "TEPS_DOCS_SELF_TEST=1 python3 tools/check_docs.py"
 selfcheck "守卫自检 organs"   "TEPS_ORGANS_SELF_TEST=1 python3 tools/check_organs.py"
 
