@@ -1911,6 +1911,13 @@ expect "★ 它自报协议版本" "$r" '"protocol"'
 # ★ 最要紧的一条：**ops 报的每一个族，分派都真的认领**。
 # 这一条不能靠"ops 里出现了 X"来断言 —— 那是存在性判据。
 # 要从 ops 的回答里取出全部族，逐个发一帧，看内核认不认。
+#
+# ★★ 这条**验的是什么，要说清楚**：它验的是「分派匹配上了这个前缀」。
+# 它**不**验「这一族里有东西」—— 一个幽灵族照样匹配前缀，然后什么也不认，
+# 而这一行照样绿。实测：往表里注入 {Prefix: "teleport.", Handle: s.handleSession}
+# 之后，这一行报「18 个」全绿，而 ops 正在宣传一个对什么都答 unknown 的族。
+# 半个判据不在这里：在 tools/check_frames.py 的 check_claims_are_inhabited()。
+# 一条只验一半、却读起来像验了全部的断言，比没有这条断言更糟。
 printf '%s' "$r" | jfamilies > "$tmp/opsfamilies"
 n=0
 while read -r t; do
