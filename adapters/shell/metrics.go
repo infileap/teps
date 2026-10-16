@@ -69,6 +69,7 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 
 	s.decisions.lock()
 	tbl := s.decisions.table()
+	undecayed := s.decisions.undecayedTable()
 	rules := arbiter.RulesOf(s.decisions.obs)
 	mixed := mixedSkills(rules)
 	observations := len(s.decisions.obs)
@@ -126,9 +127,19 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 		}
 		reliability["defined"] = true
 		reliability["mean"] = round(sum / float64(len(tbl)))
-		// 同一批记录的两个读数：一个折过，一个没折。
+		// ★★★ 三个量、三个名字。
+		//
+		// 此前 `decay_gap = mean − raw_rate`，而 `mean` 是**按行不加权**的
+		// 衰减后平均、`raw_rate` 是**按观测加权**的成功率。那个差因此把
+		// 三件事混在一起：① 衰减 ② 加权方式 ③ Beta(1,1) 先验把低观测数的
+		// 行拉向 0.5。而名字只说 decay。
+		//
+		// 实测（一个技能观测 1 次成功、另一个观测 9 次失败）：
+		// mean 0.3762 · raw_rate 0.1 · 旧 decay_gap **+0.2762** —— 正的，
+		// 而衰减只会把一行拉向先验。现在 decay_gap 是同一批记录折两次之差。
+		reliability["mean_undecayed"] = round(meanOf(undecayed))
 		reliability["raw_rate"] = round(rawRate(successes, observations))
-		reliability["decay_gap"] = round(sum/float64(len(tbl)) - rawRate(successes, observations))
+		reliability["decay_gap"] = round(sum/float64(len(tbl)) - meanOf(undecayed))
 		// The weakest link is the number that matters for a product: a chain is
 		// as reliable as its worst step, and an average hides exactly that.
 		reliability["weakest"] = round(weakest)

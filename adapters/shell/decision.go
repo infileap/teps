@@ -108,6 +108,21 @@ func (st *decisionStore) table() arbiter.Table {
 	return arbiter.Fold(st.obs, arbiter.DefaultDecay)
 }
 
+// undecayedTable folds the **same** observations with no forgetting at all.
+//
+// It exists so that "how much did the decay move this number" can be answered
+// by subtraction of two folds of one record set. Folding a decayed table against
+// a success rate computed over observations is not that subtraction: the first
+// averages over **rows**, the second weights by **observations**, so the
+// difference also carries the weighting and the Beta(1,1) prior.
+//
+// Measured: one skill observed once (succeeded) and another observed nine times
+// (failed) gives mean 0.3762, raw_rate 0.1, and a "decay gap" of **+0.2762** —
+// positive, while decay can only pull a row toward the prior.
+func (st *decisionStore) undecayedTable() arbiter.Table {
+	return arbiter.Fold(st.obs, 1)
+}
+
 func (st *decisionStore) append(rec executionRecord, key string) (core.Entry, *core.Refusal) {
 	canon, ref := core.Canonical(mustJSON(rec))
 	if ref != nil {
@@ -426,6 +441,7 @@ func (s *server) arbiterState(f core.Frame, out *core.Frame) {
 	}
 	s.decisions.lock()
 	tbl := s.decisions.table()
+	undecayed := s.decisions.undecayedTable()
 	// rules 与 tbl 出自**同一个切片**，所以它们不可能描述不同的观测集合。
 	rules := arbiter.RulesOf(s.decisions.obs)
 	open := len(s.decisions.open)
@@ -435,19 +451,28 @@ func (s *server) arbiterState(f core.Frame, out *core.Frame) {
 	if body.Skill != "" && body.TaskClass != "" {
 		k := arbiter.Key{Skill: body.Skill, TaskClass: body.TaskClass}
 		p := tbl.Get(k)
+		pRaw := undecayed.Get(k)
 		out.Body = mustJSON(map[string]any{
 			"skill": body.Skill, "task_class": body.TaskClass,
 			"alpha": round(p.Alpha), "beta": round(p.Beta),
 			"mean": round(p.Mean()), "upper": round(p.UpperBound()),
 			"rules": rules[k], "mixed": len(rules[k]) > 1,
 			"observations": n, "open": open, "spent": round(spent),
-			// ★ 后验的 mean 与原始成功率是**同一批记录的两个读数**。
+			// ★★★ 三个量、三个名字。
 			//
-			// mean 是带遗忘折出来的（DefaultDecay = 0.98），raw 是不折的。
-			// 两者不同是设计使然——遗忘是故意的。但在此之前**没有任何地方
-			// 报过这个差**，于是「这个数是折过的」这句话只活在注释里。
-			"raw_rate":  round(rawRate(s.decisions.ok, n)),
-			"decay_gap": round(p.Mean() - rawRate(s.decisions.ok, n)),
+			// `mean` 是带遗忘折出来的（DefaultDecay = 0.98）。
+			// `mean_undecayed` 是**同一批记录**不折折出来的。
+			// `decay_gap` 是**这两个之差**——于是它真的是衰减造成的那个差。
+			//
+			// 此前 `decay_gap = mean − raw_rate`，而 `raw_rate` 是
+			// **按观测加权**的成功率，`mean` 是**按行不加权**的平均。
+			// 那个差因此还带着加权方式与 Beta(1,1) 先验，而名字只说 decay。
+			// 实测：一个技能观测 1 次（成功）、另一个观测 9 次（失败）⇒
+			// mean 0.3762、raw_rate 0.1、旧 decay_gap **+0.2762**（正的，
+			// 而衰减只会把一行拉向先验）。
+			"mean_undecayed": round(pRaw.Mean()),
+			"raw_rate":       round(rawRate(s.decisions.ok, n)),
+			"decay_gap":      round(p.Mean() - pRaw.Mean()),
 		})
 		return
 	}
@@ -463,11 +488,13 @@ func (s *server) arbiterState(f core.Frame, out *core.Frame) {
 		"posteriors": rows, "observations": n, "open": open, "spent": round(spent),
 		"successes": s.decisions.ok,
 		"raw_rate":  round(rawRate(s.decisions.ok, n)),
-		// mean 与 raw_rate 是同一批记录的两个读数：一个折过，一个没折。
-		// 两个都报，decay_gap 才是可算的 —— 只说「这是折过的」等于没说。
-		"mean":         round(meanOf(tbl)),
-		"decay_gap":    round(meanOf(tbl) - rawRate(s.decisions.ok, n)),
-		"mixed_skills": mixedSkills(rules),
+		// ★★★ 三个量、三个名字。`decay_gap` 现在是**同一批记录折两次之差**，
+		// 所以它真的是衰减造成的那个差；此前它是「按行不加权的平均」减
+		// 「按观测加权的率」，那个差还带着加权方式与 Beta(1,1) 先验。
+		"mean":           round(meanOf(tbl)),
+		"mean_undecayed": round(meanOf(undecayed)),
+		"decay_gap":      round(meanOf(tbl) - meanOf(undecayed)),
+		"mixed_skills":   mixedSkills(rules),
 	})
 }
 

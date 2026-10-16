@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"teps/organs/arbiter"
+	"teps/store"
 
 	"teps/core"
 	"teps/organs/pool"
@@ -298,5 +299,177 @@ func TestRawRateWithNoObservationsIsZeroNotNaN(t *testing.T) {
 	}
 	if got := meanOf(arbiter.Table{}); got != 0 {
 		t.Fatalf("an empty table has no mean: got %v", got)
+	}
+}
+
+// ★★★ The decay gap has to be the decay, and only the decay.
+//
+// The old definition was `mean - raw_rate`, where `mean` is an **unweighted
+// average over posterior rows** and `raw_rate` is a **success rate weighted by
+// observations**. That difference therefore also carries the weighting and the
+// Beta(1,1) prior, while the field name claimed it was the decay.
+//
+// The record set below is chosen to pull those two apart: one skill observed
+// once and succeeding, another observed nine times and failing. The row average
+// gives the single observation half the weight; the observation-weighted rate
+// gives it a tenth. So the old number is large and the new one is small — and
+// the old one is **positive**, while decay can only pull a row toward the prior.
+func TestTheDecayGapIsTheDecayAndNotTheWeighting(t *testing.T) {
+	obs := []arbiter.Observation{
+		{Key: arbiter.Key{Skill: "dg.hit", TaskClass: "task_exec"}, OK: true},
+	}
+	for i := 0; i < 9; i++ {
+		obs = append(obs, arbiter.Observation{
+			Key: arbiter.Key{Skill: "dg.miss", TaskClass: "task_exec"}, OK: false,
+		})
+	}
+	decayed := arbiter.Fold(obs, arbiter.DefaultDecay)
+	undecayed := arbiter.Fold(obs, 1)
+
+	mean, mu := meanOf(decayed), meanOf(undecayed)
+	successes := 0
+	for _, o := range obs {
+		if o.OK {
+			successes++
+		}
+	}
+	raw := rawRate(successes, len(obs))
+
+	// The identity the field now claims: the gap is the two folds' difference.
+	if got, want := mean-mu, meanOf(decayed)-meanOf(undecayed); got != want {
+		t.Fatalf("decay_gap must be mean - mean_undecayed: got %v want %v", got, want)
+	}
+	// And it must differ from the old definition by a lot on this record set.
+	oldStyle := mean - raw
+	newStyle := mean - mu
+	if oldStyle-newStyle < 0.2 {
+		t.Fatalf("this record set does not pull the two definitions apart: "+
+			"old=%v new=%v (mean=%v mean_undecayed=%v raw=%v)",
+			oldStyle, newStyle, mean, mu, raw)
+	}
+	if oldStyle <= 0 {
+		t.Fatalf("the old definition should be positive here (the weighting "+
+			"lifts it), got %v", oldStyle)
+	}
+	// ★ And the new one must be small: the decay is genuinely tiny on 10 records.
+	if newStyle > 0.05 || newStyle < -0.05 {
+		t.Fatalf("the decay's own effect on 10 records should be tiny, got %v", newStyle)
+	}
+}
+
+// ★★★ The handler's own arithmetic, not a re-implementation of it.
+//
+// The first version of the test above called `arbiter.Fold` and `meanOf`
+// directly — so it proved that *those* are right, and said nothing about what
+// `metrics.get` reports. Four mutations of the handler (the gap going back to
+// `mean - raw_rate`, `mean_undecayed` reporting the decayed table, and
+// `undecayedTable` folding with decay) all survived it. A test that rebuilds
+// the thing it is checking checks the rebuild.
+func TestTheMetricsHandlerReportsTheDecayGap(t *testing.T) {
+	s := testServer(t)
+	tsk, ref := newTaskStore(s.log)
+	if ref != nil {
+		t.Fatalf("task store: %s", ref.Reason)
+	}
+	s.tasks = tsk
+	// metrics.get 也会读技能店的目录（accuracy 那一块），所以它不能是 nil。
+	st, err := store.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	s.skills = st
+
+	// One skill observed once and succeeding; another observed nine times and
+	// failing. The row average gives the single observation half the weight.
+	obs := []arbiter.Observation{{Key: arbiter.Key{Skill: "dg.hit", TaskClass: "task_exec"}, OK: true}}
+	for i := 0; i < 9; i++ {
+		obs = append(obs, arbiter.Observation{Key: arbiter.Key{Skill: "dg.miss", TaskClass: "task_exec"}})
+	}
+	s.decisions.obs = obs
+	s.decisions.ok = 1
+
+	out := core.Frame{}
+	s.handleMetrics(core.Frame{T: "metrics.get"}, &out)
+	if out.Err != nil {
+		t.Fatalf("metrics.get refused: %s", out.Err.Reason)
+	}
+	var body struct {
+		Reliability map[string]any `json:"reliability"`
+	}
+	if ref := decodeBody(out.Body, &body); ref != nil {
+		t.Fatalf("decode: %s", ref.Reason)
+	}
+	r := body.Reliability
+	num := func(k string) float64 {
+		v, ok := r[k].(float64)
+		if !ok {
+			t.Fatalf("reliability.%s is missing or not a number: %#v", k, r[k])
+		}
+		return v
+	}
+	mean, mu, raw, gap := num("mean"), num("mean_undecayed"), num("raw_rate"), num("decay_gap")
+
+	sep := mean - mu
+	if sep < 0 {
+		sep = -sep
+	}
+	if sep < 1e-4 {
+		t.Fatalf("this record set does not separate the two folds: mean=%v mean_undecayed=%v", mean, mu)
+	}
+	if d := gap - (mean - mu); d > 1e-4 || d < -1e-4 {
+		t.Fatalf("decay_gap must be mean - mean_undecayed: gap=%v mean=%v mean_undecayed=%v", gap, mean, mu)
+	}
+	old := (mean - raw) - gap
+	if old < 0 {
+		old = -old
+	}
+	if old < 0.2 {
+		t.Fatalf("the old definition and the new one coincide here (old=%v new=%v): "+
+			"this test cannot tell them apart", mean-raw, gap)
+	}
+}
+
+// And the same three quantities on `arbiter.state`'s per-skill branch.
+//
+// That branch reports `decay_gap` for one key rather than for the table, and it
+// had its own copy of the old formula — so a mutation reverting only that one
+// survived the handler test above. Two call sites, two tests; a test on one of
+// them says nothing about the other.
+func TestArbiterStateReportsTheDecayGapForOneKey(t *testing.T) {
+	s := testServer(t)
+	obs := []arbiter.Observation{{Key: arbiter.Key{Skill: "dg.hit", TaskClass: "task_exec"}, OK: true}}
+	for i := 0; i < 9; i++ {
+		obs = append(obs, arbiter.Observation{Key: arbiter.Key{Skill: "dg.miss", TaskClass: "task_exec"}})
+	}
+	s.decisions.obs = obs
+	s.decisions.ok = 1
+
+	out := core.Frame{}
+	s.handleDecision(core.Frame{
+		T:    "arbiter.state",
+		Body: []byte(`{"skill":"dg.hit","task_class":"task_exec"}`),
+	}, &out)
+	if out.Err != nil {
+		t.Fatalf("arbiter.state refused: %s", out.Err.Reason)
+	}
+	var body struct {
+		Mean          float64 `json:"mean"`
+		MeanUndecayed float64 `json:"mean_undecayed"`
+		RawRate       float64 `json:"raw_rate"`
+		DecayGap      float64 `json:"decay_gap"`
+	}
+	if ref := decodeBody(out.Body, &body); ref != nil {
+		t.Fatalf("decode: %s", ref.Reason)
+	}
+	if d := body.DecayGap - (body.Mean - body.MeanUndecayed); d > 1e-4 || d < -1e-4 {
+		t.Fatalf("decay_gap must be mean - mean_undecayed: gap=%v mean=%v mean_undecayed=%v",
+			body.DecayGap, body.Mean, body.MeanUndecayed)
+	}
+	if d := body.MeanUndecayed - body.Mean; d > -1e-6 && d < 1e-6 {
+		t.Fatalf("the two folds coincide here, so the check above proves nothing")
+	}
+	if d := (body.Mean - body.RawRate) - body.DecayGap; d < 0.2 && d > -0.2 {
+		t.Fatalf("the old definition and the new one coincide here (old=%v new=%v)",
+			body.Mean-body.RawRate, body.DecayGap)
 	}
 }

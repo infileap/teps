@@ -1368,8 +1368,16 @@ r2=$(req '{"t":"arbiter.state","v":1,"body":{}}')
 chk=$(python3 -c '
 import json,sys
 b=json.load(sys.stdin)["body"]
-n=b["observations"]; ok=b["successes"]; raw=b["raw_rate"]; mean=b["mean"]; gap=b["decay_gap"]
-print("ok" if n and abs(raw-ok/n)<1e-4 and abs(gap-(mean-raw))<1e-4 else f"BAD n={n} ok={ok} raw={raw} mean={mean} gap={gap}")
+n=b["observations"]; ok=b["successes"]; raw=b["raw_rate"]
+mean=b["mean"]; mu=b.get("mean_undecayed"); gap=b["decay_gap"]
+# ★★★ 三个量、三个名字，三条各自的判据。
+#   raw 是按观测加权的成功率；mean 与 mean_undecayed 是同一批记录折两次；
+#   gap 是**那两个之差**。此前 gap = mean − raw，那个差还带着加权方式与先验。
+bad=[]
+if not n or abs(raw-ok/n)>1e-4: bad.append("raw != ok/n")
+if mu is None: bad.append("没有 mean_undecayed")
+elif abs(gap-(mean-mu))>1e-4: bad.append("gap != mean - mean_undecayed")
+print("ok" if not bad else "BAD " + "; ".join(bad) + f" n={n} ok={ok} raw={raw} mean={mean} mu={mu} gap={gap}")
 ' 2>&1 <<<"$r2")
 # ★ 同一个数在两处必须是同一个数：metrics 与 arbiter.state 各报一次 raw_rate，
 #   而两条路径各自算一遍 —— 只断言「它出现过」正是「存在性判据冒充一致性判据」。
@@ -1400,7 +1408,8 @@ else
   fails=$((fails + 1))
 fi
 if [ "$chk" = "ok" ]; then
-  printf '  ok    ★★ 两个读数出自同一批记录：raw = ok/n，且 decay_gap = mean − raw\n'
+  printf '  ok    ★★ 三个量三条判据：raw = ok/n · decay_gap = mean − mean_undecayed\n'
+
 else
   printf '  FAIL  ★★ 两个读数对不上：%s\n' "$chk"
   fails=$((fails + 1))
