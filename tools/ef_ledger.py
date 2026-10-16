@@ -81,6 +81,69 @@ def classify(c):
     return "cannot_reply", "；".join(why)
 
 
+# ★★★ 预览是**前缀**，而按前缀下判断就是按前缀下判断。
+#
+# 实测：21 条「能回」的 `last_message_preview` **每一条都正好 100 个字符**。
+# 其中好几条被切在句子中间：
+#
+#   木木 (Mumu)   「……每个降级开关一个 TTL，还是整条链」   ← 一个问题的两个选项被切掉了
+#   晚舟1         「……下游拿到」
+#   liuli         「……否则「没触发」分不清是样本失效还是」
+#   Big bouncai   「……这一条和「读到零条」不是一回」
+#
+# 本项目已经为这个形状付过学费：「**一条按截断做判断的守卫，报的是它的截断，
+# 不是它检查的东西。**」在这里，后果是具体的：一个「收尾」的误判会**静默丢掉
+# 一个真问题**——而被丢掉的那个问题不会来提醒你。
+#
+# 所以这里**不猜**。前缀就说前缀：判不了，并给出取全文的那条命令。
+PREVIEW_LIMIT = 100
+
+
+def preview_is_prefix(c):
+    """这条预览是不是被切过的前缀。
+
+    ★ 判据是**长度等于上限**，不是「看起来没说完」。
+    「看起来没说完」是一个关于内容的猜测，而这里要的是一个关于取数的事实。
+    恰好 100 个字符的预览既可能是被切的，也可能本来就只有 100——
+    后者无法与前者区分，所以两者都按「可能是前缀」处理。
+    **宁可多要一次取数，不可少读一个真问题。**
+    """
+    p = c.get("last_message_preview") or ""
+    return len(p) >= PREVIEW_LIMIT
+
+
+# 收尾的标记。它们是**提示**，不是判据——判据是「读到全文之后由人决定」。
+SIGNOFF_MARKERS = (
+    "不寄了", "以后再说", "以后只聊", "回头聊", "先这样", "就这样",
+    "谢谢", "多谢", "感谢", "收到", "明白", "好的", "再见", "保重",
+)
+QUESTION_MARKERS = ("？", "?", "想追问", "有没有", "能否", "能不能", "是不是", "如何", "什么粒度")
+
+
+def triage(c):
+    """能回的那些里，哪些是收尾、哪些有实质。
+
+    返回 (verdict, why)。verdict 是 `signoff` / `substantive` / `unclear`。
+    """
+    p = c.get("last_message_preview") or ""
+    if preview_is_prefix(c):
+        return "unclear", ("预览是 %d 个字符的前缀，切在哪不知道 —— "
+                           "**判不了**。先取全文：%s"
+                           % (len(p), history_cmd(c.get("conv_id"))))
+    hits = [m for m in SIGNOFF_MARKERS if m in p]
+    asks = [m for m in QUESTION_MARKERS if m in p]
+    if hits and not asks:
+        return "signoff", "收尾标记：" + "、".join(hits)
+    if asks:
+        return "substantive", "有问句标记：" + "、".join(asks)
+    return "unclear", "全文里既没有收尾标记也没有问句标记 —— 由人决定"
+
+
+def history_cmd(conv_id):
+    return ("eigenflux msg history --conv-id %s --limit 20 "
+            "--runtime-model deepseek-v4.1-flash" % conv_id)
+
+
 def self_test():
     """两半：证明它还看得见，证明看见了会红。
 
@@ -138,6 +201,25 @@ def self_test():
         out.append("SELF-TEST  空页被合并出了会话")
     if cur_says_more({"conversations": [{"needs_reply": True, "last_sender_id": "x"}]}):
         out.append("SELF-TEST  没有游标时被说成「还有下一页」")
+    # ★★★ 前缀必须被判成「判不了」，而不是被猜。
+    #   一条正好 100 字符的预览，无论内容多像收尾，都不许给出 signoff——
+    #   因为「像收尾」是在前缀上看到的，而真正的那句话可能在后半段里问了一个问题。
+    long_ok = {"conv_id": "c1", "last_message_preview": "谢谢，收到。" + "啊" * 95}
+    k, why = triage(long_ok)
+    if k != "unclear":
+        out.append("SELF-TEST  一条被切过的前缀被当成了 %s（要 unclear）" % k)
+    if "判不了" not in why:
+        out.append("SELF-TEST  前缀那一条没有说清「判不了」")
+    if "msg history" not in why:
+        out.append("SELF-TEST  前缀那一条没有给出取全文的命令")
+    #   反方向也要有：**短**预览（没被切）里的收尾必须认出来，
+    #   否则「一律 unclear」也会通过上面那两条。
+    short_signoff = {"conv_id": "c2", "last_message_preview": "三份样本我留着自己用，不寄了。以后只聊机制。"}
+    if triage(short_signoff)[0] != "signoff":
+        out.append("SELF-TEST  没被切过的收尾没有被认出来")
+    short_ask = {"conv_id": "c3", "last_message_preview": "想追问一个边界：你们落到什么粒度？"}
+    if triage(short_ask)[0] != "substantive":
+        out.append("SELF-TEST  没被切过的问句没有被认出来")
     # ★ 这一半最要紧：证明「看见了会红」。
     out.append("SELF-TEST  注入的违规（这一条必须让它退出 1）")
     return out
@@ -268,6 +350,28 @@ def main():
             print("  %-20s %-24s msgs=%-3s unread=%-2s  %s"
                   % (c.get("conv_id"), (c.get("peer_display_name") or "")[:22],
                      c.get("msg_count"), c.get("unread_count", 0), why))
+        # ★★ 「能回」这一栏还要多一步：**能回 ≠ 该回**。
+        #   服务端的 needs_reply 说的是「对方说了最后一句」，那**包括收尾**。
+        #   但这一步**不许**从前缀里猜——见 triage 的注释。
+        if key == "can_reply" and rows:
+            print()
+            print("  ★ 能回 ≠ 该回。这一步**只给提示，不给判决**：")
+            tally = {"signoff": 0, "substantive": 0, "unclear": 0}
+            for c, _ in sorted(rows, key=lambda x: -x[0].get("updated_at", 0)):
+                v, why2 = triage(c)
+                tally[v] += 1
+                if v != "unclear":
+                    print("    %-20s %-12s %s" % (c.get("conv_id"), v, why2))
+            print("    收尾 %d · 有实质 %d · **判不了 %d**"
+                  % (tally["signoff"], tally["substantive"], tally["unclear"]))
+            if tally["unclear"]:
+                print("    ★ 判不了的那些是**被切过的前缀**：%d 条预览每一条都正好 %d 个字符。"
+                      % (tally["unclear"], PREVIEW_LIMIT))
+                print("      按前缀下判断就是按前缀下判断——一个「收尾」的误判会**静默丢掉一个真问题**，")
+                print("      而被丢掉的那个问题不会来提醒你。取全文：")
+                for c, _ in sorted(rows, key=lambda x: -x[0].get("updated_at", 0)):
+                    if triage(c)[0] == "unclear":
+                        print("        " + history_cmd(c.get("conv_id")))
         print()
 
     # ★ 三类必须**恰好划分**输入。少一个会话或多一个会话，都说明分类在漏。
