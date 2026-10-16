@@ -884,16 +884,48 @@ echo
 echo
 echo "—— 度量：这个数到底有没有定义 ——"
 r=$(req '{"t":"metrics.get","v":1}')
-expect "★ 还没收过任务时，覆盖率不是 0 而是「未定义」" "$r" '"defined":false'
+printf '%s' "$r" > "$tmp/metrics.json"
+
 expect "★ 未定义时给出理由：分母不存在" "$r" 'the denominator does not exist'
 expect "★ 能力是乘积，一个因子未定义则未定义" "$r" 'coverage is undefined'
 # ★ 反直觉但正确：任务入口一个都没收过，准确率却**已经有定义** ——
 # 因为规划器那条链是直接跑起来的，没有经过任务入口。三个因子里最晚有定义的那个，
 # 恰恰是唯一不依赖任务流的那一个。
-expect "★ 准确率此刻已经有定义：链跑过，而它没经过任务入口" "$r" '"accuracy":{"chains"'
+expect "★ 准确率此刻已经有定义：链跑过，而它没经过任务入口" "$r" '"accuracy":{' 
+expect "★ 而且它列了那些链" "$r" '"chains":["'
 expect "★ 但它数的只是「声明由规划器产出的链」，不是「提议过的链」" "$r" '"provenance":"planner"'
 expect "★ 未跑过的链不许被当成失败计入（unrun 单独报）" "$r" '"unrun"'
 expect "★ 它也报了这条链是在哪个任务类下跑的" "$r" '"task_classes"'
+# ★★ `value` 是一个**过了阈值的计数**，不是一个率——而名字必须说清这件事。
+#    原来那个字段叫 `ok`，读起来是「这条链成功了」；底下是「它的后验偏向成功」。
+#    实测：一条链跑一次成功、一次失败，未衰减的均值正好 0.5，
+#    而衰减（DefaultDecay = 0.98）把它压到 **0.4974** ⇒ **它不算被计中**。
+#    所以 `>= 0.5` 读起来是「至少一半」，行为是「严格多于一半，再加一点衰减余量」。
+expect "★ 那条线被报出来了，而不是活在代码里" "$r" '"threshold":0.5'
+expect "★ 字段名说的是它底下的事实（不是 ok）" "$r" '"favoured"'
+expect "★ 并且它说清了这条线严格难于「一半以上成功」" "$r" 'strictly harder'
+expect "★ 同一批记录里真实的率在 reliability.mean，不在这里" "$r" '"reliability":{'
+expect "★ 而那个率确实在那里" "$r" '"mean":'
+# ★ 一致性：两个报出来的数必须自洽，且三个计数必须有序。
+#   这三条能失败——它们不是「某句话出现过」。
+TEPS_METRICS_JSON="$tmp/metrics.json" python3 - <<'PYCHK'
+import json, os, sys
+p = os.environ["TEPS_METRICS_JSON"]
+d = json.load(open(p))["body"]
+a = d["accuracy"]
+bad = []
+if a["traced"] < a["observed"]: bad.append("traced < observed")
+if a["observed"] < a["favoured"]: bad.append("observed < favoured")
+if a["unrun"] != a["traced"] - a["observed"]: bad.append("unrun != traced - observed")
+if a["observed"] and abs(a["value"] - round(a["favoured"] / a["observed"])) > 1e-9:
+    bad.append("value != favoured / observed")
+if a["defined"] and a["observed"] == 0: bad.append("defined 而 observed 为 0")
+if not a["defined"] and a["observed"] > 0: bad.append("observed > 0 却没定义")
+for b in bad:
+    print("  FAIL  ★ 度量自洽：%s" % b)
+    sys.exit(1)
+print("  ok    ★★ 度量自洽：favoured ≤ observed ≤ traced，unrun = traced − observed，value = favoured/observed")
+PYCHK
 expect "★ 一个价格只有放在它买到的东西旁边才有意义" "$r" '"cost":{'
 before=$(req '{"t":"status","v":1}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["seq"])')
 req '{"t":"metrics.get","v":1}' >/dev/null
@@ -1097,9 +1129,65 @@ expect "★★ 乘积第一次有了值（覆盖率 × 准确率 × 可靠性）
 expect "★ 准确率数的是「声明由规划器产出的链」" "$r" '"observed":1'
 expect "★ 没跑过的那条不许被当成失败计入（traced 2 / unrun 1）" "$r" '"traced":2'
 expect "★ unrun 单独报出来" "$r" '"unrun":1'
-expect "★ 跑过的那条算 ok" "$r" '"ok":1'
+# ★ 字段名从 `ok` 改成 `favoured`：底下是「它的后验越过了那条线」，
+#   不是「这条链成功了」——而同一批记录里真实的率在 reliability.mean。
+expect "★ 跑过的那条越过了那条线" "$r" '"favoured":1'
 expect "★ 准确率的值直接报出来" "$r" '"value":1}'
 expect "★★ 准确率按任务类求和（后验是按 (skill, task_class) 分组的）" "$r" '"auto.tag":["task_exec"]'
+
+echo
+echo "—— ★★ 那条线真的是一条线：一条一半失败的链不算被计中 ——"
+# 到这里 `favoured == observed == 1`，所以 `value == favoured/observed` 与
+# `value == observed/observed` **分不出来**——一个只在那两个数相等时才被检查的等式
+# 检查不了任何东西。下面造一个 favoured < observed 的数据点。
+#
+# ★ 帧由 python 拼：载荷里有 `l=$(cat)`，写在 bash 的双引号里会被**真的执行**。
+#   同类坑此前栽过两次（source 一份带命令替换的 JSON、commit message 里的反引号）。
+python3 - "$tmp" <<'PYGEN'
+import json, sys
+tmp = sys.argv[1]
+leaf = {"skill_id": "acc.leaf", "version": "1.0.0", "kind": "script",
+        "verify_assert": ["exit == 0"], "budget": {"ms": 2000}, "evidence": "E0",
+        "idempotent": True, "license": "MIT", "provenance": {"source": "handwritten"},
+        "env": {"interpreter": "/bin/sh"}}
+files = {"run.sh": "l=$(cat)\ncase $l in *flat*) exit 1;; esac\nexit 0\n"}
+open(tmp + "/ac1.json", "w").write(json.dumps({"t": "skill.publish", "v": 1, "key": "ac1",
+    "body": {"manifest": leaf, "files": files}}))
+open(tmp + "/ac2.json", "w").write(json.dumps({"t": "skill.publish", "v": 1, "key": "ac2",
+    "body": {"manifest": {"skill_id": "auto.flat", "version": "1.0.0", "kind": "compose",
+                          "evidence": "E0", "license": "MIT",
+                          "provenance": {"source": "planner"}, "deps": ["@LEAF@"],
+                          "compose": {"op": "serial", "children": ["@LEAF@"]}}, "files": {}}}))
+PYGEN
+# ★ 读文件，不 source：载荷里有 `l=$(cat)`，source 会**真的执行**那个命令替换。
+AC1=$(cat "$tmp/ac1.json")
+r=$(req "$AC1")
+acLeaf=$(printf '%s' "$r" | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["ref"])')
+r=$(req "$(sed "s/@LEAF@/$acLeaf/g" "$tmp/ac2.json")")
+acRef=$(printf '%s' "$r" | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["ref"])')
+r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"ac3\",\"body\":{\"ref\":\"$acRef\",\"attempt\":\"ac-flat\",\"task_class\":\"task_exec\",\"input\":{\"flat\":true}}}")
+expect "★ 那条链真的失败了" "$r" '"outcome":"failed"'
+r=$(req '{"t":"metrics.get","v":1}')
+printf '%s' "$r" > "$tmp/metrics.json"
+expect "★ traced 跟着走" "$r" '"traced":3'
+expect "★★ 跑过两条，而只有一条越过了那条线" "$r" '"observed":2'
+expect "★★ 一半成功一半失败的那条**不算**被计中（实测后验 0.4974 < 0.5）" "$r" '"favoured":1'
+expect "★ 于是 value 是 0.5 而不是 1" "$r" '"value":0.5'
+# ★ 这个等式现在**能失败**了：favoured(1) ≠ observed(2)，所以
+#   把分子换成 observed 会让它红。此前两个数相等，它检查不了任何东西。
+TEPS_METRICS_JSON="$tmp/metrics.json" python3 - <<'PYCHK2'
+import json, os, sys
+a = json.load(open(os.environ["TEPS_METRICS_JSON"]))["body"]["accuracy"]
+bad = []
+if a["favoured"] >= a["observed"]:
+    bad.append("这个数据点没有让 favoured < observed，下面那个等式就还是检查不了任何东西")
+if abs(a["value"] - round(a["favoured"] / a["observed"], 4)) > 1e-9:
+    bad.append("value != favoured / observed")
+for b in bad:
+    print("  FAIL  ★ 那条线：%s" % b)
+    sys.exit(1)
+print("  ok    ★★ 在 favoured < observed 的数据点上，value 真的等于 favoured/observed")
+PYCHK2
 # ★★★ 最强的一条：那个值必须**就是**三个因子的乘积，而不是另算出来的一个数。
 # 只断言「有值」，一个把三个数相加再取平均的实现也会通过。
 if printf '%s' "$r" | python3 -c '

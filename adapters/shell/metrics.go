@@ -190,6 +190,12 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 // output rather than a person's.
 const plannerSource = "planner"
 
+// evenOdds is the line a chain's decayed posterior has to reach to be counted.
+//
+// ★ 它是**一个阈值**，不是**一个率**。字段名与说明都必须说清这件事：
+// 同一批记录里 `reliability.mean` 报的是率，这里报的是「有多少条链越过了这条线」。
+const evenOdds = 0.5
+
 // accuracy reports how the chains the planner proposed actually did.
 //
 // ★ The link between a proposal and a run is provenance.source == "planner".
@@ -209,7 +215,7 @@ func (s *server) accuracy(tbl arbiter.Table) map[string]any {
 		out["reason"] = "the catalogue could not be read: " + ref.Reason
 		return out
 	}
-	traced, observed, ok := 0, 0, 0
+	traced, observed, favoured := 0, 0, 0
 	var chains []string
 	byChain := map[string][]string{}
 	for _, e := range catalog {
@@ -248,15 +254,32 @@ func (s *server) accuracy(tbl arbiter.Table) map[string]any {
 		sort.Strings(classes)
 		byChain[e.Name] = classes
 		observed++
-		if p.Mean() >= 0.5 {
-			ok++
+		// ★ 这个判据是「衰减后的后验均值 ≥ 0.5」，而**衰减让它严格难于「一半以上的运行成功」**。
+		//
+		// 实测：一条链跑一次成功、一次失败，未衰减的均值正好是 0.5，
+		// 而衰减（DefaultDecay = 0.98）把它压到 **0.4974** ⇒ 它**不算**被计中。
+		// 所以 `>= 0.5` 这句话读起来是「至少一半」，行为是「严格多于一半，再加一点衰减的余量」。
+		//
+		// 字段名必须说清底下是什么。原来叫 `ok`——那个名字读起来是
+		// 「这条链成功了」，而底下是「它的后验偏向成功」。
+		// 同一批数据里 `reliability.mean` 已经报了真实的率，所以这里报的是
+		// **一个过了阈值的计数**，不是一个率。
+		if p.Mean() >= evenOdds {
+			favoured++
 		}
 	}
 	sort.Strings(chains)
 	out["traced"] = traced
 	out["observed"] = observed
 	out["unrun"] = traced - observed
-	out["ok"] = ok
+	out["threshold"] = evenOdds
+	// `favoured` 而不是 `ok`：一个名字读起来像运行时事实，底下必须是那个事实。
+	out["favoured"] = favoured
+	// 这句话要说出来，否则读的人会把 `value` 当成一个成功率——
+	// 而 `reliability.mean` 才是那个率。
+	out["basis"] = "a chain is counted when its decayed posterior mean is at or above the threshold; " +
+		"the decay makes this strictly harder than \"more than half of its runs succeeded\", so a chain " +
+		"that succeeded exactly as often as it failed lands just below and is not counted"
 	out["chains"] = chains
 	out["task_classes"] = byChain
 	if observed == 0 {
@@ -266,6 +289,6 @@ func (s *server) accuracy(tbl arbiter.Table) map[string]any {
 		return out
 	}
 	out["defined"] = true
-	out["value"] = round(float64(ok) / float64(observed))
+	out["value"] = round(float64(favoured) / float64(observed))
 	return out
 }
