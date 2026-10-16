@@ -1125,7 +1125,17 @@ expect "收过任务之后覆盖率有定义" "$r" '"intercept_rate"'
 expect "★ 分母跟着率一起走" "$r" '"tasks"'
 expect "可靠性有定义（后验已有观测）" "$r" '"weakest"'
 expect "★ 最弱的一环单独报出来（平均会把它盖住）" "$r" '"mean"'
-expect "★★ 乘积第一次有了值（覆盖率 × 准确率 × 可靠性）" "$r" '"capability":{"defined":true'
+# ★ 判据不许是「某个键紧跟 `{` 之后」——Go 的 map 按**键排序**序列化，
+# 于是加一个字段就会让这种判据碎掉。这一条此前正是 `"capability":{"defined":true`，
+# 而我给 capability 加了 `basis`/`weakest_*` 之后它就红了。
+# 分成两条：键在、定义由下面那段 python 从 JSON 里算。
+expect "★★ 乘积第一次有了值（覆盖率 × 准确率 × 可靠性）" "$r" '"capability":{'
+expect "★★ 乘积有定义（从 JSON 里算，不靠字段顺序）" "$r" '"capability":{'
+# ★★★ 一个乘积不告诉你它被谁压着。最弱的那一个决定了上限，所以要点名。
+expect "★★ 它点名了压着这个乘积的那一个因子" "$r" '"weakest_name":"'
+expect "★★ 而且那个名字是三个因子之一" "$r" '"weakest_name":"coverage.intercept_rate"'
+expect "★★ 那个因子的值也报了出来" "$r" '"weakest_factor":'
+expect "★★ 并说清乘积为什么被最弱的那一个压着" "$r" 'caps what the product can be'
 expect "★ 准确率数的是「声明由规划器产出的链」" "$r" '"observed":1'
 expect "★ 没跑过的那条不许被当成失败计入（traced 2 / unrun 1）" "$r" '"traced":2'
 expect "★ unrun 单独报出来" "$r" '"unrun":1'
@@ -1210,6 +1220,28 @@ sys.exit(0 if w < m else 1)'; then
   printf '  ok    ★★ 最弱的一环确实低于平均（一个技能腐烂了，平均会把它盖住）\n'
 else
   printf '  FAIL  weakest 没有真的算出来（等于 mean 或更高）\n'
+  fails=$((fails + 1))
+fi
+
+# ★★★ 被点名的那一个必须真的是最小的那一个。
+# 只断言「有个名字」会放过「永远点名 coverage」的实现——那种实现在
+# coverage 恰好最大时也会点名它，而报告读起来完全正常。
+if printf '%s' "$r" | python3 -c '
+import json,sys
+b=json.load(sys.stdin)["body"]
+c=b["capability"]
+f={"coverage.intercept_rate": b["coverage"]["intercept_rate"],
+   "accuracy.value": b["accuracy"]["value"],
+   "reliability.mean": b["reliability"]["mean"]}
+name=c["weakest_name"]
+if name not in f: sys.exit(1)
+if abs(c["weakest_factor"] - f[name]) > 1e-3: sys.exit(1)
+if f[name] - min(f.values()) > 1e-3: sys.exit(1)   # 被点名的不是最小的
+sys.exit(0)'; then
+  printf '  ok    ★★★ 被点名的因子真的是三个里最小的那一个
+'
+else
+  printf '  FAIL  被点名的因子不是最小的，或它的值与三个因子对不上\n'
   fails=$((fails + 1))
 fi
 

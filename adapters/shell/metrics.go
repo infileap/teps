@@ -140,8 +140,16 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 		reliability["mean_undecayed"] = round(meanOf(undecayed))
 		reliability["raw_rate"] = round(rawRate(successes, observations))
 		reliability["decay_gap"] = round(sum/float64(len(tbl)) - meanOf(undecayed))
-		// The weakest link is the number that matters for a product: a chain is
-		// as reliable as its worst step, and an average hides exactly that.
+		// ★ 这是**表里最差的那一行**，一个诊断，不是一个因子。
+		//
+		// 它此前写着「对一个产品来说重要的是最弱的一环：一条链和它最差的一步
+		// 一样可靠，而平均值恰好掩盖了那件事」——那句话**借用了组合的教义，
+		// 而表不是一条链**：`weakest` 是**所有技能 × 所有任务类**里的最小值，
+		// 不是某条链的某一步。而且一行只观测一次且失败时 `mean ≈ 0.1`，
+		// 把它当因子乘进能力，会让**一次坏观测支配整个乘积**。
+		//
+		// 那条注释真正想说的东西，现在报在 `capability.weakest_factor` 里：
+		// **乘积自己的最弱因子**，那才是一条链与它最差的一步的关系。
 		reliability["weakest"] = round(weakest)
 	}
 	// ★ 一个后验如果在两套判定规则上折出来，它就不是一个后验。
@@ -166,8 +174,28 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 		capability["reason"] = "reliability averages observations judged under more than one rule set: the factor is an average of different questions, and a product that hides that is a number nobody will check"
 	default:
 		capability["defined"] = true
-		capability["value"] = round(coverage["intercept_rate"].(float64) *
-			accuracy["value"].(float64) * reliability["mean"].(float64))
+		coverageFactor := coverage["intercept_rate"].(float64)
+		accuracyFactor := accuracy["value"].(float64)
+		reliabilityFactor := reliability["mean"].(float64)
+		capability["value"] = round(coverageFactor * accuracyFactor * reliabilityFactor)
+
+		// ★ 乘积自己的最弱因子——那条旧注释想说的东西。
+		//
+		// 「能力是乘积」的意思是：三个因子里**最弱的那个**决定了乘积的上限，
+		// 而一个乘积不告诉你它被谁压着。这与组合的教义是同一条
+		// （一条链和它最差的一步一样可靠），区别是这里的三步确实是**一条链**：
+		// 覆盖率 → 准确率 → 可靠性，每一步都依赖前一步产出的东西。
+		//
+		// ★ 按**排好序的名字**遍历，不按 map 顺序：并列时 map 迭代顺序是随机的，
+		// 于是同一个输入会报出两个不同的名字——一个会飘的数不是一个读数。
+		wf, wname := weakestFactor([]capFactor{
+			{"coverage.intercept_rate", coverageFactor},
+			{"accuracy.value", accuracyFactor},
+			{"reliability.mean", reliabilityFactor},
+		})
+		capability["weakest_factor"] = round(wf)
+		capability["weakest_name"] = wname
+		capability["basis"] = "the product of three factors, each of which depends on the one before it; the weakest of them caps what the product can be"
 	}
 
 	// ★ 一个价格只有放在它买到的东西旁边才有意义。
@@ -195,6 +223,30 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 		"capability":  capability,
 		"cost":        cost,
 	})
+}
+
+// capFactor is one factor of the capability product, with its reported name.
+type capFactor struct {
+	name string
+	v    float64
+}
+
+// weakestFactor picks the factor that caps the product, and names it.
+//
+// It is a function rather than three lines inline because the name has to be
+// **deterministic**: iterating a map would give a different name on a tie, and
+// a reading that changes between two identical inputs is not a reading. Sorting
+// the names first is what makes the tie break by name rather than by chance.
+func weakestFactor(factors []capFactor) (float64, string) {
+	sorted := append([]capFactor(nil), factors...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].name < sorted[j].name })
+	weakest, name := sorted[0].v, sorted[0].name
+	for _, f := range sorted[1:] {
+		if f.v < weakest {
+			weakest, name = f.v, f.name
+		}
+	}
+	return weakest, name
 }
 
 // plannerSource is the provenance value that marks a chain as the planner's

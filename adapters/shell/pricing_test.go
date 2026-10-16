@@ -473,3 +473,51 @@ func TestArbiterStateReportsTheDecayGapForOneKey(t *testing.T) {
 			body.Mean-body.RawRate, body.DecayGap)
 	}
 }
+
+// ★★★ The product names the factor that caps it, and names it the same way twice.
+//
+// The comment above `reliability.weakest` used to say the weakest link is what
+// matters for a product — while `capability.value` multiplied the **mean**. The
+// number that comment was reaching for is the weakest of the three factors, and
+// that is what this reports.
+//
+// The tie is the part worth testing: three equal factors must produce the same
+// name every time. A version iterating a map would pass a "picks the minimum"
+// test and still report a different name on each call.
+func TestTheProductNamesItsWeakestFactor(t *testing.T) {
+	// A clear winner.
+	v, name := weakestFactor([]capFactor{
+		{"coverage.intercept_rate", 0.9},
+		{"accuracy.value", 0.2},
+		{"reliability.mean", 0.8},
+	})
+	if v != 0.2 || name != "accuracy.value" {
+		t.Fatalf("want 0.2 / accuracy.value, got %v / %s", v, name)
+	}
+
+	// A tie: the answer must not depend on iteration order.
+	first := ""
+	for i := 0; i < 200; i++ {
+		v, name = weakestFactor([]capFactor{
+			{"coverage.intercept_rate", 0.5},
+			{"accuracy.value", 0.5},
+			{"reliability.mean", 0.5},
+		})
+		if v != 0.5 {
+			t.Fatalf("tie must still report the value, got %v", v)
+		}
+		if i == 0 {
+			first = name
+			continue
+		}
+		if name != first {
+			t.Fatalf("a tie reported two different names across calls: %q then %q "+
+				"— a reading that changes between two identical inputs is not a reading",
+				first, name)
+		}
+	}
+	// And by name order, the tie goes to the alphabetically first.
+	if first != "accuracy.value" {
+		t.Fatalf("a tie should break by name, got %s", first)
+	}
+}
