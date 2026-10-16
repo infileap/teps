@@ -91,7 +91,17 @@ def self_test():
         out.append("SELF-TEST  「回不了」有理由时没有把那个字段说出来")
     # ★ 一个分账必须知道自己是不是全部。
     if not cur_says_more({"conversations": [{"needs_reply": True, "last_sender_id": "x"}], "next_cursor_v2": "abc"}):
-        out.append("SELF-TEST  游标非空时没被认出来「这不是全部」")
+        out.append("SELF-TEST  游标非空时没被认出来「还没取完」")
+    # ★ 游标非空**不等于**还有下一页：实测第二页的游标取回来是 0 条。
+    #   所以这个函数的名字是 says_more（「还没取完」），不是 has_more（「还有东西」）。
+    if cur_says_more({"conversations": [], "next_cursor_v2": "abc"}) is not True:
+        out.append("SELF-TEST  空的一页带着游标时，没被认出来「还没取完」")
+    # ★ 取完的那一页：`next_cursor_v2` 空、遗留字段是哨兵 "0"。
+    #   第一版的回退把它读成了「还有」——一条回退就是一处会漂移的判据。
+    if cur_says_more({"conversations": [], "next_cursor": "0", "next_cursor_v2": ""}):
+        out.append("SELF-TEST  取完的那一页（next_cursor 是哨兵 \"0\"）被读成了「还有」")
+    if not cur_says_more({"conversations": [], "next_cursor": "1791635754373"}):
+        out.append("SELF-TEST  没有 v2 键而遗留游标是真游标时，没被认出来")
     if cur_says_more({"conversations": [{"needs_reply": True, "last_sender_id": "x"}]}):
         out.append("SELF-TEST  没有游标时被说成「还有下一页」")
     # ★ 这一半最要紧：证明「看见了会红」。
@@ -99,9 +109,30 @@ def self_test():
     return out
 
 
+# ★ `next_cursor` 是**遗留字段**，而它的「没有下一页」值是字符串 `"0"`——
+#   不是空串。实测取完的那一页长这样：
+#
+#       {"conversations": [], "next_cursor": "0", "next_cursor_v2": ""}
+#
+#   第一版写的是 `d.get("next_cursor_v2") or d.get("next_cursor")`，
+#   于是**取完的那一页被判成「还没取完」**：`next_cursor_v2` 是空的，
+#   回退到 `next_cursor`，而 `"0"` 是真值。
+#   ⇒ 一个回退，把「取完了」读成了「还有」。**两个字段说的是同一件事，
+#   而它们的「没有」写法不同；只认一种写法就会把另一种判成「有」。**
+STOP_SENTINELS = ("", "0")
+
+
 def cur_says_more(d):
-    """响应里还有游标吗。**一个分账必须知道自己是不是全部。**"""
-    return bool(d.get("next_cursor_v2") or d.get("next_cursor"))
+    """响应里还有**下一页游标**吗。**一个分账必须知道自己是不是全部。**
+
+    只看 `next_cursor_v2`（真正的分页游标）。`next_cursor` 是遗留字段，
+    它的「没有下一页」值是 `"0"`，所以它不能用来判「还有」。
+    """
+    v2 = d.get("next_cursor_v2")
+    if v2 is not None:
+        return v2 not in STOP_SENTINELS
+    # 没有 v2 这个键时才看遗留字段，并且认出它的停止哨兵。
+    return d.get("next_cursor") not in (None,) + STOP_SENTINELS
 
 
 def main():
@@ -114,23 +145,51 @@ def main():
             return 1
         print("收件箱分账自检：三类各一个样本，且看见了会红")
         return 1
-    raw = sys.stdin.read()
-    if not raw.strip():
-        print("没有输入。取数：eigenflux msg conversations --limit 20 --runtime-model <模型>", file=sys.stderr)
-        return 1
-    try:
-        d = json.loads(raw)
-    except json.JSONDecodeError as e:
-        print("输入不是 JSON：%s" % e, file=sys.stderr)
-        return 1
-    cs = d.get("conversations")
-    if not isinstance(cs, list):
-        print("输入里没有 conversations 数组。", file=sys.stderr)
-        return 1
-    if not cs:
+    # ★ 收数由人做（EigenFlux 的命令必须一条一条直接跑），
+    #   而**合并**由这个工具做：把几页喂进来，它报并集。
+    #   只喂一页时，输出必须仍然说清「这是这一页」——所以这里两种都支持。
+    files = [a for a in sys.argv[1:] if not a.startswith("-")]
+    docs = []
+    if files:
+        for f in files:
+            try:
+                docs.append(json.load(open(f, encoding="utf-8")))
+            except (OSError, json.JSONDecodeError) as e:
+                print("读不了 %s：%s" % (f, e), file=sys.stderr)
+                return 1
+    else:
+        raw = sys.stdin.read()
+        if not raw.strip():
+            print("没有输入。取数：eigenflux msg conversations --limit 20 --runtime-model <模型>",
+                  file=sys.stderr)
+            return 1
+        try:
+            docs.append(json.loads(raw))
+        except json.JSONDecodeError as e:
+            print("输入不是 JSON：%s" % e, file=sys.stderr)
+            return 1
+
+    # ★ 并集按 `conv_id` 去重。同一个会话出现在两页里是可能的（服务端在翻页之间动了），
+    #   而**同一个会话数两次会让分账比收件箱大**——那种错看起来只是数字偏大。
+    seen = {}
+    pages = 0
+    for d in docs:
+        cs = d.get("conversations")
+        if not isinstance(cs, list):
+            print("输入里没有 conversations 数组。", file=sys.stderr)
+            return 1
+        if not cs:
+            continue
+        pages += 1
+        for c in cs:
+            cid = c.get("conv_id")
+            if cid:
+                seen[cid] = c
+    if not seen:
         # ★ 一个空的分账与一个没取到数的分账，输出必须不同。
         print("conversations 是空的 —— 这不是「没有待办」，这是「没取到数」。")
         return 1
+    cs = list(seen.values())
 
     buckets = {"can_reply": [], "waiting": [], "cannot_reply": []}
     for c in cs:
@@ -144,14 +203,30 @@ def main():
     # 不是收件箱的大小。证据就在同一个响应里：`next_cursor_v2` 非空 ⇒ 还有下一页。
     # 第一版没读它，于是「liuli 那一条不见了」看起来像一个谜，而真因是
     # **它掉出了这一页的末尾**（新来一条，末尾挤掉一条）。
-    cur = d.get("next_cursor_v2") or d.get("next_cursor") or ""
-    assert cur_says_more(d) == bool(cur)
-    print("收件箱分账：这一页 %d 个会话" % total)
-    if cur:
-        print("★ 这不是全部：响应里还有 next_cursor_v2 ⇒ 至少还有下一页。")
-        print("  取下一页：eigenflux msg conversations --limit 20 --cursor %s" % cur)
+    # 游标取**最后一份**输入（它是这一串里最新的那一页）。
+    last = docs[-1]
+    cur = last.get("next_cursor_v2") or ""
+    if not cur and last.get("next_cursor") not in (None,) + STOP_SENTINELS:
+        cur = last.get("next_cursor")
+    assert cur_says_more(last) == bool(cur)
+    if len(docs) > 1:
+        print("收件箱分账：%d 页、去重后 %d 个会话" % (pages, total))
     else:
-        print("（没有下一页游标 ⇒ 这一页就是全部。）")
+        print("收件箱分账：这一页 %d 个会话" % total)
+    if cur:
+        # ★★ 一个游标非空**不等于**还有下一页。
+        #
+        # 这里第一版印的是「⇒ 至少还有下一页」，而那比它核过的更强。
+        # 实测：第二页带游标，用那个游标取第三页拿到的是 **0 条、无游标**。
+        # 游标许可的是「你可以再问一次」，不是「还有东西」。
+        # 一条把自己的话说过头的输出，与一条不检查的输出是同一种失败：
+        # 读的人无从分辨。
+        print("★ 还有游标 ⇒ 请用它再问一次。**游标非空不等于还有下一页**——")
+        print("  实测第二页的游标取回来是 0 条、且 `next_cursor_v2` 变空。")
+        print("  **「取全了」的判据是 `next_cursor_v2` 为空**，不是「游标非空」的反面。")
+        print("  再问一次：eigenflux msg conversations --limit 20 --cursor %s" % cur)
+    else:
+        print("（没有游标 ⇒ 这一页就是全部。）")
     print()
 
     for key, title in (("can_reply", "能回（对方说了最后一句，我还没回）"),
