@@ -332,17 +332,32 @@ func (s *server) accuracy(tbl arbiter.Table) map[string]any {
 		}
 	}
 	sort.Strings(chains)
+	// ★★★ 这一整块数的是**链**，不是**运行**——而它的字段名此前不说这件事。
+	//
+	// 同一个响应里还有 `reliability.observations`，那是**运行的条数**。
+	// 实测同一次调用：`accuracy.observed = 1`，而 `reliability.observations = 82`。
+	// 两个字段差一个字母、隔着几行、数的东西差两个层级（链 vs 运行），
+	// 而它们的名字读起来是同一件事。
+	//
+	// 还有第二处同形状：`chains` 列的是**全部被追踪的**链（`auto.never` 在里面，
+	// 而它一次都没跑过），`value` 的分母却是**跑过的**链。于是同一个对象里
+	// 用 `favoured / observed` 与用 `favoured / len(chains)` 能算出两个不同的数，
+	// 而没有任何一处说该用哪个。
+	//
+	// 改法是把**层级写进名字**：`chains_*` 是链，`observations` 是运行。
+	// 一个读起来像运行时事实的名字，底下必须是那个事实。
+	out["chains_traced"] = chains
 	out["traced"] = traced
-	out["observed"] = observed
+	out["chains_run"] = observed
 	out["unrun"] = traced - observed
 	out["threshold"] = evenOdds
-	// `favoured` 而不是 `ok`：一个名字读起来像运行时事实，底下必须是那个事实。
-	out["favoured"] = favoured
+	out["chains_favoured"] = favoured
 	// 这句话要说出来，否则读的人会把 `value` 当成一个成功率——
 	// 而 `reliability.mean` 才是那个率。
-	out["basis"] = "a chain is counted when its decayed posterior mean is at or above the threshold; " +
-		"the decay makes this strictly harder than \"more than half of its runs succeeded\", so a chain " +
-		"that succeeded exactly as often as it failed lands just below and is not counted"
+	out["basis"] = "counts chains, not runs: a chain is counted when the decayed posterior summed over the " +
+		"task classes it has been run under has a mean at or above the threshold. The decay makes this " +
+		"strictly harder than \"more than half of its runs succeeded\", so a chain that succeeded exactly " +
+		"as often as it failed lands just below and is not counted. `reliability.observations` is the run count"
 	out["chains"] = chains
 	out["task_classes"] = byChain
 	if observed == 0 {
@@ -352,6 +367,7 @@ func (s *server) accuracy(tbl arbiter.Table) map[string]any {
 		return out
 	}
 	out["defined"] = true
+	// ★ 分母是**跑过的链**，不是全部被追踪的链，也不是运行的条数。
 	out["value"] = round(float64(favoured) / float64(observed))
 	return out
 }

@@ -892,7 +892,7 @@ expect "★ 能力是乘积，一个因子未定义则未定义" "$r" 'coverage 
 # 因为规划器那条链是直接跑起来的，没有经过任务入口。三个因子里最晚有定义的那个，
 # 恰恰是唯一不依赖任务流的那一个。
 expect "★ 准确率此刻已经有定义：链跑过，而它没经过任务入口" "$r" '"accuracy":{' 
-expect "★ 而且它列了那些链" "$r" '"chains":["'
+expect "★ 而且它列了那些链" "$r" '"chains_traced":["'
 expect "★ 但它数的只是「声明由规划器产出的链」，不是「提议过的链」" "$r" '"provenance":"planner"'
 expect "★ 未跑过的链不许被当成失败计入（unrun 单独报）" "$r" '"unrun"'
 expect "★ 它也报了这条链是在哪个任务类下跑的" "$r" '"task_classes"'
@@ -902,7 +902,8 @@ expect "★ 它也报了这条链是在哪个任务类下跑的" "$r" '"task_cla
 #    而衰减（DefaultDecay = 0.98）把它压到 **0.4974** ⇒ **它不算被计中**。
 #    所以 `>= 0.5` 读起来是「至少一半」，行为是「严格多于一半，再加一点衰减余量」。
 expect "★ 那条线被报出来了，而不是活在代码里" "$r" '"threshold":0.5'
-expect "★ 字段名说的是它底下的事实（不是 ok）" "$r" '"favoured"'
+expect "★ 字段名说的是它底下的事实（不是 ok）" "$r" '"chains_favoured"'
+expect "★★ 而且它说清了这一块数的是**链**不是**运行**" "$r" '"chains_run"'
 expect "★ 并且它说清了这条线严格难于「一半以上成功」" "$r" 'strictly harder'
 expect "★ 同一批记录里真实的率在 reliability.mean，不在这里" "$r" '"reliability":{'
 expect "★ 而那个率确实在那里" "$r" '"mean":'
@@ -914,13 +915,31 @@ p = os.environ["TEPS_METRICS_JSON"]
 d = json.load(open(p))["body"]
 a = d["accuracy"]
 bad = []
-if a["traced"] < a["observed"]: bad.append("traced < observed")
-if a["observed"] < a["favoured"]: bad.append("observed < favoured")
-if a["unrun"] != a["traced"] - a["observed"]: bad.append("unrun != traced - observed")
-if a["observed"] and abs(a["value"] - round(a["favoured"] / a["observed"])) > 1e-9:
+if a["traced"] < a["chains_run"]: bad.append("traced < chains_run")
+if a["chains_run"] < a["chains_favoured"]: bad.append("chains_run < chains_favoured")
+if a["unrun"] != a["traced"] - a["chains_run"]: bad.append("unrun != traced - chains_run")
+if a["chains_run"] and abs(a["value"] - round(a["chains_favoured"] / a["chains_run"])) > 1e-9:
     bad.append("value != favoured / observed")
-if a["defined"] and a["observed"] == 0: bad.append("defined 而 observed 为 0")
-if not a["defined"] and a["observed"] > 0: bad.append("observed > 0 却没定义")
+# ★★★ 两个层级不许共用一个词。
+# 同一个响应里还有 reliability.observations（**运行**的条数），而这一块数的是**链**。
+# 实测同一次调用：accuracy 的链计数是 1，而 reliability.observations 是 82。
+# 名字读起来是同一件事、数的东西差两个层级，是这一整轮要修的那个形状。
+for stale in ("observed", "favoured"):
+    if stale in a:
+        bad.append("字段名 %r 没说清它数的是链还是运行（链用 chains_*，运行用 observations）" % stale)
+# ★★ 一份清单与它自己的计数必须对得上。
+# `chains_traced` 列的是**全部被追踪的**链，而 `value` 的分母是**跑过的**链——
+# 清单比计数长是正常的，但清单与它声称的那个计数必须相等。
+# ★ 那句话不是装饰：字段名改成 chains_* 只说了「数的是链」，
+# 而**哪一条链算被计中**（后验按任务类求和、阈值 0.5、衰减让它严格难于一半）
+# 只有 basis 说了。少了它，读者会拿 reliability.mean 当这个数。
+if "not runs" not in a.get("basis", ""):
+    bad.append("basis 没说清这一块数的是链不是运行")
+if len(a.get("chains_traced", [])) != a["traced"]:
+    bad.append("chains_traced 列了 %d 条，而 traced 说 %d 条"
+               % (len(a.get("chains_traced", [])), a["traced"]))
+if a["defined"] and a["chains_run"] == 0: bad.append("defined 而 chains_run 为 0")
+if not a["defined"] and a["chains_run"] > 0: bad.append("chains_run > 0 却没定义")
 for b in bad:
     print("  FAIL  ★ 度量自洽：%s" % b)
     sys.exit(1)
@@ -1136,12 +1155,12 @@ expect "★★ 它点名了压着这个乘积的那一个因子" "$r" '"weakest_
 expect "★★ 而且那个名字是三个因子之一" "$r" '"weakest_name":"coverage.intercept_rate"'
 expect "★★ 那个因子的值也报了出来" "$r" '"weakest_factor":'
 expect "★★ 并说清乘积为什么被最弱的那一个压着" "$r" 'caps what the product can be'
-expect "★ 准确率数的是「声明由规划器产出的链」" "$r" '"observed":1'
+expect "★ 准确率数的是「声明由规划器产出的链」" "$r" '"chains_run":1'
 expect "★ 没跑过的那条不许被当成失败计入（traced 2 / unrun 1）" "$r" '"traced":2'
 expect "★ unrun 单独报出来" "$r" '"unrun":1'
 # ★ 字段名从 `ok` 改成 `favoured`：底下是「它的后验越过了那条线」，
 #   不是「这条链成功了」——而同一批记录里真实的率在 reliability.mean。
-expect "★ 跑过的那条越过了那条线" "$r" '"favoured":1'
+expect "★ 跑过的那条越过了那条线" "$r" '"chains_favoured":1'
 expect "★ 准确率的值直接报出来" "$r" '"value":1}'
 expect "★★ 准确率按任务类求和（后验是按 (skill, task_class) 分组的）" "$r" '"auto.tag":["task_exec"]'
 
@@ -1180,8 +1199,8 @@ expect "★ 那条链真的失败了" "$r" '"outcome":"failed"'
 r=$(req '{"t":"metrics.get","v":1}')
 printf '%s' "$r" > "$tmp/metrics.json"
 expect "★ traced 跟着走" "$r" '"traced":3'
-expect "★★ 跑过两条，而只有一条越过了那条线" "$r" '"observed":2'
-expect "★★ 一半成功一半失败的那条**不算**被计中（实测后验 0.4974 < 0.5）" "$r" '"favoured":1'
+expect "★★ 跑过两条，而只有一条越过了那条线" "$r" '"chains_run":2'
+expect "★★ 一半成功一半失败的那条**不算**被计中（实测后验 0.4974 < 0.5）" "$r" '"chains_favoured":1'
 expect "★ 于是 value 是 0.5 而不是 1" "$r" '"value":0.5'
 # ★ 这个等式现在**能失败**了：favoured(1) ≠ observed(2)，所以
 #   把分子换成 observed 会让它红。此前两个数相等，它检查不了任何东西。
@@ -1189,9 +1208,9 @@ TEPS_METRICS_JSON="$tmp/metrics.json" python3 - <<'PYCHK2'
 import json, os, sys
 a = json.load(open(os.environ["TEPS_METRICS_JSON"]))["body"]["accuracy"]
 bad = []
-if a["favoured"] >= a["observed"]:
+if a["chains_favoured"] >= a["chains_run"]:
     bad.append("这个数据点没有让 favoured < observed，下面那个等式就还是检查不了任何东西")
-if abs(a["value"] - round(a["favoured"] / a["observed"], 4)) > 1e-9:
+if abs(a["value"] - round(a["chains_favoured"] / a["chains_run"], 4)) > 1e-9:
     bad.append("value != favoured / observed")
 for b in bad:
     print("  FAIL  ★ 那条线：%s" % b)
