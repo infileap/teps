@@ -354,6 +354,80 @@ func TestGrantClearsTheOpenEscalation(t *testing.T) {
 	}
 }
 
+// TestTheWasteRatioCarriesItsDenominator pins the round-42 fix: Flags() must
+// hand back the two counts alongside the ratio.
+//
+// The ratio alone cannot be read. "waste: 0" is 0/1 and 0/50 at the same time,
+// and has_waste_evidence only separates the case where there were no
+// escalations at all — it does not separate one escalation from fifty.
+func TestTheWasteRatioCarriesItsDenominator(t *testing.T) {
+	m := New()
+	m = mustStep(t, m, Open)
+	m = mustStep(t, m, Plan)
+	m = mustStep(t, m, Planned)
+	m = mustStep(t, m, Finish)
+	m = mustStep(t, m, Escalate)
+	m = mustStep(t, m, Quoted)
+	m = mustStep(t, m, Deny)
+	m = mustStep(t, m, Replan)
+	m = mustStep(t, m, Planned)
+	m = mustStep(t, m, Finish)
+	m = mustStep(t, m, Escalate)
+	m = mustStep(t, m, Quoted)
+	m = mustStep(t, m, Deny)
+	m = mustStep(t, m, Abandon)
+
+	f := m.Flags()
+	if m.State != Degraded {
+		t.Fatalf("state = %s, want degraded", m.State)
+	}
+	if f.Escalations != 2 || f.EscalationsDegraded != 2 {
+		t.Fatalf("flags report %d/%d, machine says %d/%d — the ratio and its denominator must come from one read",
+			f.Escalations, f.EscalationsDegraded, m.Escalations, m.EscalationsDegraded)
+	}
+	if f.Waste != WasteRatio(f.Escalations, f.EscalationsDegraded) {
+		t.Fatalf("waste = %v but the counts say %v — a ratio that disagrees with its own numerator and denominator",
+			f.Waste, WasteRatio(f.Escalations, f.EscalationsDegraded))
+	}
+}
+
+// TestAGrantedEscalationInADegradedSessionStillCounts pins which reading of
+// WASTE is the contract's.
+//
+// The field comment used to claim EscalationsDegraded counts only escalations
+// "without a Grant in between". CONTRACT.md:278 says it is the share of
+// escalations after which the session still ended degraded — and this session
+// did end degraded, so both escalations qualify, grant or no grant. The
+// comment was the stale one; this test is what stops it from coming back.
+func TestAGrantedEscalationInADegradedSessionStillCounts(t *testing.T) {
+	m := New()
+	m = mustStep(t, m, Open)
+	m = mustStep(t, m, Route)
+	m = mustStep(t, m, Finish)
+	m = mustStep(t, m, Escalate)
+	m = mustStep(t, m, Quoted)
+	m = mustStep(t, m, Grant) // ← 这一次升级被批了
+	m = mustStep(t, m, Finish)
+	m = mustStep(t, m, Escalate)
+	m = mustStep(t, m, Quoted)
+	m = mustStep(t, m, Deny)
+	m = mustStep(t, m, Abandon)
+
+	if m.State != Degraded {
+		t.Fatalf("state = %s, want degraded", m.State)
+	}
+	if m.Escalations != 2 {
+		t.Fatalf("escalations = %d, want 2", m.Escalations)
+	}
+	if m.EscalationsDegraded != 2 {
+		t.Fatalf("escalations_degraded = %d, want 2: the session ended degraded, so every escalation in it is one the session still ended degraded after — a grant in between does not exempt it (CONTRACT.md:278)",
+			m.EscalationsDegraded)
+	}
+	if m.Flags().Waste != 1.0 {
+		t.Fatalf("waste = %v, want 1", m.Flags().Waste)
+	}
+}
+
 func TestTimeoutWithoutEscalationIsNotWaste(t *testing.T) {
 	// Timeout can only be reached from Waiting, which can only be reached
 	// through an escalation — so this path is genuinely counted.

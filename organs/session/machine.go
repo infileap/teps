@@ -19,8 +19,16 @@ type Machine struct {
 	// Actions is the action hash of each completed step, for loop detection.
 	Actions []string
 
-	// Escalations counts entries into Waiting. EscalationsDegraded counts the
-	// subset that ended in Degraded without a Grant in between.
+	// Escalations counts entries into Waiting. EscalationsDegraded is how many
+	// of them were followed by the session still ending degraded — which, for a
+	// session that reaches Degraded at all, is all of them, because the count
+	// is settled once at that moment (see Step).
+	//
+	// ★ 这条注释此前写着「the subset that ended in Degraded without a Grant in
+	// between」——**它说的与代码和契约都不一样**。`Step` 在到达 `Degraded` 时
+	// 写的是 `out.Escalations`（全部），而 `docs/CONTRACT.md:278` 写的是
+	// 「升级之后仍然 degraded 的比例」。一次被 grant 过的升级，如果会话最后仍然
+	// degraded，按契约它就是「升级之后仍然 degraded」的一次。
 	Escalations         int
 	EscalationsDegraded int
 
@@ -128,7 +136,17 @@ type Flags struct {
 	Looping bool
 
 	// Waste is the fraction of escalations that still ended degraded.
+	//
+	// ★ 它是一个**比例**，所以它必须与它的两个计数一起报：`0` 可以是
+	// 「1 次升级、0 次以 degraded 收尾」，也可以是「50 次升级、0 次」。
+	// 报一个比例而不报分母，读的人只能猜。
 	Waste float64
+
+	// Escalations and EscalationsDegraded are Waste's numerator and
+	// denominator. They travel with it so the ratio can be read rather than
+	// guessed.
+	Escalations         int
+	EscalationsDegraded int
 
 	// HasWasteEvidence distinguishes "no escalations yet" from "escalations
 	// that all succeeded". Both report Waste = 0.
@@ -149,7 +167,10 @@ func (m Machine) Flags() Flags {
 		Looping:          Looping(m.Actions),
 		Waste:            WasteRatio(m.Escalations, m.EscalationsDegraded),
 		HasWasteEvidence: m.Escalations > 0,
-		Terminal:         Terminal(m.State),
+		// ★ 比例与它的分母一起走，同一次读取。分开取会让它们有机会说不同的年份。
+		Escalations:         m.Escalations,
+		EscalationsDegraded: m.EscalationsDegraded,
+		Terminal:            Terminal(m.State),
 	}
 	if n := len(m.Attempts); n > 0 {
 		f.MustChangeStrategy = !MayRetry(m.Attempts, m.Attempts[n-1])

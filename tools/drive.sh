@@ -214,6 +214,37 @@ r=$(req '{"t":"session.retry","v":1,"key":"s3-r3","body":{"session":"s3","strate
 expect "换策略立即放行" "$r" '"state":"retrying"'
 
 echo
+echo "—— ★★ 浪费率必须带着它的两个计数出现，否则那个比例读不出来 ——"
+# 一个比例单独出现时是读不出来的：`waste: 0` 既可以是「1 次升级、0 次以
+# degraded 收尾」，也可以是「50 次升级、0 次」。`has_waste_evidence` 只分得开
+# 「一次升级都没有」这一种。所以两个计数必须与比例同时出现，且同一次读取。
+req '{"t":"session.open","v":1,"key":"s4-open","body":{"session":"s4"}}' >/dev/null
+n=0
+for e in open plan planned finish escalate quoted deny replan planned finish escalate quoted deny abandon; do
+  n=$((n + 1))
+  req "{\"t\":\"session.event\",\"v\":1,\"key\":\"s4-e$n\",\"body\":{\"session\":\"s4\",\"event\":\"$e\"}}" >/dev/null
+done
+r=$(req '{"t":"session.status","v":1,"body":{"session":"s4"}}')
+expect "两次升级、都以 degraded 收尾 ⇒ 比例是 1" "$r" '"waste":1'
+expect "★ 分母同时出现：2 次升级" "$r" '"escalations":2'
+expect "★ 分子同时出现：2 次以 degraded 收尾" "$r" '"escalations_degraded":2'
+
+# 被批过一次的升级，如果会话最后仍然 degraded，按 CONTRACT.md:278 它照样算数。
+req '{"t":"session.open","v":1,"key":"s5-open","body":{"session":"s5"}}' >/dev/null
+n=0
+for e in open route finish escalate quoted grant finish escalate quoted deny abandon; do
+  n=$((n + 1))
+  req "{\"t\":\"session.event\",\"v\":1,\"key\":\"s5-e$n\",\"body\":{\"session\":\"s5\",\"event\":\"$e\"}}" >/dev/null
+done
+r=$(req '{"t":"session.status","v":1,"body":{"session":"s5"}}')
+expect "★ 中间被 grant 过的升级，会话仍然 degraded ⇒ 它照样算（契约的读法）" "$r" '"escalations_degraded":2'
+
+# 两种 `waste: 0` 现在读得开了。
+r=$(req '{"t":"session.status","v":1,"body":{"session":"s3"}}')
+expect "s3 一次升级都没有 ⇒ waste 0 且没有证据" "$r" '"has_waste_evidence":false'
+expect "★ 而它的分母是 0，不是一个看不见的数" "$r" '"escalations":0'
+
+echo
 echo "—— 技能店：内容寻址，canary 先行 ——"
 pub1='{"t":"skill.publish","v":1,"key":"p1","body":{"manifest":{"skill_id":"read.file","version":"1.0.0","kind":"code","verify_assert":["exit == 0"],"evidence":"E1","license":"MIT","provenance":{"source":"handwritten"},"env":{"interpreter":"builtin"}},"files":{"main.go":"package main\n"}}}'
 r=$(req "$pub1")

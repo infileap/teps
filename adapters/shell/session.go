@@ -259,9 +259,13 @@ func (s *server) handleSession(f core.Frame, out *core.Frame) bool {
 
 func flagsJSON(f session.Flags) map[string]any {
 	return map[string]any{
-		"stalled":              f.Stalled,
-		"looping":              f.Looping,
-		"waste":                f.Waste,
+		"stalled": f.Stalled,
+		"looping": f.Looping,
+		"waste":   f.Waste,
+		// ★ 一个比例必须带着它的两个计数出现，否则 `waste: 0` 读不出
+		// 是「1 次升级 0 次以 degraded 收尾」还是「50 次升级 0 次」。
+		"escalations":          f.Escalations,
+		"escalations_degraded": f.EscalationsDegraded,
 		"has_waste_evidence":   f.HasWasteEvidence,
 		"must_change_strategy": f.MustChangeStrategy,
 		"terminal":             f.Terminal,
