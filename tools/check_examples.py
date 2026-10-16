@@ -245,7 +245,7 @@ def main():
                 print("  " + b)
             print("成对负控守卫自检失败：%d 处" % len(bad))
             return 1
-        print("成对负控守卫自检：还看得见（4 类各一个样本），且看见了会红")
+        print("SELF-TEST OK  成对负控守卫：还看得见（4 类各一个样本），且看见了会红")
         return 1
     out = run()
     if not out:

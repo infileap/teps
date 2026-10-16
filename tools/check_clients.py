@@ -177,7 +177,7 @@ def main():
                 print("  " + b)
             print("接入面守卫自检失败：%d 处" % len(bad))
             return 1
-        print("接入面守卫自检：还看得见（3 类各一个样本），且看见了会红")
+        print("SELF-TEST OK  接入面守卫：还看得见（3 类各一个样本），且看见了会红")
         return 1
     out = run()
     if not out:

@@ -178,7 +178,7 @@ def main():
                 print("  " + b)
             print(f"器官守卫自检失败：{len(bad)} 处")
             return 1
-        print("器官守卫自检：还看得见（两条方向各两个样本），且看见了会红")
+        print("SELF-TEST OK  器官守卫：还看得见（两条方向各两个样本），且看见了会红")
         return 1
     problems, n = run()
     if problems:

@@ -115,7 +115,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
             check_adapters.py                    翻译器不许 import 内核
             check_frames.py                      帧类型 ↔ 契约不许漂移
             check_organs.py                      器官 ↔ 两份文档的状态表不许漂移
-            check_docs.py                        任何一份 .md 里「做没做」的断言：⬜ 不指向存在的路径 · 状态表只在一处 · ✅ 点名了真实产物
+            check_docs.py                        任何一份 .md 里四条：⬜ 不指向存在的路径 · 状态表只在一处 · ✅ 点名了真实产物 · ★★ 「N 个测试」必须与实测一致
             check_assertions.py                  ★ 断言里的 JSON 值片段不许互相是前缀
             check_nomodel.py                     ★ 自由判据的 AI 那一半：删掉模型还能跑吗
             check_clients.py                     ★ 接入面：server.json / CLIENTS.md / SKILL.md 三份文件对同一件事的说法
@@ -174,7 +174,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | **P5 MCP 翻译器** | ✅ **`adapters/mcp/`——一个工具，不 import 内核，拒绝原样交回** |
 | **P5 适配器按协议命名** | ✅ **没有 `adapters/dsh/`：DSH 走 MCP，所以 mcp 就是它** |
 | **P5 适配器边界守卫** | ✅ **参考传输必须 import，翻译器必须不 import；两个方向都有注入测试** |
-| **执行器 + 独立核验器** | ✅ **`organs/executor/` 纯函数 + `adapters/shell/execute.go` 脏半边；21 个测试，4 个变异全被抓住** |
+| **执行器 + 独立核验器** | ✅ **`organs/executor/` 纯函数 + `adapters/shell/execute.go` 脏半边；56 个测试，4 个变异全被抓住** |
 | **执行者不许自证** | ✅ **`Judge` 的入参里没有「成功了吗」这个位置；判不了就不写 resolution** |
 | **证据只由真实执行提升** | ✅ **E0→E1，且不碰 `Promote` 的 E0 闸门** |
 | **组合（执行图）** | ✅ **`organs/executor/compose.go`——serial/parallel 算成执行图；另外四个算子各自说明缺什么；9 个变异全被抓住** |
@@ -214,6 +214,7 @@ tools/      check_kernel.py                      四条内核守卫，可跑
 | **那个数到底数的是什么** ★★★ | ✅ `accuracy` 原来报 `ok`，读起来是「这条链成功了」。实测：一条链跑一次成功、一次失败，未衰减的均值正好 `0.5`，而衰减（`DefaultDecay = 0.98`）把它压到 **`0.4974`** ⇒ **它不算被计中**。所以 `p.Mean() >= 0.5` 读起来是「至少一半」，行为是「**严格多于一半，再加一点衰减余量**」。改名 `favoured`，并报出 `threshold` 与一段 `basis`（逐字含 `strictly harder`）——**同一批记录里真实的率在 `reliability.mean`，这里报的是一个过了阈值的计数。** ★ 顺带发现那条自洽判据 `value == favoured/observed` 在原来的数据点上**检查不了任何东西**（那里 `favoured == observed == 1`），补了一个 `favoured < observed` 的数据点之后它才能失败。★★ 这与 `armedSchedules` 是同一个形状：**一个读起来像运行时事实的名字，底下是一个别的事实。** |
 | **`decay_gap` 里 99% 不是衰减** ★★★ | ✅ 它原来是 `mean − raw_rate`，而 `mean` 是**按行不加权**的衰减后平均、`raw_rate` 是**按观测加权**的成功率——那个差因此把三件事混在一起：① 衰减 ② 加权方式 ③ `Beta(1,1)` 先验（均值 0.5）把低观测数的行拉向中间。而名字只说 decay。**实测**（一个技能观测 1 次成功、另一个观测 9 次失败）：`mean 0.3762` · `mean_undecayed 0.3788` · `raw_rate 0.1` ⇒ **旧 `decay_gap` = +0.2762**（正的，而衰减只会把一行拉向先验），**新 `decay_gap` = −0.0026**。现在它是**同一批记录折两次之差**，`raw_rate` 保留为自己的一个数——**三个量、三个名字** |
 | **乘积不告诉你它被谁压着** ★★★ | ✅ `capability.value` 乘的是 `reliability.mean`，而它上面那条注释写着「对一个产品来说重要的是**最弱的一环**：一条链和它最差的一步一样可靠，而平均值恰好掩盖了那件事」——**注释和代码对同一个数说了相反的话**。★ 实测两个候选因子相差 **1.6 倍**（`mean 0.5445` vs `weakest 0.3311`）。★ 但**错的是注释，不是代码**：`weakest` 是**整张后验表所有行的最小值**，不是某条链的某一步——**表不是一条链**，组合那条教义在这里不成立；而且一行只观测一次且失败时 `mean ≈ 0.1`，把它当因子会让**一次坏观测支配整个乘积**。⇒ 注释改成说清它是「最差的那一行」（一个诊断），并新报 **`capability.weakest_factor` / `weakest_name`**——**乘积自己的最弱因子**，那才是那条注释真正想说的东西（三个因子确实是一条链：覆盖率 → 准确率 → 可靠性）。★ 并列时按**排好序的名字**取，不按 map 顺序：**一个会飘的数不是一个读数** |
+| **文档里的数字没有任何守卫在管** ★★★ | ✅ `check_docs.py` 的前三条管的是「**做没做**」，**没有一条管数字**——而一个写在文档里的数在代码往前走之后不会自己变红。★ 加了规则 4 之后实测：**8 条「N 个测试」里有 6 条是旧的**（`composer` 说 21 实测 25 · `memory` 说 15 实测 20 · `pool` 说 15 实测 16 · `reflex` 说 16 实测 17 · `planner` 说 15 实测 16 · `executor` 说 21 实测 56）。★ 判据是**可算的**：那个包真的跑一遍数 `=== RUN`，不查表——**一张「器官 → 测试数」的对照表就是被检查之物的第二份拷贝，而第二份拷贝就是会烂掉的那一份**。★ 一个数必须**点名**它数的是什么，而且只能点名一个；配不起来时报错，不猜。`docs/CONTRACT.md` 里一个历史数（当时全仓库 249）改成不写成数：**写不成判据的数，就不该写成数。** |
 | **两个层级共用一个词** ★★★ | ✅ `accuracy` 那一块的字段名此前不说它数的是**链**还是**运行**。同一个响应里还有 `reliability.observations`（**运行**的条数），两个名字差一个字母、隔着几行、数的东西差两个层级——**实测同一次调用：链计数 `1`，运行条数 `82`**。★ 还有第二处同形状：`chains` 列的是**全部被追踪的**链（含一次都没跑过的），而 `value` 的分母是**跑过的**链 ⇒ **同一个对象里用 `favoured/observed` 与用 `favoured/len(chains)` 能算出两个不同的数，而没有任何一处说该用哪个**。⇒ 把层级写进名字：`chains_traced` / `chains_run` / `chains_favoured`，并在 `basis` 里逐字写明「**counts chains, not runs**」。★ 顺带加了一条判据：**一份清单与它自己的计数必须对得上**（`len(chains_traced) == traced`）——清单比计数长是正常的（含未跑过的），但清单与它声称的那个计数必须相等 |
 
 ### 证据（可复跑）
@@ -233,7 +234,7 @@ python3 tools/check_contract.py    # 文档与代码的拒绝码不许漂移
 python3 tools/check_adapters.py    # 翻译器不许 import 内核
 python3 tools/check_frames.py      # 帧类型与契约必须一一对上
 python3 tools/check_organs.py      # 器官与两份文档的状态表必须一一对上
-python3 tools/check_docs.py        # ★ 文档里「做没做」的三条断言（从 check_organs.py 分出来的）
+python3 tools/check_docs.py        # ★ 文档里四条：做没做三条 + 「N 个测试」必须与实测一致
 python3 tools/check_assertions.py  # ★ 存在性判据不许冒充一致性判据
 python3 tools/check_nomodel.py
 python3 tools/check_clients.py     # 接入面：三份文件对同一件事的说法

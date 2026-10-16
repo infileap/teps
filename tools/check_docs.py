@@ -9,6 +9,13 @@
 3. ★ **`✅` 的断言必须点名一个真实存在的产物**（只在「本地复现」那一格上）——
    规则 1 的反面。**一句「已做」在证据消失之后也不会自己变红**：删掉那个例子、
    重命名那个脚本、把那个能力撤回去，都不会让 ✅ 变成别的字。
+4. ★★ **文档里的「N 个测试」必须与实测一致**，而且那个数必须点名它数的是哪个包。
+   **规则 1–3 管的是「做没做」，没有一条管数字。** 而一个写在文档里的数
+   在代码往前走之后不会自己变红——实测发现 **8 条里有 6 条是旧的**
+   （`composer` 说 21 实测 25 · `memory` 说 15 实测 20 · `pool` 说 15 实测 16 ·
+   `reflex` 说 16 实测 17 · `planner` 说 15 实测 16 · `executor` 说 21 实测 56）。
+   ★ 一个数必须**点名**它数的是什么，而且只能点名一个：配不起来时报错，
+   不猜。**一个不知道自己在数什么的数，比一个没有数更坏。**
 
 ## 为什么它从 check_organs.py 里分出来
 
@@ -27,6 +34,7 @@
 
 import os
 import re
+import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -123,18 +131,104 @@ def check_reproduced(doc_list, problems):
                     f"{rel}:{i} 说本地复现已做，但它点名的 {'、'.join(missing)} 不存在")
 
 
-RULES = (check_unbuilt, check_one_status_table, check_reproduced)
+# ★ 规则 4：文档里的「N 个测试」。
+#
+# 判据是**可算的**：那个包真的跑一遍，数 `=== RUN`。
+# 不猜、不查表——一张「器官 → 测试数」的对照表就是被检查之物的第二份拷贝，
+# 而第二份拷贝就是会烂掉的那一份（这条本项目写过很多次了）。
+TEST_CLAIM_RE = re.compile(r"(\d+)\s*个测试")
+_counts_cache = {}
+
+
+def organ_packages():
+    """`organs/` 下每个含 .go 的目录 → Go 包路径。"""
+    base = os.path.join(ROOT, "organs")
+    out = {}
+    if not os.path.isdir(base):
+        return out
+    for name in sorted(os.listdir(base)):
+        d = os.path.join(base, name)
+        if os.path.isdir(d) and any(f.endswith(".go") for f in os.listdir(d)):
+            out[name] = "./organs/" + name
+    return out
+
+
+def count_tests(pkg):
+    if pkg in _counts_cache:
+        return _counts_cache[pkg]
+    env = dict(os.environ)
+    env["PATH"] = os.path.join(ROOT, "tools") + os.pathsep + env.get("PATH", "")
+    try:
+        r = subprocess.run(["go", "test", pkg, "-count=1", "-v"], cwd=ROOT, env=env,
+                           capture_output=True, text=True, timeout=900)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("跑不了 go test（%s）：一个跑不起来的守卫不是守卫" % exc)
+    n = sum(1 for line in r.stdout.splitlines() if line.startswith("=== RUN"))
+    _counts_cache[pkg] = n
+    return n
+
+
+def check_test_counts(doc_list, problems):
+    """规则 4：`N 个测试` 必须与实测一致，且必须点名一个包。"""
+    pkgs = organ_packages()
+    for doc in doc_list:
+        rel = os.path.relpath(doc, ROOT)
+        for i, line in enumerate(read(doc).splitlines(), 1):
+            claims = TEST_CLAIM_RE.findall(line)
+            if not claims:
+                continue
+            named = [o for o in pkgs
+                     if re.search(r"(?<![A-Za-z0-9_])" + o + r"(?![A-Za-z0-9_])", line)]
+            if len(claims) != 1 or len(named) != 1:
+                problems.append(
+                    "%s:%d 这一行有 %d 个「个测试」的数和 %d 个器官名，配不起来："
+                    "一个数必须点名它数的是什么，而且只能点名一个"
+                    % (rel, i, len(claims), len(named)))
+                continue
+            organ, want = named[0], int(claims[0])
+            got = count_tests(pkgs[organ])
+            if want != got:
+                problems.append(
+                    "%s:%d 说 `%s/` 有 %d 个测试，实测 %d 个"
+                    % (rel, i, organ, want, got))
+
+
+RULES = (check_unbuilt, check_one_status_table, check_reproduced, check_test_counts)
+
+# ★ 外部参照。规则**名字**在这里，函数在 RULES 里，两边必须一样长。
+#
+# 为什么需要它：自检里那句 `applied != len(RULES)` 拿 RULES 跟 RULES 自己比——
+# **与自己一致不等于正确**。把一条规则从 RULES 里拿掉，`applied` 与 `len(RULES)`
+# 一起变成 3，等式照样成立，那条规则就这样消失了而没有任何东西会红。
+# 这与本项目在 decay_gap 上栽的是同一条：**要抓住它需要外部参照。**
+RULE_NAMES = (
+    "⬜ 不指向存在的路径",
+    "状态表只在一处",
+    "本地复现的 ✅ 点名了真实产物",
+    "「N 个测试」与实测一致",
+)
+if len(RULES) != len(RULE_NAMES):
+    raise SystemExit(
+        "文档守卫：RULES 里有 %d 条而 RULE_NAMES 里有 %d 条 —— "
+        "一条规则被拿掉了，或者一条规则没被写下来。"
+        % (len(RULES), len(RULE_NAMES)))
 
 
 def run():
     doc_list = docs()
     if not doc_list:
         print("文档守卫：一份 .md 都没有。通过是平凡的真，不构成证据。")
-        return ["没有扫到任何文档"], 0
+        return ["没有扫到任何文档"], 0, 0
     problems = []
+    applied = 0
     for rule in RULES:
         rule(doc_list, problems)
-    return problems, len(doc_list)
+        applied += 1
+    # ★ 报出**真的跑了几条**。一条从 RULES 里被拿掉的规则，与一条通过的规则，
+    # 输出完全一样——本项目在 check_all.sh 里已经为同一件事栽过一次
+    # （「一个只验第一台的自检循环会让第二台的自检永远不被跑，而它坏掉的样子
+    # 与「通过」一模一样：它什么都不打印」）。所以这个数是承重的。
+    return problems, len(doc_list), applied
 
 
 def self_test():
@@ -192,9 +286,35 @@ def self_test():
         check_reproduced([probe_with("| 本地复现 | ✅ 已做：`tools/check_docs.py` |\n")], p)
         if p:
             out.append("SELF-TEST  规则 3 误报了一个点名的真实产物")
+
+        # 规则 4：数与实测不符 ⇒ 必须红。★ 用 `breaker/`（实测 8 个）当样本，
+        # 写一个显然不对的数——这条自检不依赖任何真实文档的当前内容。
+        p = []
+        check_test_counts([probe_with("| `breaker/` | ✅ 纯函数，999 个测试 |\n")], p)
+        if not p:
+            out.append("SELF-TEST  规则 4 放过了「N 个测试与实测不符」")
+        # 规则 4：数没有点名任何器官 ⇒ 必须红（不猜它数的是什么）。
+        p = []
+        check_test_counts([probe_with("| 全仓库 | ✅ 一共 123 个测试 |\n")], p)
+        if not p:
+            out.append("SELF-TEST  规则 4 放过了一个没点名任何器官的数")
+        # 规则 4 的反面：数与实测一致 ⇒ 不许红。
+        p = []
+        check_test_counts([probe_with("| `breaker/` | ✅ 纯函数，8 个测试 |\n")], p)
+        if p:
+            out.append("SELF-TEST  规则 4 误报了一个正确的数")
     finally:
         if os.path.exists(probe):
             os.remove(probe)
+
+    # ★★ 证明每一条规则**真的被调用**。
+    #
+    # 「从 RULES 里拿掉一条」与「那条通过」的输出完全一样——两半都要有：
+    # 上面那些探针证明「规则还看得见」，这一条证明「规则还在跑」。
+    _, _, applied = run()
+    if applied != len(RULE_NAMES):
+        out.append("SELF-TEST  只跑了 %d 条规则，而它声称有 %d 条："
+                   "没被调用的规则与通过的规则输出一样" % (applied, len(RULE_NAMES)))
 
     # ★ 这一半最要紧：证明「看见了会红」。
     out.append("SELF-TEST  注入的违规（这一条必须让它退出 1）")
@@ -209,16 +329,17 @@ def main():
                 print("  " + b)
             print(f"文档守卫自检失败：{len(bad)} 处")
             return 1
-        print("文档守卫自检：还看得见（三条规则各一个样本），且看见了会红")
+        print("SELF-TEST OK  文档守卫：还看得见（四条规则各一个样本），且看见了会红")
         return 1
-    problems, n = run()
+    problems, n, applied = run()
     if problems:
-        print(f"文档守卫：{len(problems)} 处不一致（扫了 {n} 份 .md）")
+        print(f"文档守卫：{len(problems)} 处不一致（扫了 {n} 份 .md，跑了 {applied} 条规则）")
         for p in problems:
             print("  " + p)
         return 1
-    print(f"文档守卫：{n} 份 .md，三条规则都过：⬜ 不指向存在的路径 · "
-          f"状态表只在一处 · 本地复现的 ✅ 点名了真实产物。")
+    print(f"文档守卫：{n} 份 .md，{applied} 条规则都过：⬜ 不指向存在的路径 · "
+          f"状态表只在一处 · 本地复现的 ✅ 点名了真实产物 · "
+          f"「N 个测试」与实测一致")
     return 0
 
 

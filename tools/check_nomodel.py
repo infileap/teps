@@ -226,7 +226,7 @@ def main():
                         "if r.Method != http.MethodPost {", "func (s *server) httpHandler(w http.ResponseWriter, r *http.Request) {"):
             if http_uses(ok_line):
                 problems.append(f"SELF-TEST  白名单内的用法被误报了  → {ok_line}")
-        print(f"自检：{len(samples)} 条模式样本 + 白名单两侧。")
+        print(f"SELF-TEST OK  自检：{len(samples)} 条模式样本 + 白名单两侧。")
         # ★ 而自检自己第一版只做了上面这一半：它证明了**每一条模式还认得出**
         # 它要认的东西，却没有走一遍**失败路径**——于是它的退出码永远是 0，
         # 而 `check_all.sh` 的自检项读到「注入违规之后它仍然说通过」。

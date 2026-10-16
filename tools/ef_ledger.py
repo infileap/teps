@@ -259,7 +259,7 @@ def main():
                 print("  " + b)
             print("收件箱分账自检失败：%d 处" % len(bad))
             return 1
-        print("收件箱分账自检：三类各一个样本，且看见了会红")
+        print("SELF-TEST OK  收件箱分账：三类各一个样本，且看见了会红")
         return 1
     # ★ 收数由人做（EigenFlux 的命令必须一条一条直接跑），
     #   而**合并**由这个工具做：把几页喂进来，它报并集。

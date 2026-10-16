@@ -61,12 +61,19 @@ echo
 # ★ 每一台**带自检**的守卫各检一次，不是只检一台：
 # 一个只验第一台的自检循环，会让第二台的自检永远不被跑 ——
 # 而它坏掉的样子与「通过」一模一样（它什么都不打印）。
+# ★ 判据不是「退出码非零」，而是「它**报出了**那条注入的违规」。
+#
+# 一个崩掉的自检也返回非零，而它与一个正确报告的自检在这里看起来一模一样——
+# 于是「崩溃」会被记成「红了」。这与本项目反复写的那个形状是同一条：
+# **一个没有断言的拒绝与一个不存在的拒绝，在被违反之前长得一样。**
 selfcheck() { # selfcheck <名字> <自检命令>
-  if eval "$2" >/dev/null 2>&1; then
-    printf '  FAIL  %-22s 注入违规之后它仍然说通过 —— 这台守卫是绿的机器\n' "$1"
+  out=$(eval "$2" 2>&1)
+  if ! printf '%s' "$out" | grep -q 'SELF-TEST OK'; then
+    printf '  FAIL  %-22s 自检没有报出它自己的样本检查（崩了也算没报）\n' "$1"
+    printf '%s\n' "$out" | sed 's/^/        /' | head -4
     fails=$((fails + 1))
   else
-    printf '  ok    %-22s 注入违规之后它红了\n' "$1"
+    printf '  ok    %-22s 注入违规之后它报出来了\n' "$1"
   fi
 }
 selfcheck "守卫自检 nomodel"  "TEPS_NOMODEL_SELF_TEST=1 python3 tools/check_nomodel.py"
