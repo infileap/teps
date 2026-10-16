@@ -89,9 +89,24 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 
 	accuracy := s.accuracy(tbl)
 
+	// ★ `skills` 数的是**不同的 skill_id**，`rows` 数的是后验表里有多少行。
+	//
+	// 此前只有 `"skills": len(tbl)`，而 `tbl` 是 `map[Key]Posterior`、`Key{Skill, TaskClass}`。
+	// 于是那一个数把三件事混在一起：**同一个技能在两个任务类下算两个**，
+	// 而**组合**（`compose:serial:<形状哈希>`）与技能在同一个命名空间里、也各算一个。
+	//
+	// 一个字段名叫 `skills`、算的是「后验行数」的数，读起来是「有几个技能」。
+	// 这与 DSH 任务看板那个 `armedSchedules` 是同一个形状：
+	// **一个读起来像运行时事实的名字，底下是一个别的事实。**
+	distinctSkills := map[string]struct{}{}
+	for k := range tbl {
+		distinctSkills[k.Skill] = struct{}{}
+	}
+
 	reliability := map[string]any{
 		"observations": observations,
-		"skills":       len(tbl),
+		"skills":       len(distinctSkills),
+		"rows":         len(tbl),
 		"source":       "arbiter.state",
 		// spent 是链上那些执行记录说的钱。它必须与 reliability 同时出现：
 		// 一条可靠但没人付得起的路，和一条便宜但不可靠的路，是两个不同的答案。

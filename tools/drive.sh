@@ -1248,6 +1248,29 @@ expect "★ 链上记着这次执行花了多少钱（否则链会声称每次�
 r=$(req '{"t":"metrics.get","v":1}')
 expect "★ 可靠性报告与花费一起给（便宜但不可靠和可靠但付不起是两个答案）" "$r" '"spent":2'
 
+# ★ 一个字段名叫 `skills`、算的却是「后验表里有几行」的数，读起来是「有几个技能」。
+#   而 `tbl` 是 `map[Key]Posterior`、`Key{Skill, TaskClass}` —— 所以同一个技能
+#   在两个任务类下算两个，组合与技能还在同一个命名空间里。
+#   这与 DSH 任务看板那个 `armedSchedules` 是同一个形状。
+#   造出「一个技能、两个任务类」这个形状，再断言两个数真的分开了。
+# ★ 先开一个 intent 再给 resolution —— 一个没有 intent 的 resolution 会被拒
+#   （`no open attempt to resolve`），而那正是「执行记录是 intent/resolution 两半」这条设计。
+req '{"t":"arbiter.observe","v":1,"key":"mc1i","body":{"attempt":"mc1","skill":"runner.ok","task_class":"task_plan"}}' >/dev/null
+req '{"t":"arbiter.observe","v":1,"key":"mc1r","body":{"attempt":"mc1","skill":"runner.ok","task_class":"task_plan","outcome":"ok","verified_by":"verifier"}}' >/dev/null
+r=$(req '{"t":"metrics.get","v":1}')
+chk=$(python3 -c '
+import json,sys
+b=json.load(sys.stdin)["body"]["reliability"]
+s,rows=b["skills"],b["rows"]
+print("ok" if rows>s and s>=1 else f"BAD skills={s} rows={rows}")
+' 2>&1 <<<"$r")
+if [ "$chk" = "ok" ]; then
+  printf '  ok    ★★ skills 数的是不同的技能、rows 数的是后验行数（同一个技能两个任务类 ⇒ 两个数不同）\n'
+else
+  printf '  FAIL  ★★ skills 与 rows 没有分开：%s\n' "$chk"
+  fails=$((fails + 1))
+fi
+
 # ★ 后验的 mean 与原始成功率是同一批记录的两个读数：一个折过，一个没折。
 #   两者不同是设计使然（遗忘是故意的），但在此之前没有任何地方报过这个差 ——
 #   「这个数是折过的」那句话只活在注释里。
