@@ -81,8 +81,14 @@ func TestOneSuccessIsNotEnoughToFire(t *testing.T) {
 	if Fires(r) {
 		t.Fatalf("one success must not be enough to start answering, strength %v", r.Strength)
 	}
-	if r.Fires != 1 {
-		t.Fatalf("the success must still be counted, got %d", r.Fires)
+	// ★ 这条此前断言 `r.Fires == 1`，理由是「那次成功还是得算」。
+	// 那个断言把 `Fires` 的含义定成了「观测次数」——而同一个包里
+	// `Fires(r)` 问的是「它现在答不答」。一个词两个意思。
+	//
+	// 现在 `Fires` 只数**它答过几次**：这条规则一次都没答过（0.5 < 0.6），
+	// 所以是 0。它不是「失败了一次」，它是**没有被问到**。
+	if r.Fires != 0 {
+		t.Fatalf("a rule that has never answered has no firings, got %d", r.Fires)
 	}
 }
 
@@ -91,8 +97,69 @@ func TestTwoSuccessesMakeItFire(t *testing.T) {
 	if !Fires(r) {
 		t.Fatalf("two successes should start answering, strength %v", r.Strength)
 	}
-	if r.Fires != 2 {
-		t.Fatalf("two firings must be counted, got %d", r.Fires)
+	// 它**现在**能答了，但两次观测都落在它还不能答的时候，所以还不是开火。
+	// 下一次观测落在一条正在答的规则上，才第一次算开火。
+	if r.Fires != 0 {
+		t.Fatalf("reaching the threshold is not itself a firing, got %d", r.Fires)
+	}
+	r = Reinforce(r)
+	if r.Fires != 1 {
+		t.Fatalf("the observation after it started answering is the first firing, got %d", r.Fires)
+	}
+}
+
+// ★★★ 一条从没强到能开始的规则，被观测一次失败之后，**不是**「已消退」。
+//
+// 这是 `extinguished` 那个数此前报错的那条路径：新规则起点 0.3、阈值 0.6，
+// 它够不到开火线；`Weaken` 无条件 `r.Fires++` 把它记成「答过一次且答错了」，
+// 而 `reflex.state` 的判据是 `r.Fires > 0 && !Fires(r)` ⇒ 报成「触发过、现在不触发了」。
+// 而它旁边那句注释逐字写着这个数要区分开的正是**「从没强到能开始」**。
+func TestARuleThatNeverStartedIsNotExtinguished(t *testing.T) {
+	r := mustNew(t, "r1", "what time is it", "clock.now")
+	if Fires(r) {
+		t.Fatal("precondition: a fresh rule cannot answer")
+	}
+	r = Weaken(r)
+	if Fires(r) {
+		t.Fatal("precondition: a failure on a fresh rule leaves it unable to answer")
+	}
+	if r.Fires != 0 {
+		t.Fatalf("it was never asked, so it never answered, got %d firings", r.Fires)
+	}
+	if r.Fires > 0 {
+		t.Fatal("`r.Fires > 0` is the whole test `reflex.state` uses for extinction")
+	}
+}
+
+// ★ 判据取的是**削弱之前**的强度：问的是「它被问到的那一刻答不答」。
+//
+// 一条正好停在阈值上的规则，削弱之后就不在阈值上了（0.6 → 0.4）。
+// 如果判据放在削弱之后，这次失败会被记成「它没在答」——而它**答了**。
+func TestTheFiringTestIsTakenBeforeTheStrengthChanges(t *testing.T) {
+	r := Rule{ID: "r1", Pattern: "s", Action: "a", Strength: FireThreshold}
+	if !Fires(r) {
+		t.Fatal("precondition: a rule exactly at the threshold answers")
+	}
+	r = Weaken(r)
+	if r.Fires != 1 {
+		t.Fatalf("it answered before the failure, so the failure is a firing, got %d", r.Fires)
+	}
+	if Fires(r) {
+		t.Fatal("precondition: it no longer answers after the failure")
+	}
+}
+
+// ★ 一条真的开过火的规则被削弱，那次失败**要**算一次开火：
+// 「它答了，而且答错了」——这正是 `Weaken` 文档里那句理由成立的那种情形。
+func TestAFailureOnAFiringRuleCountsAsAFiring(t *testing.T) {
+	r := fired(t, "r1", "what time is it", "clock.now")
+	if !Fires(r) {
+		t.Fatal("precondition: the rule fires")
+	}
+	before := r.Fires
+	r = Weaken(r)
+	if r.Fires != before+1 {
+		t.Fatalf("a failure while answering is a firing, got %d from %d", r.Fires, before)
 	}
 }
 

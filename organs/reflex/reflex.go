@@ -81,7 +81,10 @@ type Rule struct {
 	Pattern  string
 	Action   string
 	Strength float64
-	Fires    int
+	// Fires is how many times this rule **answered**, not how many times it was
+	// observed. A rule below FireThreshold that is observed is not answering,
+	// so that observation is not a firing.
+	Fires int
 }
 
 // Normalise reduces a stimulus to the form rules are keyed by.
@@ -134,19 +137,42 @@ func clamp01(f float64) float64 {
 }
 
 // Reinforce returns the rule after a success.
+//
+// ★ 只有**它当时真的在答**，这一次才算一次开火。
+//
+// 此前这里无条件 `r.Fires++`，于是 `Fires` 数的是「观测次数」而不是「开火次数」，
+// 而同一个包里 `Fires(r)` 这个函数问的恰恰是「它现在答不答」——**一个词两个意思**。
+// 后果不是学术的：一条从没到过阈值的新规则（起点 0.3，阈值 0.6）被观测一次
+// `failed` 之后，`Fires` 变成 1，`reflex.state` 于是把它报成 `extinguished`
+// （「触发过、现在不触发了」）——而那正是旁边那句注释说它要区分开的另一种东西：
+// **「从没强到能开始」**。同一份 JSON 里 `fires: false` 与 `firings: 1` 因此互相矛盾。
+//
+// `Fires` 是「它答了几次」，所以它只在一个观测**落在一条正在答的规则上**时加一。
 func Reinforce(r Rule) Rule {
+	if Fires(r) {
+		r.Fires++
+	}
 	r.Strength = clamp01(r.Strength + ReinforceStep)
-	r.Fires++
 	return r
 }
 
 // Weaken returns the rule after a failure.
 //
-// The failure also counts as a firing: the rule did fire, and it was wrong.
-// Leaving Fires alone would make the rate look better than it is.
+// The failure also counts as a firing **when the rule was firing**: the rule did
+// answer, and it was wrong. Leaving Fires alone would make the rate look better
+// than it is.
+//
+// ★ 但它只在**真的开过火**的时候才算一次开火。一条没到阈值的规则被报为失败，
+// 是「它没被问到」，不是「它答错了」——把它记成一次失败的作答，会让一条
+// 从不回答的规则看起来像一条**每次回答都错**的规则。那是两个不同的事实，
+// 而报出来的是同一个数。
+//
+// 判据取的是**削弱之前**的强度：问的是「它被问到的那一刻答不答」。
 func Weaken(r Rule) Rule {
+	if Fires(r) {
+		r.Fires++
+	}
 	r.Strength = clamp01(r.Strength - WeakenStep)
-	r.Fires++
 	return r
 }
 
@@ -165,6 +191,10 @@ func Decay(r Rule, periods int) Rule {
 }
 
 // Fires reports whether the rule is strong enough to answer.
+//
+// ★ 与字段 `Rule.Fires` 是同一个词、同一个意思：那个字段数的是**它答过几次**。
+// 一个问「现在答不答」，一个答「已经答了几次」——两个都用 Fires，
+// 是因为它们说的是同一件事的两个时态。
 func Fires(r Rule) bool { return r.Strength >= FireThreshold }
 
 // Match returns the strongest firing rule for a stimulus.

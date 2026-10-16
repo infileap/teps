@@ -875,6 +875,21 @@ expect "没有 rule_id 的观测被拒" "$r" 'rule_id'
 r=$(req '{"t":"reflex.observe","v":1,"key":"f11","body":{"rule_id":"time.now","outcome":"nonsense"}}')
 expect "未知结果被拒" "$r" 'unknown reflex outcome'
 
+# ★★★ 一条从没强到能开始的规则被观测为失败，**不是**「已消退」。
+#
+# 新规则起点 0.3、阈值 0.6，它够不到开火线；而 `Weaken` 此前无条件把 `Fires` 加一，
+# 于是 `reflex.state` 的判据 `r.Fires > 0 && !Fires(r)` 把它报成
+# 「触发过、现在不触发了」——而那句判据旁边的注释逐字写着它要区分开的正是
+# **「从没强到能开始」**。同一份 JSON 里 `fires: false` 与 `firings: 1` 因此互相矛盾。
+r=$(req '{"t":"reflex.observe","v":1,"key":"f12","body":{"rule_id":"never.started","stimulus":"never","action":"x","outcome":"failed"}}')
+r=$(req '{"t":"reflex.state","v":1,"body":{}}')
+# ★ 这里**不**断言 `"strength":0`：它是 `"strength":0.7` 的真前缀，
+# 而 `expect` 是子串搜索 —— 那会是一条读起来像一致性判据的存在性判据
+# （check_assertions.py 报的就是这一类）。要证明的事在 `firings` 与 `fires` 上。
+expect "★ 从没开过火的规则：一次失败不是一次开火" "$r" '"action":"x","fires":false,"firings":0,"id":"never.started","pattern":"never"'
+expect "★ 它因此不算「已消退」——没有东西被消退" "$r" '"extinguished":0'
+expect "★ 而真的触发过的那条已经回来了" "$r" '"firing":1'
+
 echo "—— 反射层跨重启：规则表是链的投影 ——"
 r=$(req '{"t":"reflex.state","v":1,"body":{}}')
 expect "跨重启规则仍在" "$r" '"id":"time.now"'
