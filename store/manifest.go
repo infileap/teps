@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"teps/core"
@@ -118,6 +119,19 @@ func (e Env) validate() *core.Refusal {
 		if r.Socket == "" {
 			return bad("env.reaches[" + itoa(i) + "].socket is empty: a local reach with nothing named is a claim nothing checks")
 		}
+		// ★★★ 两件事必须分开说：**这串东西不是一个端点**，与**它是一个远端**。
+		//
+		// 加上端口判据之后，`tcp:localhost:not-a-port` 与 `tcp:127.0.0.1:0`
+		// 都落进了下面那一条拒绝里 —— 而它的理由是「这是一个穿着本机标签的远端
+		// reach，请改用 env.network，并预期它会被拒」。**那句话不是关于发生的事的**：
+		// `not-a-port` 根本不是远端，它根本不是端点；而照它说的改成 `env.network`
+		// 会撞上另一条拒绝 —— 读的人被指了一个圈。
+		//
+		// ★ 与这一整轮的主题同一条：**一句关于别的事的话，比没有话更坏**。
+		if !wellFormedEndpoint(r.Socket) {
+			return bad("env.reaches[" + itoa(i) + "].socket names " + r.Socket +
+				": that is not a well-formed endpoint, so there is nothing here to be local or remote — a reach must be unix:<path> or tcp:<host>:<port> with a real port (1..65535)")
+		}
 		if !isLoopback(r.Socket) {
 			return bad("env.reaches[" + itoa(i) + "].socket names " + r.Socket +
 				": that is not a loopback endpoint, so this is a remote reach wearing the local label — set env.network instead, and expect it to be refused")
@@ -141,6 +155,52 @@ func (e Env) validate() *core.Refusal {
 // It is deliberately a whitelist. A blacklist would let "tcp:0.0.0.0:8080" and
 // every future spelling of a routable address through, and the failure it
 // guards is one where the manifest says local and the bytes go somewhere else.
+// wellFormedEndpoint 判一串 socket 是不是**一个端点**（不管它在哪）。
+//
+// ★ 它存在，是因为 `isLoopback` 只能回答「在不在本机」，而**「这不是一个端点」
+// 与「这是一个远端端点」是两件事** —— 把前者塞进后者的拒绝里，读的人会被指向
+// 一个错的修法（改成 `env.network`，然后撞上另一条拒绝）。
+func wellFormedEndpoint(spec string) bool {
+	if rest, ok := strings.CutPrefix(spec, "unix:"); ok {
+		return rest != ""
+	}
+	host, ok := strings.CutPrefix(spec, "tcp:")
+	if !ok {
+		return false
+	}
+	i := strings.LastIndex(host, ":")
+	if i < 0 {
+		return false
+	}
+	if !validPort(host[i+1:]) {
+		return false
+	}
+	h := strings.TrimSuffix(strings.TrimPrefix(host[:i], "["), "]")
+	return h != ""
+}
+
+// validPort 判一个字符串是不是一个真的 TCP 端口。
+//
+// ★ 它的存在是因为「最后一个冒号之后的一切」不是端口：`80@evil.com` 与
+// `not-a-port` 都能从那一条判据下走过去。端口是 1..65535 的十进制整数，
+// 没有前导零之外的写法 —— 这条判据只管它是不是**一个端口**，不管它连不连得上
+// （那件事这个包判不了，也不该判）。
+func validPort(p string) bool {
+	if p == "" || len(p) > 5 {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		if p[i] < '0' || p[i] > '9' {
+			return false
+		}
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil {
+		return false
+	}
+	return n >= 1 && n <= 65535
+}
+
 func isLoopback(spec string) bool {
 	if rest, ok := strings.CutPrefix(spec, "unix:"); ok {
 		return rest != ""
@@ -155,7 +215,30 @@ func isLoopback(spec string) bool {
 		return false
 	}
 	port := host[i+1:]
-	if port == "" {
+	// ★★★ 而端口**必须真的是一个端口**。
+	//
+	// 此前这里只判 `port == ""`，于是「最后一个冒号之后的一切」都算端口。实测：
+	//
+	//	tcp:127.0.0.1:11434        -> 通过（对）
+	//	tcp:localhost:80@evil.com  -> **通过**（端口是 `80@evil.com`）
+	//	tcp:localhost:not-a-port   -> **通过**（端口根本不是数字）
+	//	tcp:127.0.0.1:0            -> **通过**（端口 0 不是一个端点）
+	//	tcp:10.0.0.1:11434         -> 被拒（对）
+	//
+	// 而 `Env.validate` 的文档逐字写着它拒的是什么：
+	//
+	//	validate refuses a reach that is not actually local, or not actually
+	//	pinned. Both refusals are about the same thing: a manifest that says
+	//	"local" while naming something reachable, or names a socket without
+	//	naming what is behind it, is a claim nothing can check.
+	//
+	// **而那串 socket 本身就是一个没人检查的声明** —— 主机检查了，端口没有。
+	// 于是一串**根本没在命名端点**的东西（`not-a-port`）会被当成一个
+	// 「本机的、已钉住的」reach 收下来。
+	//
+	// ★ 与 Round 69 的 `effects`/`env.network` 是同一条：**一条判据只查了它
+	// 一半的对象，另一半就成了那扇开着的门。**
+	if !validPort(port) {
 		return false
 	}
 	host = host[:i]

@@ -1153,13 +1153,48 @@ func TestARemoteReachIsStillRefused(t *testing.T) {
 // label. The check is a whitelist on purpose: a blacklist would let every
 // future spelling of a routable address through.
 func TestAReachThatIsNotLoopbackIsRefused(t *testing.T) {
+	// ★★★ 而这条测试此前把**两件不同的事**混在一张表里。
+	//
+	// `http://127.0.0.1:8080` 与 `127.0.0.1:8080` **不是一个端点**（没有
+	// `unix:`/`tcp:` 前缀），`tcp:127.0.0.1` **没有端口** —— 它们不是「远端」，
+	// 它们是「根本不是端点」。而这张表要求它们全都给出**远端**那个理由：
+	//
+	//	"that is not a loopback endpoint, so this is a remote reach wearing the
+	//	 local label — set env.network instead, and expect it to be refused"
+	//
+	// 照那句话去改会撞上另一条拒绝 —— **读的人被指了一个圈**。
+	// 而这张表之所以能通过，是因为**旧判据把两者都归进了同一条拒绝**：
+	// 一条分不清两种拒绝的测试，与一条分不清两种事实的判据，是同一件事的两面。
+	for _, spec := range []string{
+		"http://127.0.0.1:8080",
+		"127.0.0.1:8080",
+		"tcp:127.0.0.1",
+		// ★ 而这三条是加上端口判据之后才进来的：端口是「最后一个冒号之后的一切」时，
+		// 它们都被当成合法的本机端点收下了。
+		"tcp:localhost:not-a-port",
+		"tcp:localhost:80@evil.com",
+		"tcp:127.0.0.1:0",
+	} {
+		s := tmpStore(t)
+		m := goodManifest()
+		m.Env.Reaches = []Reach{{Socket: spec, Artifact: strings.Repeat("a", 64)}}
+		_, ref := s.Register(regWith(m, nil))
+		if ref == nil {
+			t.Fatalf("%q names no endpoint at all and must be refused", spec)
+		}
+		if !strings.Contains(ref.Reason, "not a well-formed endpoint") {
+			t.Fatalf("%q: want the malformed-endpoint reason, got: %s", spec, ref.Reason)
+		}
+		// ★ 而它**不许**给出远端那个理由 —— 那会把读的人指向一个错的修法。
+		if strings.Contains(ref.Reason, "remote reach wearing the local label") {
+			t.Fatalf("%q is not a remote reach, and saying it is sends the publisher to env.network: %s", spec, ref.Reason)
+		}
+	}
+	// ★ 而**真的是远端**的那些，仍然必须给出远端那个理由（那是可执行的修法方向）。
 	for _, spec := range []string{
 		"tcp:0.0.0.0:8080",
 		"tcp:10.0.0.5:11434",
 		"tcp:example.com:443",
-		"http://127.0.0.1:8080",
-		"127.0.0.1:8080",
-		"tcp:127.0.0.1",
 	} {
 		s := tmpStore(t)
 		m := goodManifest()
