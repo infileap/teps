@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,5 +119,120 @@ func TestBreakerCountsClosedHosts(t *testing.T) {
 	if got["closed"] != float64(1) || got["open"] != float64(0) || got["half_open"] != float64(0) {
 		t.Fatalf("open=%v half_open=%v closed=%v, want 0/0/1",
 			got["open"], got["half_open"], got["closed"])
+	}
+}
+
+// ★★★ 半开的探针必须是一份**租约**，不是一个状态读数。
+//
+// `organs/breaker/breaker.go` 的 `Allow` 在 `case HalfOpen` 里无条件回 nil，
+// 于是「半开只放一个探针」靠的是**副作用**：第一个探针的失败被写进 trips、
+// 把状态推回 open。串行时恰好成立；**并发时不成立**。实测（三次宿主失败 →
+// 等 31 秒进 half-open → 同时发 5 次 skill.invoke）：
+//
+//	d7 放行 · d5 放行 · d4 circuit_open · d8 circuit_open · d6 放行
+//
+// **放行了三次**，而 README 写着「半开只放一个探针」。而本该拦住它的
+// `HalfOpenProbe` 一个调用点都没有，它自己的注释逐字写着后果：
+//
+//	A half-open breaker that admitted every attempt would take the full traffic
+//	of every skill behind it on the first probe.
+//
+// 与算力池那条「容量是租约不是计数」是同一条：**一个「现在有几个」的问题，
+// 读状态是答不对的 —— 状态说你到了半开，不说那个探针已经派出去了。**
+func halfOpenServer(t *testing.T) *server {
+	t.Helper()
+	s := breakerServer(t)
+	// 三次失败，且都发生在冷却之前 ⇒ 状态是 half-open。
+	old := time.Now().UnixMilli() - breaker.CooldownMS - 1
+	for i := 0; i < breaker.Threshold; i++ {
+		trip(t, s, "host.x", old, false)
+	}
+	if got := breaker.StateOf(s.breakers.trips, "host.x", time.Now().UnixMilli()); got != breaker.HalfOpen {
+		t.Fatalf("precondition: want half-open, got %s", got)
+	}
+	return s
+}
+
+func TestHalfOpenAdmitsExactlyOneProbe(t *testing.T) {
+	s := halfOpenServer(t)
+
+	if ref := s.allowHost("host.x", "probe-1"); ref != nil {
+		t.Fatalf("the first probe must be admitted: %s", ref.Reason)
+	}
+	ref := s.allowHost("host.x", "probe-2")
+	if ref == nil {
+		t.Fatal("a second probe must be refused while the first is in flight")
+	}
+	if ref.Code != core.CodeCircuitOpen {
+		t.Fatalf("want circuit_open, got %s", ref.Code)
+	}
+	// ★ 理由必须点名**那个还在飞的探针** —— 「已经有一个探针了」不说是哪一个，
+	// 读的人没法去查它。
+	if !strings.Contains(ref.Reason, "probe-1") {
+		t.Fatalf("the reason must name the probe in flight, got %q", ref.Reason)
+	}
+	if !strings.Contains(ref.Reason, "already in flight") {
+		t.Fatalf("the reason must say why, got %q", ref.Reason)
+	}
+}
+
+// 探针回来了 ⇒ 占位要还掉，否则一个**成功**的探针会让这个 host 在下一个冷却期
+// 里再也放不出探针 —— 那是半开要避免的另一半。
+func TestAFinishedProbeGivesTheSlotBack(t *testing.T) {
+	s := halfOpenServer(t)
+	if ref := s.allowHost("host.x", "probe-1"); ref != nil {
+		t.Fatalf("the first probe must be admitted: %s", ref.Reason)
+	}
+	// ★ 别的 attempt 不能替 probe-1 还这个占位 —— 否则任何一个碰巧结束在
+	// 这个 host 上的执行都能把它解掉，而那个占位说的是**那一个**探针。
+	s.recordTrip("host.x", "ok", "someone-else")
+	if _, held := s.breakers.probes["host.x"]; !held {
+		t.Fatal("a different attempt must not release this host's probe reservation")
+	}
+	// ★ 而它自己回来时必须还掉，否则一个**成功**的探针会让这个 host 在下一个
+	// 冷却期里再也放不出探针 —— 那是半开要避免的另一半。
+	s.recordTrip("host.x", "ok", "probe-1")
+	if _, held := s.breakers.probes["host.x"]; held {
+		t.Fatal("the reservation must be released when the probe comes back")
+	}
+}
+
+// 持有探针的执行崩了 ⇒ 占位必须自己过期，否则熔断器会永远卡在半开。
+func TestAProbeThatNeverComesBackExpires(t *testing.T) {
+	s := halfOpenServer(t)
+	if ref := s.allowHost("host.x", "probe-1"); ref != nil {
+		t.Fatalf("the first probe must be admitted: %s", ref.Reason)
+	}
+	// 手动把它的租约推到过去 —— 等价于「等过了 CooldownMS」。
+	p := s.breakers.probes["host.x"]
+	p.expires = time.Now().UnixMilli() - 1
+	s.breakers.probes["host.x"] = p
+	// ★ 而状态必须仍然是 half-open，否则这条测的是别的东西。
+	if got := breaker.StateOf(s.breakers.trips, "host.x", time.Now().UnixMilli()); got != breaker.HalfOpen {
+		t.Fatalf("precondition: want half-open, got %s", got)
+	}
+	if ref := s.allowHost("host.x", "probe-2"); ref != nil {
+		t.Fatalf("an expired reservation must not block forever: %s", ref.Reason)
+	}
+}
+
+// 反向对照：**开着的**（冷却没过）宿主仍然一律拒绝，与探针无关。
+func TestAnOpenHostStillRefusesEveryAttempt(t *testing.T) {
+	s := breakerServer(t)
+	now := time.Now().UnixMilli()
+	for i := 0; i < breaker.Threshold; i++ {
+		trip(t, s, "host.x", now, false)
+	}
+	if got := breaker.StateOf(s.breakers.trips, "host.x", now); got != breaker.Open {
+		t.Fatalf("precondition: want open, got %s", got)
+	}
+	for i := 0; i < 3; i++ {
+		ref := s.allowHost("host.x", "a"+strconv.Itoa(i))
+		if ref == nil {
+			t.Fatal("an open host refuses every attempt, probes included")
+		}
+		if ref.Code != core.CodeCircuitOpen {
+			t.Fatalf("want circuit_open, got %s", ref.Code)
+		}
 	}
 }

@@ -287,7 +287,7 @@ func (s *server) handleExecute(f core.Frame, out *core.Frame) bool {
 	// 位置在 intent **之前**是有意的 —— 一次被熔断的尝试什么都没做，
 	// 在链上留下一条 intent 会让「开着的意图」这个信号被稀释。
 	// 槽已经在上面占住了，defer 会把它还回去。
-	if refusal := s.allowHost(plan.Interpreter); refusal != nil {
+	if refusal := s.allowHost(plan.Interpreter, req.Attempt); refusal != nil {
 		out.Err = refusal
 		return true
 	}

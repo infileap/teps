@@ -37,10 +37,44 @@ type breakerStore struct {
 
 	trips   []breaker.Trip
 	applied uint64
+
+	// probes 是**正在飞的那一个探针**：host -> 它的尝试 id 与租约到期时刻。
+	//
+	// ★★★ 半开的探针必须是一份**租约**，不是一个状态读数。
+	//
+	// 此前 `allowHost` 只问 `breaker.Allow`，而它在半开时无条件回 nil ——
+	// 于是「半开只放一个探针」这句话靠的是「第一个探针的失败会被写进 trips、
+	// 从而把状态推回 open」这个**副作用**。串行地发请求时它恰好成立；并发时
+	// 不成立。实测（三次失败 → 等 31 秒进入 half-open → 同时发 5 次）：
+	//
+	//   d7 放行 · d5 放行 · d4 circuit_open · d8 circuit_open · d6 放行
+	//
+	// **放行了三次，而 README 写着「半开只放一个探针」。**
+	//
+	// 而那个本该拦住它的函数 `organs/breaker/breaker.go` 的 `HalfOpenProbe`
+	// 一个调用点都没有（Round 55 把它标成了 DEAD-API），它自己的注释逐字写着
+	// 这件事的后果：
+	//
+	//   A half-open breaker that admitted every attempt would take the full
+	//   traffic of every skill behind it on the first probe.
+	//
+	// 与算力池那条「容量是租约不是计数」是同一条：**一个「现在有几个」的问题，
+	// 读状态是答不对的 —— 状态说你到了半开，不说那个探针已经派出去了。**
+	probes map[string]probeLease
+}
+
+// probeLease 是一次半开探针的占位。
+//
+// 它有到期时刻，因为持有它的那个执行可能崩掉、也可能永远不回来 ——
+// 一份永远不放的租约与一个永远开着的熔断器是同一种坏。到期时刻取
+// `CooldownMS`：那与「再等一个冷却期」是同一件事，不需要第二个常数。
+type probeLease struct {
+	attempt string
+	expires int64
 }
 
 func newBreakerStore(lg *core.Log) (*breakerStore, *core.Refusal) {
-	st := &breakerStore{mu: make(chan struct{}, 1), lg: lg}
+	st := &breakerStore{mu: make(chan struct{}, 1), lg: lg, probes: map[string]probeLease{}}
 	st.mu <- struct{}{}
 	if ref := lg.Replay(st.absorb); ref != nil {
 		return nil, ref
@@ -96,13 +130,30 @@ func (st *breakerStore) consecutive(host string) int {
 // The host is the interpreter, because that is what actually fails. Two skills
 // that share a broken interpreter share the breaker, which is the point: the
 // thing that is broken is the thing that runs them.
-func (s *server) allowHost(host string) *core.Refusal {
+func (s *server) allowHost(host, attempt string) *core.Refusal {
 	if s.breakers == nil || host == "" {
 		return nil
 	}
 	now := time.Now().UnixMilli()
 	s.breakers.lock()
 	defer s.breakers.unlock()
+
+	// 过期的探针先还回去：持有它的执行可能崩了。
+	for h, p := range s.breakers.probes {
+		if p.expires <= now {
+			delete(s.breakers.probes, h)
+		}
+	}
+	// ★ 半开：**占位**，不是读状态。占不到就不放行。
+	if breaker.StateOf(s.breakers.trips, host, now) == breaker.HalfOpen {
+		if p, held := s.breakers.probes[host]; held {
+			return core.Refuse(core.CodeCircuitOpen,
+				"host "+host+" is half-open and a probe ("+p.attempt+") is already in flight: the "+
+					"cooldown admits exactly one probe, and admitting the full traffic of every skill "+
+					"behind this host is the thing half-open exists to avoid")
+		}
+		s.breakers.probes[host] = probeLease{attempt: attempt, expires: now + breaker.CooldownMS}
+	}
 	return breaker.Allow(s.breakers.trips, host, now)
 }
 
@@ -118,6 +169,11 @@ func (s *server) recordTrip(host, verdict, attempt string) {
 	ok := !breaker.IsHostFailure(verdict)
 	s.breakers.lock()
 	defer s.breakers.unlock()
+	// ★ 探针回来了（无论成败）：把占位还掉。不还的话，一个成功的探针会让这个
+	// host 在下一个冷却期里再也放不出探针 —— 而那正是半开要避免的另一半。
+	if p, held := s.breakers.probes[host]; held && p.attempt == attempt {
+		delete(s.breakers.probes, host)
+	}
 	if ok && s.breakers.consecutive(host) == 0 {
 		return
 	}
