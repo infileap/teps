@@ -817,6 +817,45 @@ def self_test():
     return bad
 
 
+# ★★★ 每一台守卫都要有自检，**或者**被明确列为豁免并写清理由。
+#
+# 这一条是 Round 85–89 的收尾：那五轮把自检一台一台补上（check_contract /
+# check_assertions / check_kernel / check_adapters / check_frames），
+# 而**没有任何东西在管「以后新加的守卫有没有自检」**。
+# 一台新守卫被加进 `run` 而不加进 `selfcheck`，它的自检缺失
+# **与「它通过了」输出完全一样** —— 这正是 check_all.sh 的 run() 自己逐字
+# 写下的那件事：「一条从 RULES 里被拿掉的规则，与一条通过的规则，输出完全一样」。
+#
+# ★ 而豁免必须是**写下来的**：`check_format.sh` 是格式化器不是判据，
+# 它的自检要造一棵临时树 —— 那不值得。**明确标出来的缺口不是静默漂移。**
+RUN_LINE = re.compile(r'^run\s+(?:"([^"]+)"|(\S+))', re.M)
+SELFCHECK_LINE = re.compile(r'^selfcheck\s+"守卫自检\s+(\S+)"', re.M)
+# 被豁免的守卫 → 理由（理由写在下面那张表里，不是一句「暂时」）。
+SELFCHECK_EXEMPT = {
+    "check_format.sh": "它是格式化器不是判据：它的自检要造一棵临时树再让 gofmt 去挑，"
+                       "而那条路径已经由「每一个进仓库的 .go 都 gofmt 干净」在 CI 上覆盖",
+    "go test ./...": "它跑的是测试套件本身，不是一条判据；测试的红就是它的红",
+}
+
+
+def every_guard_has_a_selfcheck():
+    src = read("tools/check_all.sh")
+    runs = [a or b for a, b in RUN_LINE.findall(src)]
+    checks = set(SELFCHECK_LINE.findall(src))
+    if not runs:
+        return ["tools/check_all.sh 里读不出 run 行：判据的前提变了"]
+    out = []
+    for r in runs:
+        if r in SELFCHECK_EXEMPT:
+            continue
+        # selfcheck 的名字是短的（`contract` / `frames`），而 run 的是文件名。
+        short = r.replace("check_", "").replace(".py", "").replace(".sh", "")
+        if short not in checks:
+            out.append(f"check_all.sh 里跑了 {r}，而**没有**对应的 selfcheck —— "
+                       f"一台守卫的「自检缺失」与「它通过了」输出完全一样")
+    return out
+
+
 def main():
     if os.environ.get("TEPS_CONTRACT_SELF_TEST") == "1":
         bad = self_test()
@@ -889,6 +928,11 @@ def run():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ 每一台守卫都要有自检，或者被明确列为豁免。
+    for u in every_guard_has_a_selfcheck():
+        print(u)
+        bad += 1
 
     # ★★★ 一个数如果不说它数的是什么，它就会读成另一个数。
     for u in selfcheck_count():
