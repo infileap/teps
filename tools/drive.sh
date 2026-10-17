@@ -2212,6 +2212,47 @@ else
   printf '  FAIL  ★★ probes_in_flight 与那些行对不上\n'; fails=$((fails + 1))
 fi
 
+# ★★★ 判决是一次比较，所以它必须报出被比较的那两个数。
+#
+# `ShouldEscalate` 做的是 `if paid.Utility <= local.Utility + margin`，而这一支
+# 此前只报 `chosen` / `reason` / `threshold` —— **被比下去的那一个根本不在回答里**。
+# 实测（margin 0.5，`local/cached` value 9 cost 0 latency 1 与
+# `skill/paid` value 10 cost 5 latency 100）：
+#   {"chosen":"local","chosen_offer":{…"utility":9…},
+#    "reason":"the paid action does not win by the margin, so the estimate is not
+#              good enough to spend on","threshold":0.5}
+# **`paid` 的效用（5）一个字都没出现**，于是 `threshold: 0.5` 是一个没有东西
+# 可减的数 —— 读的人没法核对那句话。
+# ★★ 夹具必须是**差不为零**的那一对。
+#
+# 第一版用的是 `local/cached` value 9 cost 0（效用 9）与 `skill/paid` value 10 cost 5
+# （效用 5）—— 本地赢，于是**诚实的 gap 也是 0**，而「gap 永远是 0」那个变异照样通过。
+# **一条在两种实现下都给同一个数的断言，断言的不是它们之间的差别。**
+#
+# 这一对：`local/cached` value 1 cost 0（效用 1）与 `escalate/expert` value 10 cost 1
+# （效用 9）—— 付费赢过 margin，差是 **8**。
+r=$(req '{"t":"arbiter.rank","v":1,"body":{"margin":0.5,"offers":[{"action":"local","skill":"cached","task_class":"task_exec","value":1,"cost":0,"latency":1},{"action":"escalate","skill":"expert","task_class":"task_exec","value":10,"cost":1,"latency":1}]}}')
+expect "★★ 付费赢过 margin 时被选中的就是它" "$r" '"chosen":"escalate"'
+expect "★★ 而差是 8，不是一个恒为 0 的数" "$r" '"gap":8' 
+expect "★★ 判决报出被比下去的那一个" "$r" '"local_offer"'
+expect "★★ 以及它的效用（没有它，threshold 是一个没有东西可减的数）" "$r" '"utility"'
+expect "★★ 以及那个差本身" "$r" '"gap"'
+if printf '%s' "$r" | python3 -c '
+import json,sys
+b=json.load(sys.stdin)["body"]
+# ★ 那个差必须**算**出来：chosen.utility - local.utility。
+assert abs(b["gap"] - (b["chosen_offer"]["utility"] - b["local_offer"]["utility"])) < 1e-9, b
+# ★ 而基线必须是**不花外面钱**的那一个。
+assert b["local_offer"]["action"] not in ("escalate","ask_human"), b["local_offer"]
+# ★ 本地赢了的时候，被选中的就是基线自己。
+if b["chosen"] == b["local"]:
+    assert b["gap"] == 0, b
+'; then
+  printf '  ok    ★★ gap 是那两个效用之差，且基线是不花外面钱的那一个（算出来的）\n'
+else
+  printf '  FAIL  ★★ gap 与那两个效用对不上\n'; fails=$((fails + 1))
+fi
+
 # ★ 一个宿主坏了，不该把别的宿主一起关掉。
 r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"ns7\",\"body\":{\"ref\":\"$xok\",\"attempt\":\"n-after-open\",\"task_class\":\"task_exec\"}}")
 expect "★ 另一个宿主完全不受影响（坏的是那个解释器，不是这台机器）" "$r" '"outcome":"ok"'

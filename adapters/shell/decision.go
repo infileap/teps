@@ -287,10 +287,37 @@ func (s *server) arbiterRank(f core.Frame, out *core.Frame) {
 		// 所以完整的那一行另起一个名字（`chosen_offer`），`chosen` 不动。
 		chosenRow := rankedRow(esc.Chosen)
 		chosenRow["cost"] = metaAt(meta, esc.Chosen.Offer.Tag)
+		// ★★★ 判决是**一次比较**，所以它必须报出被比较的那两个数。
+		//
+		// `ShouldEscalate` 做的是 `if best.Utility <= local.Utility+margin`，
+		// 而这一支此前只报 `chosen` / `reason` / `threshold` —— **被比下去的那一个
+		// 根本不在回答里**。实测（`margin: 0.5`，两个 offer：`local/cached` value 9
+		// cost 0 latency 1，`skill/paid` value 10 cost 5 latency 100）：
+		//
+		//   {"chosen":"local","chosen_offer":{…"utility":9…},
+		//    "reason":"the paid action does not win by the margin, so the estimate
+		//              is not good enough to spend on","threshold":0.5}
+		//
+		// **`paid` 的效用（5）一个字都没出现**，于是 `threshold: 0.5` 是一个
+		// 没有东西可减的数 —— 读的人没法核对那句话。
+		//
+		// ★ 而承载它的字段 `Escalation.Local`（`organs/arbiter/escalation.go:206`）
+		// 此前**只被写、从没被读** —— 这是 `tools/check_organs.py` 新加的那条
+		// 「只写不读的导出字段」规则抓出来的。
+		//
+		// ★ 判据：`chosen` 是**被选中的那一个**，`local` 是**被比下去的那一个**
+		// （或者就是 chosen 自己，当本地赢了）。两者都要在。
+		localRow := rankedRow(esc.Local)
+		localRow["cost"] = metaAt(meta, esc.Local.Offer.Tag)
 		out.Body = mustJSON(map[string]any{
 			"chosen":       string(esc.Chosen.Offer.Action),
 			"chosen_offer": chosenRow,
-			"reason":       esc.Reason, "threshold": body.Margin,
+			// ★ 被比下去的那一个，与它的效用 —— 判决是一个差，差要有两个数。
+			"local":       string(esc.Local.Offer.Action),
+			"local_offer": localRow,
+			// ★ 而那个差本身也报出来：`chosen.Utility - local.Utility`。
+			"gap":    round(esc.Chosen.Utility - esc.Local.Utility),
+			"reason": esc.Reason, "threshold": body.Margin,
 			"skipped": skipped,
 		})
 		return

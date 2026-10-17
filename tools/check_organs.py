@@ -228,6 +228,95 @@ def check_exported_functions_have_callers():
     return problems
 
 
+# ★★★ 一个只被**写**、从不被**读**的导出字段是一个承诺。
+#
+# 这一条是被 `organs/session/machine.go` 的 `EscalationOpen` 逼出来的：
+#
+#	// EscalationOpen is true between entering Waiting and either being
+#	// granted or giving up. It is what makes the waste ratio countable.
+#	EscalationOpen bool
+#
+# 而 `WasteRatio` 的签名是 `func WasteRatio(escalations, degraded int) float64`
+# —— **两个 int，从不看这个字段**。`Flags()` 也不带它，`session.status` 也就报
+# 不出来。生产代码里它只出现在 `out.EscalationOpen = true/false` 两行上：
+# **只有写，没有读。**
+#
+# ★ 判据必须把「读」与「写」分开：一个 `x.Field = v` 是写，一个出现在表达式里的
+# `x.Field` 才是读。第一版只数名字，于是 `EscalationOpen` 被那两行赋值算成「用过」
+# —— **一个只数名字的守卫分不出「被写了」与「被读了」。**
+#
+# 处置与导出函数一致：允许暂时没有读者，但那个字段上方的文档注释里必须带上
+# `DEAD-API:` 与一句理由。
+EXPORTED_FIELD = re.compile(r'^\t([A-Z]\w*)\s+[\w\.\[\]\*]+')
+
+
+def read_uses(body, name):
+    """非测试代码里对这个字段的**读**次数（`x.Name` 后面不是 `=` 才算读）。"""
+    n = 0
+    for m in re.finditer(r'\.' + name + r'\b', body):
+        tail = body[m.end():m.end() + 3].lstrip()
+        if tail.startswith('=') and not tail.startswith('=='):
+            continue  # 写
+        n += 1
+    return n
+
+
+def check_exported_fields_are_read():
+    problems = []
+    for d in ("organs", "store", "evidence"):
+        base = os.path.join(ROOT, d)
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [x for x in dirnames if not x.startswith(".")]
+            for fn in sorted(filenames):
+                if not fn.endswith(".go") or fn.endswith("_test.go"):
+                    continue
+                path = os.path.join(dirpath, fn)
+                rel = os.path.relpath(path, ROOT)
+                raw = open(path, encoding="utf-8").read()
+                lines = raw.splitlines()
+                others = []
+                for dp2, dn2, fs2 in os.walk(ROOT):
+                    dn2[:] = [x for x in dn2 if x not in (".git", ".toolchain")]
+                    for f2 in fs2:
+                        if not f2.endswith(".go") or f2.endswith("_test.go"):
+                            continue
+                        others.append(strip_comments(open(os.path.join(dp2, f2), encoding="utf-8").read()))
+                # 只在**结构体内部**找字段：从 `type X struct {` 到对应的 `}`。
+                inside = False
+                for i, line in enumerate(lines):
+                    if re.match(r'^type \w+ struct \{', line):
+                        inside = True
+                        continue
+                    if inside and line.startswith('}'):
+                        inside = False
+                        continue
+                    if not inside:
+                        continue
+                    m = EXPORTED_FIELD.match(line)
+                    if not m:
+                        continue
+                    name = m.group(1)
+                    # ★ 带 `json:` 标签的字段是**线上契约**的一部分，由编码器读
+                    # —— 一个只数 `.Name` 的判据看不见那一次读。
+                    # 第一版没有这一条，于是 `organs/intake` 的 `ContextTokens` /
+                    # `FallThrough` 被误报：`task.intake` 把整个 `Decision`
+                    # 序列化出去了。**一个只数一种读法的守卫，会把别的读法当成没读。**
+                    # ★ 判据是 `json:"`（反引号在 json 之后），不是 `"json:`
+                    # —— 第一版写成了后者，于是这一条**一次都没生效**，而
+                    # `ContextTokens` / `FallThrough` 照旧被误报。
+                    # **一个写错了字面量的守卫不会报错，它只是永远不触发。**
+                    if 'json:"' in line:
+                        continue
+                    if any(read_uses(b, name) > 0 for b in others):
+                        continue
+                    if DEAD_API_MARK in doc_block_above(lines, i):
+                        continue
+                    problems.append(
+                        f"{rel}:{i + 1} 导出字段 {name} 只被写、从没被读"
+                        f"（要么接上它，要么在上方的文档注释里写 {DEAD_API_MARK} 与一句理由）")
+    return problems
+
+
 def run():
     organs = discover()
     organ_doc = read(ORGAN_DOC)
@@ -254,6 +343,7 @@ def run():
 
     # 方向三：导出函数要么有调用点，要么被标成已声明的缺口。
     problems += check_exported_functions_have_callers()
+    problems += check_exported_fields_are_read()
 
     # 反向的平凡真也要说出来：一个器官都没有时，上面两条都成立而没有意义。
     if not organs:

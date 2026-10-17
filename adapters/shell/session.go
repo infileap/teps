@@ -275,6 +275,14 @@ func flagsJSON(f session.Flags) map[string]any {
 		"has_waste_evidence":   f.HasWasteEvidence,
 		"must_change_strategy": f.MustChangeStrategy,
 		"terminal":             f.Terminal,
+		// ★ 「现在有一次升级开着」。
+		//
+		// 这个字段此前**只有测试读它**（`organs/session/session_test.go:352` 与
+		// `:467`），而它的注释写着「It is what makes the waste ratio countable」
+		// —— 假话：`WasteRatio(escalations, degraded)` 从不看它。
+		// 生产代码里一个读者都没有，于是「现在有没有一次升级开着」这个问题
+		// 在这一层没有答案。
+		"escalation_open": f.EscalationOpen,
 	}
 }
 

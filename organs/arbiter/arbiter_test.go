@@ -2,6 +2,7 @@ package arbiter
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"teps/evidence"
@@ -295,8 +296,91 @@ func TestEscalationRequiresAMargin(t *testing.T) {
 func TestEscalationWithoutALocalOptionSaysSo(t *testing.T) {
 	offers := []Offer{{Action: ActionEscalate, Skill: "e", TaskClass: "t", Value: 10, Cost: 1, Pinned: 0.9, UsePinned: true}}
 	got, _ := ShouldEscalate(offers, Table{}, 0.2)
-	if got.Reason != "no local action was offered" {
+	// ★ 措辞从「no local action was offered」改成「no free action was offered」：
+	// 判据从**按动作名枚举**（`ActionLocal` 或 `ActionSkill`）改成**按价钱分**
+	// （花外面钱的只有 `escalate` 与 `ask_human`），所以缺的那一类叫「不花钱的」。
+	if got.Reason != "no free action was offered, so the paid one is the only option and no margin applies" {
 		t.Fatalf("the reason must name what was missing, got %q", got.Reason)
+	}
+	// ★ 而这一支也必须把 `Local` 报成那一条 —— 只有一个 offer 时它自己就是基线。
+	if got.Chosen.Offer.Action != ActionEscalate || got.Local.Offer.Action != ActionEscalate {
+		t.Fatalf("with one offer, chosen and local are both it: %v / %v",
+			got.Chosen.Offer.Action, got.Local.Offer.Action)
+	}
+}
+
+// ★★★ 「本地的」是**不花外面钱**的那些，而 `best` 是**花外面钱**的那一个。
+//
+// 此前这里把 `ActionSkill` 与 `ActionLocal` 一起算进「本地」，而 `best` 取的是
+// `ranked[0]`（全体最好）。于是当一个 `skill` 动作就是全体最好时：
+//
+//	local = 那个 skill 动作（因为它也在「本地」集合里）
+//	best  = 同一个 skill 动作
+//	best.Utility <= local.Utility + margin   ->  **恒真**（margin > 0）
+//
+// 实测（margin 0.5，`local/cached` value 1 cost 0 latency 1 与
+// `skill/paid` value 10 cost 1 latency 1）：chosen = skill/paid utility 9、
+// local = skill/paid utility 9（**同一个**），而 reason 是
+// 「the paid action does not win by the margin」—— **付费动作从来没被比过。**
+//
+// ★ 而那个 `||` 分支**没有被任何测试碰过**。
+func TestASkillActionIsNotTheLocalBaseline(t *testing.T) {
+	offers := []Offer{
+		{Action: ActionLocal, Skill: "cached", TaskClass: "t", Value: 1, Cost: 0, Pinned: 1, UsePinned: true},
+		{Action: ActionSkill, Skill: "paid", TaskClass: "t", Value: 10, Cost: 1, Pinned: 1, UsePinned: true},
+	}
+	got, ref := ShouldEscalate(offers, Table{}, 0.5)
+	if ref != nil {
+		t.Fatalf("refused: %s", ref.Reason)
+	}
+	// ★ 没有付费动作 ⇒ 那一支必须说「没有可比的付费动作」，而不是编一个比较。
+	if got.Chosen.Offer.Action != ActionSkill {
+		t.Fatalf("the best overall is the skill action, got %s", got.Chosen.Offer.Action)
+	}
+	if !strings.Contains(got.Reason, "no paid action was offered") {
+		t.Fatalf("the reason must say there was nothing paid to compare, got %q", got.Reason)
+	}
+	// ★ 而**基线**必须是**不花外面钱**的那一个。这里两个都不花钱（`local` 与
+	// `skill` 都不在 `{escalate, ask_human}` 里），所以基线是其中效用更高的
+	// 那一个 —— 也就是 `skill/paid`。
+	//
+	// ★ 这正是这一条要钉住的：基线**不是**「被选中的那一个」的同义词，
+	// 而是「花外面钱的集合之外最好的那一个」。此前那个 `||` 把它写成了
+	// 一个按名字枚举的集合，于是当 `skill` 就是全体最好时，基线与赢家是同一个，
+	// 比较恒真、而理由在说一件没发生的事。
+	if spendsOutsideMoney(got.Local.Offer.Action) {
+		t.Fatalf("the baseline must never be a paid action, got %s", got.Local.Offer.Action)
+	}
+	if got.Local.Offer.Action != ActionSkill {
+		t.Fatalf("the best free action here is the skill one, got %s", got.Local.Offer.Action)
+	}
+	// ★ 而「没有付费动作可比」这件事必须**说清楚**，而不是编一个比较出来。
+	if got.Chosen.Utility != got.Local.Utility {
+		t.Fatalf("with no paid action there is nothing to beat: %v vs %v",
+			got.Chosen.Utility, got.Local.Utility)
+	}
+}
+
+// ★ 而真正该被比的那一对仍然要比：一个付费动作 vs 一个不花钱的。
+func TestThePaidActionIsComparedAgainstTheFreeOne(t *testing.T) {
+	offers := []Offer{
+		{Action: ActionLocal, Skill: "cached", TaskClass: "t", Value: 1, Cost: 0, Pinned: 1, UsePinned: true},
+		{Action: ActionSkill, Skill: "stored", TaskClass: "t", Value: 5, Cost: 0, Pinned: 1, UsePinned: true},
+		{Action: ActionEscalate, Skill: "expert", TaskClass: "t", Value: 10, Cost: 1, Pinned: 1, UsePinned: true},
+	}
+	// escalate 的效用 = 10 - 1 = 9；不花钱的最好是 stored = 5。差 4 > 0.5 ⇒ 花钱。
+	got, ref := ShouldEscalate(offers, Table{}, 0.5)
+	if ref != nil {
+		t.Fatalf("refused: %s", ref.Reason)
+	}
+	if got.Chosen.Offer.Action != ActionEscalate {
+		t.Fatalf("9 beats 5 by more than 0.5, chose %s", got.Chosen.Offer.Action)
+	}
+	if got.Local.Offer.Action != ActionSkill {
+		t.Fatalf("the baseline is the best free one (stored), got %s", got.Local.Offer.Action)
+	}
+	if got.Chosen.Utility <= got.Local.Utility {
+		t.Fatalf("the paid one must actually be better: %v vs %v", got.Chosen.Utility, got.Local.Utility)
 	}
 }
 

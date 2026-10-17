@@ -219,26 +219,74 @@ func ShouldEscalate(offers []Offer, t Table, margin float64) (Escalation, *core.
 	if len(ranked) == 0 {
 		return Escalation{}, core.Refuse(core.CodeBadRequest, "no offers to arbitrate")
 	}
-	var local Ranked
-	found := false
+	// ★★★ 「本地的」是**不花外面钱**的那些，而 `best` 是**花外面钱**的那一个。
+	//
+	// 此前这里把 `ActionSkill` 与 `ActionLocal` 一起算进「本地」，而 `best` 取的
+	// 是 `ranked[0]`（全体最好）。于是当一个 `skill` 动作就是全体最好时：
+	//
+	//   local = 那个 skill 动作（因为它也在「本地」集合里）
+	//   best  = 同一个 skill 动作
+	//   best.Utility <= local.Utility + margin   ->  **恒真**（margin > 0）
+	//
+	// 实测（`margin: 0.5`，`local/cached` value 1 cost 0 latency 1 与
+	// `skill/paid` value 10 cost 1 latency 1）：
+	//
+	//   chosen = skill/paid  utility 9
+	//   local  = skill/paid  utility 9      ← **同一个**
+	//   reason = "the paid action does not win by the margin, so the estimate
+	//             is not good enough to spend on"
+	//
+	// **付费动作从来没有被比过。** 那句话不是关于发生的事的 —— 而它正是这个项目
+	// 一直在抓的那一类。而 `ShouldEscalate` 的文档逐字写着它做的是什么：
+	//
+	//   ShouldEscalate compares the best paid action against the best local one.
+	//
+	// ★ 而那个 `||` 分支**没有被任何测试碰过**：`TestEscalationRequiresAMargin`
+	// 只用了 `ActionLocal` 与 `ActionEscalate`。
+	//
+	// 判据改成按**价钱**分：花外面钱的是 `{escalate, ask_human}`，不花的是其余
+	// 四个。这正是这个文件开头那句注释说的（「The set is deliberately about
+	// *price*, not about tier.」）。
+	paid := Ranked{}
+	foundPaid := false
+	local := Ranked{}
+	foundLocal := false
 	for _, r := range ranked {
-		if r.Offer.Action == ActionLocal || r.Offer.Action == ActionSkill {
-			if !found || r.Utility > local.Utility {
-				local, found = r, true
+		if spendsOutsideMoney(r.Offer.Action) {
+			if !foundPaid || r.Utility > paid.Utility {
+				paid, foundPaid = r, true
 			}
+			continue
+		}
+		if !foundLocal || r.Utility > local.Utility {
+			local, foundLocal = r, true
 		}
 	}
-	best := ranked[0]
-	if !found {
-		return Escalation{Chosen: best, Reason: "no local action was offered", Threshold: margin}, nil
+	if !foundPaid {
+		return Escalation{Chosen: ranked[0], Local: local, Threshold: margin,
+			Reason: "no paid action was offered, so there is nothing to compare against the free ones"}, nil
 	}
-	if best.Utility <= local.Utility+margin {
+	if !foundLocal {
+		return Escalation{Chosen: paid, Local: paid, Threshold: margin,
+			Reason: "no free action was offered, so the paid one is the only option and no margin applies"}, nil
+	}
+	if paid.Utility <= local.Utility+margin {
 		return Escalation{
 			Chosen: local, Local: local, Threshold: margin,
 			Reason: "the paid action does not win by the margin, so the estimate is not good enough to spend on",
 		}, nil
 	}
-	return Escalation{Chosen: best, Local: local, Threshold: margin, Reason: "the paid action wins by more than the margin"}, nil
+	return Escalation{Chosen: paid, Local: local, Threshold: margin, Reason: "the paid action wins by more than the margin"}, nil
+}
+
+// spendsOutsideMoney reports whether an action costs money that leaves the system.
+//
+// ★ 这一条判据的存在，是因为「本地」此前是**按动作名枚举**的（`ActionLocal`
+// 或 `ActionSkill`），而那个枚举把「不花外面钱」这件事说成了一半：`shadow` 与
+// `degrade` 也不花，而 `skill` 被算进来之后 `best` 与 `local` 可以是同一个。
+// 按价钱分之后，「本地的」与「花外面钱的」是两个**互补**的集合。
+func spendsOutsideMoney(a Action) bool {
+	return a == ActionEscalate || a == ActionAskHuman
 }
 
 func clamp01(f float64) float64 {

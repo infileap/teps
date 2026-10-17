@@ -33,7 +33,24 @@ type Machine struct {
 	EscalationsDegraded int
 
 	// EscalationOpen is true between entering Waiting and either being
-	// granted or giving up. It is what makes the waste ratio countable.
+	// granted or giving up.
+	//
+	// ★★★ 这条注释此前还写着「**It is what makes the waste ratio countable.**」
+	// —— 那是一句假话，而且实测可证：`WasteRatio` 的签名是
+	//
+	//	func WasteRatio(escalations, degraded int) float64
+	//
+	// **两个 int，从不看这个字段。** 而 `Flags()` 也不带它，`session.status`
+	// 也就报不出来。于是这一行是「一句关于自己作用的断言，被同一个文件里的
+	// 签名直接否掉」。
+	//
+	// ★ 它也不是独立的：`Step` 在 `next == Waiting` 时置真、在
+	// `m.State == Waiting && next != Waiting` 时置假 —— 也就是说它**恒等于**
+	// `m.State == Waiting`，而 `session.status` 早就报了 `state`。
+	//
+	// ★ 而它仍然有用，只是要叫对它是什么：「现在有一次升级开着」是这一层
+	// 唯一能回答那个问题的字段（`escalations` 是**累计**，`state` 要读的人
+	// 自己翻译成 Waiting）。所以它进了 `Flags()` 与 `flagsJSON`。
 	EscalationOpen bool
 
 	// Trail is every state this session has been in, in order.
@@ -158,6 +175,12 @@ type Flags struct {
 
 	// Terminal is true when the session has stopped: done or degraded.
 	Terminal bool
+
+	// EscalationOpen is true while an escalation is open right now.
+	//
+	// ★ 它与 `Escalations`（**累计**几次）和 `State`（读的人自己翻译成
+	// Waiting）是三个不同的问法。它此前只有测试读得到。
+	EscalationOpen bool
 }
 
 // Flags reads the guards. It is a pure function of the recorded history.
@@ -171,6 +194,9 @@ func (m Machine) Flags() Flags {
 		Escalations:         m.Escalations,
 		EscalationsDegraded: m.EscalationsDegraded,
 		Terminal:            Terminal(m.State),
+		// ★ 「现在有一次升级开着」—— 与 `escalations`（累计）和 `state`
+		// （要读的人自己翻译）是三个不同的问法。
+		EscalationOpen: m.EscalationOpen,
 	}
 	if n := len(m.Attempts); n > 0 {
 		f.MustChangeStrategy = !MayRetry(m.Attempts, m.Attempts[n-1])
