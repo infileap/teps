@@ -1359,6 +1359,34 @@ echo "—— 度量：现在覆盖率有分母了 ——"
 r=$(req '{"t":"metrics.get","v":1}')
 expect "收过任务之后覆盖率有定义" "$r" '"intercept_rate"'
 expect "★ 分母跟着率一起走" "$r" '"tasks"'
+# ★★★ 率必须带着它的分母**与那句话**。
+#
+# `organs/intake` 的 `Stats` 有 `Total` / `ByLayer` / `InterceptRate` / `Scope`，
+# 而它的注释逐字写着那句话为什么必须一起走：
+#   Scope always travels with the rate. A rate without its denominator is how
+#   "60–80%" became a claim nobody could check.
+#
+# 而 `metrics.get` 是**这个率被报出来的唯一一个地方**，它此前把 `by_layer`
+# 与 `scope` 都丢了。实测（取进 4 个任务，全落在 full 层）：
+#   {"answered_without_context":0,"defined":true,"intercept_rate":0,
+#    "source":"task.stats","tasks":4}
+# 读的人看不到那 4 个是怎么被答的。而 `source: "task.stats"` 读起来像在回答那个
+# 问题 —— 它说的是这个数**从哪来**，不是它**除的是什么**。两件事，两个名字。
+expect "★ 分层计数跟着率一起走（哪一层答了多少）" "$r" '"by_layer"'
+expect "★ 那句话也跟着走（这个率除的是什么）" "$r" '"scope"'
+expect "★ 而 scope 不是 source：一个说从哪来，一个说除的是什么" "$r" 'tasks that arrived at this intake'
+# ★ 那个等式要**算**出来，不能靠数一行里的字面量。
+if printf '%s' "$r" | python3 -c '
+import json,sys
+c=json.load(sys.stdin)["body"]["coverage"]
+assert sum(c["by_layer"].values()) == c["tasks"], "by_layer 之和不等于 tasks"
+assert c["answered_without_context"] == c["by_layer"].get("reflex", 0), "answered_without_context 与 by_layer 对不上"
+assert c["scope"], "scope 不许为空"
+'; then
+  printf '  ok    ★ 分层之和等于 tasks，且 answered_without_context 与它一致（算出来的）\n'
+else
+  printf '  FAIL  ★ 分层与总数对不上\n'; fails=$((fails + 1))
+fi
 expect "可靠性有定义（后验已有观测）" "$r" '"weakest"'
 expect "★ 最弱的一环单独报出来（平均会把它盖住）" "$r" '"mean"'
 # ★ 判据不许是「某个键紧跟 `{` 之后」——Go 的 map 按**键排序**序列化，

@@ -77,11 +77,37 @@ func (s *server) metricsGet(f core.Frame, out *core.Frame) {
 	successes := s.decisions.ok
 	s.decisions.unlock()
 
+	// ★★★ 率必须带着它的分母**与那句话**。
+	//
+	// `organs/intake` 的 `Stats` 有三个字段：`Total`、`ByLayer`、`InterceptRate`，
+	// 外加一句 `Scope`。而它自己的注释逐字写着那句话为什么必须一起走：
+	//
+	//	Scope always travels with the rate. A rate without its denominator is how
+	//	"60–80%" became a claim nobody could check.
+	//
+	// 而 `metrics.get` 是**这个率被报出来的唯一一个地方**，它此前只报
+	// `tasks` / `answered_without_context` / `intercept_rate` / `source` ——
+	// **`by_layer` 与 `scope` 都丢了**。实测（取进 4 个任务，全落在 full 层）：
+	//
+	//	{"answered_without_context":0,"defined":true,"intercept_rate":0,
+	//	 "source":"task.stats","tasks":4}
+	//
+	// 读的人看不到那 4 个是怎么被答的，也看不到 `0` 是「4 个里 0 个」还是别的。
+	// 而 `source: "task.stats"` 读起来像在回答那个问题 —— 它说的是这个数**从哪来**，
+	// 不是它**除的是什么**。两件事，两个名字。
+	byLayer := make(map[string]int, len(stats.ByLayer))
+	for l, n := range stats.ByLayer {
+		byLayer[string(l)] = n
+	}
 	coverage := map[string]any{
 		"tasks":                    stats.Total,
 		"answered_without_context": stats.ByLayer[intake.LayerReflex],
 		"intercept_rate":           round(stats.InterceptRate),
-		"source":                   "task.stats",
+		// ★ 分项：四个层各自答了多少，且它们加起来等于 tasks。
+		"by_layer": byLayer,
+		// ★ 那一句：这个率除的是什么。器官已经算好了，别在这里再造一句。
+		"scope":  stats.Scope,
+		"source": "task.stats",
 	}
 	coverage["defined"] = stats.Total > 0
 	if stats.Total == 0 {
