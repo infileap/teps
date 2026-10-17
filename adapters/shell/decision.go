@@ -278,26 +278,65 @@ func (s *server) arbiterRank(f core.Frame, out *core.Frame) {
 			out.Err = ref
 			return
 		}
+		// ★ 这一支此前连 `p` 都不报 —— 一个「谁赢了」的回答里没有那个赢家的
+		// 成功概率。现在它与下面那一支共用同一个行形状。
+		//
+		// ★★ 而 `chosen` **仍然是那个动作名**：把它的类型从字符串改成对象是
+		// 一次**破坏性**改动，而这一轮要修的是「缺了几个字段」。
+		// `drive.sh` 的 `expect … '"chosen":"skill"'` 正是这样红的 —— 它抓得对。
+		// 所以完整的那一行另起一个名字（`chosen_offer`），`chosen` 不动。
+		chosenRow := rankedRow(esc.Chosen)
+		chosenRow["cost"] = metaAt(meta, esc.Chosen.Offer.Tag)
 		out.Body = mustJSON(map[string]any{
-			"chosen": esc.Chosen.Offer.Action, "utility": round(esc.Chosen.Utility),
-			"reason": esc.Reason, "threshold": body.Margin,
-			"cost": metaAt(meta, esc.Chosen.Offer.Tag), "skipped": skipped,
+			"chosen":       string(esc.Chosen.Offer.Action),
+			"chosen_offer": chosenRow,
+			"reason":       esc.Reason, "threshold": body.Margin,
+			"skipped": skipped,
 		})
 		return
 	}
 	ranked := arbiter.Rank(offers, tbl)
 	rows := make([]map[string]any, 0, len(ranked))
 	for _, r := range ranked {
-		row := map[string]any{
-			"action": r.Offer.Action, "skill": r.Offer.Skill,
-			"utility": round(r.Utility), "p": round(r.Prob),
-		}
+		row := rankedRow(r)
 		if m := metaAt(meta, r.Offer.Tag); m != nil {
 			row["cost"] = m
 		}
 		rows = append(rows, row)
 	}
 	out.Body = mustJSON(map[string]any{"ranked": rows, "skipped": skipped})
+}
+
+// rankedRow 是**一扇门**：一条被定价过的 offer 长什么样。
+//
+// ★★★ 它存在的理由是这一轮量到的那件事。
+//
+// 同一个 `arbiter.Rank` 有两扇门 —— `arbiter.rank` 与 `escalation.quote`。
+// Round 62 只给后者补上了 `weight` / `posterior`，而前者**一行都没有**。实测：
+//
+//	一个从没被观测过的技能：
+//	  {"action":"read.file","cost":{…},"p":1,"skill":"brand.new","utility":9}
+//	一个 30 次全成的技能：
+//	  {"action":"read.file","cost":{…},"p":1,"skill":"proven","utility":9}
+//
+// 两份回答**逐字相同**（除了 skill 名），而 `arbiter.state` 对同一个 key 说的是
+// `weight=0` 与 `weight=21.8168`。**同一个数报给了证据量差三十倍的技能。**
+//
+// 这与 `audit.tail`→`task.stats`（Round 44 → 59）、`decide`→`quote`
+// （Round 47 → 61）是同一条，只是又换了一处：**补一扇门不叫修好一个缺陷。**
+// 所以行形状提成一个函数 —— 两扇门从此不可能再各长各的。
+func rankedRow(r arbiter.Ranked) map[string]any {
+	return map[string]any{
+		"action": string(r.Offer.Action), "skill": r.Offer.Skill,
+		// ★ 价格是**在某个类下**读的：后验按 `{skill, task_class}` 查，
+		// 而类此前不在这行里 —— 读的人连「读的是哪一个后验」都不知道。
+		"task_class": r.Offer.TaskClass,
+		"p":          round(r.Prob), "utility": round(r.Utility),
+		// ★ 一个概率必须带着它的样本量：`p` 是上界，而它在 `Exploration = 0.25`
+		// 下被夹在 1 上一大片，所以「没试过」与「三十次全成」报的是同一个数。
+		"weight":    round(r.Post.Weight()),
+		"posterior": map[string]any{"alpha": round(r.Post.Alpha), "beta": round(r.Post.Beta)},
+	}
 }
 
 // meanOf is the average posterior mean over a table: the decayed reading.

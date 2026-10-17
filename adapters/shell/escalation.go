@@ -170,10 +170,28 @@ func (s *server) priceOf(body quoteBody) ([]arbiter.Ranked, arbiter.Ranked, stri
 func quoteID(ranked []arbiter.Ranked, margin float64) string {
 	rows := make([]map[string]any, 0, len(ranked))
 	for _, r := range ranked {
-		rows = append(rows, map[string]any{
-			"action": string(r.Offer.Action), "skill": r.Offer.Skill,
-			"p": round(r.Prob), "u": round(r.Utility),
-		})
+		// ★★★ 报价单的 id 必须**从被报出去的那一行**算出来。
+		//
+		// 它此前是从 `{"action","skill","p","u"}` 算的 —— 一个**只有 p 与 u**
+		// 的投影。而 `p` 是上界、在 `Exploration = 0.25` 下被夹在 1 上一大片，
+		// 于是实测（同一个技能的一生）：
+		//
+		//   obs= 0 p=1 u=9 id=08c6d3a1c40c…
+		//   obs=20 p=1 u=9 id=08c6d3a1c40c…   ← 同一个 id
+		//   obs=40 p=1 u=9 id=08c6d3a1c40c…   ← 同一个 id
+		//
+		// 而它的文档逐字写着「It is derived from the ranked result, so it changes
+		// when any posterior moves」。**后验移动了，id 没有。**
+		//
+		// 现在它与 `escalation.quote` 报出去的那一行是**同一个函数**（`rankedRow`），
+		// 所以「你看到的那个价」与「你引用的那个 id」不可能再是两件事 ——
+		// 那正是 `priceOf` 那条注释在防的（「Two computations of the same price is
+		// how a system ends up quoting one number and acting on another」）。
+		row := rankedRow(r)
+		// ★ offer 自己的两个数也进 id：换一个 offer 就该换一个 id。
+		row["cost"] = r.Offer.Cost
+		row["latency"] = r.Offer.Latency
+		rows = append(rows, row)
 	}
 	canon, ref := core.Canonical(mustJSON(map[string]any{"ranked": rows, "margin": round(margin)}))
 	if ref != nil {
