@@ -904,6 +904,44 @@ def mutation_evidence_is_reachable():
     return out
 
 
+# ★★★ 「证据在仓库里」与「跑得起来」是两件事。
+#
+# Round 91 把 `mutations/` 追进了 git（79 个 `mut_*.py`），而**没有任何一条命令
+# 能把它们跑一遍** —— README 里那 56 处「变异 N/N」的主张，一个克隆仓库的人
+# 仍然只能一条一条手敲。
+#
+# ⇒ `tools/run_mutations.sh`。判据：它必须存在，而且它的 `--list` 输出
+# 必须**恰好等于** `mutations/` 里的 `mut_*.py` 列表 —— 一个「在目录里但跑不到」
+# 的脚本，与一个不存在的脚本一样，对读者毫无用处。
+#
+# ★ 而它**不进 check_all.sh**：79 条 × 约 30 秒 ≈ 40 分钟。
+# 进 check_all 的是「每一条都解析得了」（秒级，Round 91），
+# **真的跑一遍**是这一条命令 —— **两件事，两个时间尺度，都说出来。**
+MUT_RUNNER = "tools/run_mutations.sh"
+
+
+def mutation_runner_is_complete():
+    runner = os.path.join(ROOT, MUT_RUNNER)
+    if not os.path.isfile(runner):
+        return [f"找不到 {MUT_RUNNER} —— README 那些「变异 N/N」没有一条命令能跑一遍"]
+    r = subprocess.run(["bash", MUT_RUNNER, "--list"], cwd=ROOT,
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return [f"{MUT_RUNNER} --list 退出码 {r.returncode}：{r.stderr.strip()[:120]}"]
+    listed = [x for x in r.stdout.split() if x.endswith(".py")]
+    on_disk = sorted(f for f in os.listdir(os.path.join(ROOT, MUT_DIR))
+                     if f.startswith("mut_") and f.endswith(".py"))
+    out = []
+    for f in on_disk:
+        if f not in listed:
+            out.append(f"{MUT_DIR}/{f} 在目录里，而 {MUT_RUNNER} 跑不到它 —— "
+                       f"一个跑不到的脚本与一个不存在的脚本一样")
+    for f in listed:
+        if f not in on_disk:
+            out.append(f"{MUT_RUNNER} 列了 {f}，而 {MUT_DIR}/ 里没有它")
+    return out
+
+
 def main():
     if os.environ.get("TEPS_CONTRACT_SELF_TEST") == "1":
         bad = self_test()
@@ -976,6 +1014,26 @@ def run():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ 「证据在仓库里」与「跑得起来」是两件事。
+    #
+    # ★★ 而这一段此前**只写成了函数，没有接进 main()** —— 我加了
+    # `mutation_runner_is_complete()`、测了它「两个方向都会红」，
+    # 而那时它**根本没有被调用过**。**一个定义了却没人调用的判据，
+    # 与一个不存在的判据一样；而它的自检也会假装通过。**
+    # 这一条是 `check_organs.py` 的 `check_exported_functions_have_callers()`
+    # 抓的同一类 —— 只不过那一条管的是**器官**，管不到 `tools/` 里的守卫自己。
+    # ★★★ 「证据在仓库里」与「跑得起来」是两件事。
+    #
+    # ★★ 而这一段此前**只写成了函数，没有接进 main()** —— 我加了
+    # `mutation_runner_is_complete()`、以为测了它「两个方向都会红」，
+    # 而那时它**根本没有被调用过**。**一个定义了却没人调用的判据，
+    # 与一个不存在的判据一样；而它的自检也会假装通过。**
+    # 这一条正是 `check_organs.py` 的 `check_exported_functions_have_callers()`
+    # 抓的那一类 —— 只不过那一条管的是**器官**，管不到 `tools/` 里的守卫自己。
+    for u in mutation_runner_is_complete():
+        print(u)
+        bad += 1
 
     # ★★★ README 那些「变异 N/N」的证据必须在仓库里、且跑得起来。
     for u in mutation_evidence_is_reachable():
