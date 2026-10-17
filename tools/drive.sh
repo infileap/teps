@@ -409,7 +409,11 @@ expect "★ 拒绝点名是第几条候选、它的 id、以及那个读不懂�
 expect "★ 而且它说清「读不懂」与「最弱」是两件事" "$rbad" 'not a level on the ladder'
 expect "★ 说清把未知折成 E0 就是把一个打字错误变成一次信任决定" "$rbad" 'turn a typo into a trust decision'
 # 对照：同一份代码库里另一扇门也拒（两扇门一个答案）。
-expect "★ 对照：memory.retrieve 的 min_evidence 也拒未知等级" "$(req '{"t":"memory.retrieve","v":1,"body":{"query":"x","min_evidence":"E9"}}')" 'unknown min_evidence'
+# ★★★ 这一行此前带了一个 `"query":"x"` —— 而 `memory.retrieve` **没有这个字段**。
+# 它一直靠 `decodeBody` 静默丢掉不认识的字段才通过，也就是说：**这条断言在
+# 断言 A 的同时一直在发一句它自己都不知道自己发错了的请求。**
+# 把 `decodeBody` 改成拒未知字段之后它红了 —— 而红的原因不是被断言的那件事。
+expect "★ 对照：memory.retrieve 的 min_evidence 也拒未知等级" "$(req '{"t":"memory.retrieve","v":1,"body":{"min_evidence":"E9"}}')" 'unknown min_evidence'
 expect "各段预算被报告" "$r" '"recent"'
 expect "用量被报告" "$r" '"used"'
 # ★★★ 总数是一个读法，它的分项是另一个。

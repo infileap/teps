@@ -227,6 +227,43 @@ def documented():
     return seen, pending
 
 
+# ★★★ 请求体一律走 decodeBody，不走 json.Unmarshal。
+#
+# `json.Unmarshal` **静默丢掉不认识的字段**。于是客户端把 `outcome` 拼成 `ok`
+# 时，`arbiter.observe` 不拒它 —— 它把这句话**悄悄改成另一句**再照做。实测：
+#
+#   ① {"attempt":"x1","skill":"s.a","task_class":"task_exec","ok":true}
+#      -> {"seq":1,"rev":1,"body":{"head":"cac2ac…","open":1}}   **被当成一次 intent**
+#   ② {"attempt":"x1","skill":"s.a","task_class":"task_exec","outcome":"ok"}
+#      -> {"err":{"code":"bad_request","reason":"an outcome needs verified_by: …"}}
+#
+# 两句请求做的事**完全不同**，而**拼错的那一句成功了**。
+#
+# 契约 A3 说「拒绝是一个值，不是异常」。一个拼错的字段名既不是拒绝，也不是它
+# 字面上的那个请求 —— 它是一句被悄悄改成别的话的请求。
+#
+# 判据是**可算的**：适配器里不许出现 `json.Unmarshal(f.Body` ——
+# `f.Body` 就是「这一帧的请求体」，而它只有一扇门（`decodeBody`）。
+# 日志回放（`e.Body`）与响应（`out.Body`）不是请求体，不受这一条管。
+REQUEST_DECODE = re.compile(r'json\.Unmarshal\(f\.Body')
+
+
+def check_request_bodies_go_through_decodebody():
+    problems = []
+    adir = os.path.join(ROOT, "adapters", "shell")
+    for name in sorted(os.listdir(adir)):
+        path = os.path.join(adir, name)
+        if not name.endswith(".go") or name.endswith("_test.go"):
+            continue
+        rel = os.path.relpath(path, ROOT)
+        for i, line in enumerate(open(path, encoding="utf-8").read().splitlines(), 1):
+            if REQUEST_DECODE.search(line):
+                problems.append(
+                    f"{rel}:{i} 请求体绕过了 decodeBody：json.Unmarshal 静默丢掉不认识的"
+                    f"字段，于是一个拼错的字段名不会拒，它会把这句请求改成另一句再照做")
+    return problems
+
+
 def main():
     live = dispatched()
     doc, pending = documented()
@@ -300,12 +337,21 @@ def main():
             print(f"  {e}")
         bad += len(empty)
 
+    # ★★★ 第四条：请求体只有一扇门。
+    bypass = check_request_bodies_go_through_decodebody()
+    if bypass:
+        print("这些地方直接 json.Unmarshal 了请求体（绕过 decodeBody）：")
+        for b in bypass:
+            print(f"  {b}")
+        bad += len(bypass)
+
     if bad:
         print(f"\n共 {bad} 处不一致。帧类型是全局命名空间：撞了名两边都能跑，只有放在一起看才知道。")
         return 1
     table = claims_table()
     print(f"帧类型一致：适配器分派 {len(concrete)} 个具体帧 + {len(families)} 个前缀族，契约里都有；"
-          f"分派表声明的 {len(table)} 条认领，每一条的处理器都认得族里的东西。")
+          f"分派表声明的 {len(table)} 条认领，每一条的处理器都认得族里的东西；"
+          f"请求体全部走 decodeBody。")
     return 0
 
 

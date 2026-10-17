@@ -132,9 +132,15 @@ func (s *server) handleSession(f core.Frame, out *core.Frame) bool {
 		Gain     float64 `json:"gain"`
 		Action   string  `json:"action"`
 	}
+	// ★★★ 请求体一律走 `decodeBody`，不走 `json.Unmarshal`。
+	//
+	// 这里此前是自己解一遍 —— 而 `json.Unmarshal` **静默丢掉不认识的字段**，
+	// 于是 `session.*` 的每一个帧都带着与 `arbiter.observe` 同一条病：
+	// 一个拼错的字段名不会拒，它会把这句话**悄悄改成另一句**再照做。
+	// `decodeBody` 现在拒未知字段，所以这一处必须与别处同一扇门。
 	if len(f.Body) > 0 {
-		if err := json.Unmarshal(f.Body, &body); err != nil {
-			out.Err = core.Refuse(core.CodeBadRequest, err.Error())
+		if ref := decodeBody(f.Body, &body); ref != nil {
+			out.Err = ref
 			return true
 		}
 	}

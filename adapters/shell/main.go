@@ -247,10 +247,13 @@ func (s *server) handle(f core.Frame) core.Frame {
 		out.Body = mustJSON(map[string]any{"seq": e.Seq, "head": e.Head, "key": e.Key})
 
 	case "spend":
+		// ★★★ 同 session.*：请求体一律走 decodeBody。`json.Unmarshal` 静默丢掉
+		// 不认识的字段，于是 `spend` 上拼错一个字段名会**照原样花掉一笔钱**
+		// 而不是拒 —— 在一个记账帧上，这是最不该安静的那一种。
 		var want core.Budget
 		if len(f.Body) > 0 {
-			if err := json.Unmarshal(f.Body, &want); err != nil {
-				out.Err = core.Refuse(core.CodeBadRequest, err.Error())
+			if ref := decodeBody(f.Body, &want); ref != nil {
+				out.Err = ref
 				return out
 			}
 		}

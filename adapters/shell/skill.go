@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"sort"
 	"strings"
@@ -160,12 +161,40 @@ func (s *server) skillPromote(f core.Frame, out *core.Frame) {
 	out.Body = mustJSON(map[string]any{"name": body.Name, "channel": body.To, "ref": h})
 }
 
+// ★★★ 一个拼错的字段名必须被拒，而不是**换一个操作**。
+//
+// `decodeBody` 此前用 `json.Unmarshal` —— 它**静默丢掉不认识的字段**。
+// 实测（`arbiter.observe`）：
+//
+//	① 客户端把 outcome 拼成 ok：
+//	   {"attempt":"x1","skill":"s.a","task_class":"task_exec","ok":true}
+//	   -> {"seq":1,"rev":1,"body":{"head":"cac2ac…","open":1}}   **被当成一次 intent**
+//	② 客户端写对了 outcome：
+//	   {"attempt":"x1","skill":"s.a","task_class":"task_exec","outcome":"ok"}
+//	   -> {"err":{"code":"bad_request","reason":"an outcome needs verified_by: …"}}
+//
+// 两句请求做的事**完全不同**，而**拼错的那一句成功了**。客户端拿到的是一次
+// 成功与一条链上记录，它没有任何办法知道自己问的不是它以为的那件事。
+// ④ 一个连拼错都不是的字段（`nonsense_field`）也被静默丢掉。
+//
+// 契约 A3 说「拒绝是一个值，不是异常」。**一个拼错的字段名既不是拒绝，
+// 也不是它字面上的那个请求** —— 它是一句被悄悄改成别的话的请求。
 func decodeBody(raw json.RawMessage, v any) *core.Refusal {
 	if len(raw) == 0 {
 		return core.Refuse(core.CodeBadRequest, "missing body")
 	}
-	if err := json.Unmarshal(raw, v); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	// ★ 不认识的字段是一处**读不懂**，不是一处可以忽略的噪声。
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
 		return core.Refuse(core.CodeBadRequest, err.Error())
+	}
+	// ★ 而多出来的第二个 JSON 值也必须拒：`json.Decoder` 只读第一个，
+	// 于是 `{"a":1}{"b":2}` 会被当成一个合法的请求（executor 那边已经为
+	// 同一条付过学费）。
+	if dec.More() {
+		return core.Refuse(core.CodeBadRequest,
+			"the body holds more than one JSON value: the first one would be read and the rest silently ignored")
 	}
 	return nil
 }

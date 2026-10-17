@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 
 	"teps/organs/arbiter"
@@ -396,8 +397,10 @@ func TestTheMetricsHandlerReportsTheDecayGap(t *testing.T) {
 	var body struct {
 		Reliability map[string]any `json:"reliability"`
 	}
-	if ref := decodeBody(out.Body, &body); ref != nil {
-		t.Fatalf("decode: %s", ref.Reason)
+	// ★ 这是在**读响应**，不是在解析请求：`decodeBody` 现在会拒绝不认识的
+	// 字段（那是给请求用的严格），而这里只要响应里的几个字段。
+	if err := json.Unmarshal(out.Body, &body); err != nil {
+		t.Fatalf("decode: %v", err)
 	}
 	r := body.Reliability
 	num := func(k string) float64 {
@@ -458,8 +461,10 @@ func TestArbiterStateReportsTheDecayGapForOneKey(t *testing.T) {
 		RawRate       float64 `json:"raw_rate"`
 		DecayGap      float64 `json:"decay_gap"`
 	}
-	if ref := decodeBody(out.Body, &body); ref != nil {
-		t.Fatalf("decode: %s", ref.Reason)
+	// ★ 这是在**读响应**，不是在解析请求：`decodeBody` 现在会拒绝不认识的
+	// 字段（那是给请求用的严格），而这里只要响应里的几个字段。
+	if err := json.Unmarshal(out.Body, &body); err != nil {
+		t.Fatalf("decode: %v", err)
 	}
 	if d := body.DecayGap - (body.Mean - body.MeanUndecayed); d > 1e-4 || d < -1e-4 {
 		t.Fatalf("decay_gap must be mean - mean_undecayed: gap=%v mean=%v mean_undecayed=%v",
