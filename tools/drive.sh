@@ -1306,6 +1306,45 @@ expect "★ 它说清 entries 是一个窗口，不是链" "$r" 'entries is a wi
 # 只是「总是 true」，那不是读数。
 rl=$(req '{"t":"audit.tail","v":1,"body":{"limit":1000}}')
 expect "★ limit 超过链长 ⇒ 窗口就是整条链，truncated 为 false" "$rl" '"truncated":false'
+# ★★★ 一个只约束一个方向的上限不是一个上限，是一句话。
+#
+# `MaxTail` 是**条数**上限，`MaxFrameBytes` 是**一个帧**的上限 —— 两个数各自
+# 独立选出来，于是条数上限能造出一个违反帧上限的回答。实测（写 5 条 300 KiB
+# 的记录、每条都在帧上限之内，再 audit.tail 要 limit:1000）：回答是
+# **1537486 字节 = 1.47 MiB**，而 MaxFrameBytes = 1 MiB，它的注释写着
+# 「caps **one frame**」。
+#
+# 受害的是客户端：那条上限告诉它「一帧最多 1 MiB」，于是它按这个开缓冲区，
+# 然后在一个 1.47 MiB 的行上断掉。
+#
+# 这条断言不能靠数一行里的字面量 —— 要**真的量**那次回答有多少字节。
+# ★ 夹具的大小是**刻意选的**：4 × 256 KiB = 1024 KiB 正好等于 MaxFrameBytes，
+# 于是「留不留给回答里 entries 之外的字段」这件事会改变答案（有预留只装得下
+# 3 条）。用 300 KiB 时两种实现都装得下 3 条 —— 那样的夹具测不出预留有没有用。
+big=$(python3 -c 'print("x"*262144)')
+for i in 1 2 3 4 5; do
+  req "{\"t\":\"put\",\"v\":1,\"key\":\"big$i\",\"body\":{\"n\":$i,\"blob\":\"$big\"}}" >/dev/null
+done
+rb=$(req '{"t":"audit.tail","v":1,"body":{"limit":1000}}')
+rb_len=$(printf '%s' "$rb" | wc -c)
+if [ "$rb_len" -le 1048576 ]; then
+  printf '  ok    ★ 大记录下的 tail 回答仍在 1 MiB 之内（实测 %s 字节）\n' "$rb_len"
+else
+  printf '  FAIL  ★ tail 回答 %s 字节，超过帧上限 1048576\n' "$rb_len"; fails=$((fails + 1))
+fi
+# ★ 它必须**缩**窗口并说清，而不是拒绝，也不是造一个超大的帧。
+if printf '%s' "$rb" | python3 -c '
+import json,sys
+b=json.load(sys.stdin)["body"]
+assert b["returned"] < b["limit"], "窗口没有缩"
+assert b["truncated"] is True, "缩了却没说"
+assert b["returned"] > 0, "一条都没回：客户端根本读不了链"
+assert b["last_seq"] == b["seq"], "尾巴没有止于链头"
+'; then
+  printf '  ok    ★ 窗口缩到装得下，且说清它缩了、最新的那条在、止于链头（算出来的）\n'
+else
+  printf '  FAIL  ★ 窗口缩了但没说清，或没止于链头\n'; fails=$((fails + 1))
+fi
 expect "★ 而它仍然报出生效的 limit" "$rl" '"limit":1000'
 expect "负数 limit 被拒" "$(req '{"t":"audit.tail","v":1,"body":{"limit":-1}}')" 'bad_request'
 expect "超过上限被拒（不是悄悄截断）" "$(req '{"t":"audit.tail","v":1,"body":{"limit":1001}}')" 'bad_request'

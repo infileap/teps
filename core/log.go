@@ -137,6 +137,30 @@ func (l *Log) Append(key string, body []byte) (Entry, *Refusal) {
 	if err != nil {
 		return Entry{}, Refuse(CodeBadRequest, err.Error())
 	}
+	// ★★★ 链读不回来的记录不是记录。
+	//
+	// `Replay` 与 `load` 都用 `bufio.Scanner`，它的上限是
+	// `sc.Buffer(make([]byte, 0, 64*1024), MaxFrameBytes+1)` —— 也就是
+	// **一行的字节数**。而 `Append` 此前对 `line` 的长度**一个字节都不查**。
+	// 于是一条比 `MaxFrameBytes` 大的记录会让 `Replay` 回
+	// `recovery_required: bufio.Scanner: token too long`，而 `load` 在
+	// `Open` 时跑 —— **服务起不来，链再也读不回来。**
+	//
+	// 实测：`Append` 一条 2 MiB 的记录之后，`l.Tail(10)` 回的就是上面那句。
+	// 那个失败是**永久的、整条的**：不是这一条读不到，是整条链读不到。
+	//
+	// `ParseFrame` 那条 1 MiB 的入口上限让这件事从适配器走不到 —— 但那是
+	// **调用方**守的规矩，而 `Append` 是内核的公开入口。**一个只有调用方遵守的
+	// 上限不是一个上限**：下一个人从另一个入口写一条大记录，代价由整条链付。
+	//
+	// 判据取 `MaxFrameBytes`（不是 +1）：写出去的是 `line + '\n'`，而扫描器的
+	// 上限是 `MaxFrameBytes + 1`，两边正好对齐。
+	if len(line) > MaxFrameBytes {
+		return Entry{}, Refuse(CodeFrameTooLarge,
+			"record is "+itoa(len(line))+" bytes and the chain reads one record per line capped at "+
+				itoa(MaxFrameBytes)+": a record the chain cannot read back is not a record, and "+
+				"writing it would make the whole chain unreadable rather than just this one")
+	}
 	if _, err := l.file.Write(append(line, '\n')); err != nil {
 		return Entry{}, Refuse(CodeRecoveryRequired, err.Error())
 	}
@@ -206,6 +230,23 @@ const MaxTail = 1000
 //
 // The walk is O(n) in the chain, which is honest: the chain is the only place
 // the records are, and a cached index would be a second copy of them.
+//
+// ★★★ 它同时受**两个**上限约束，而此前只有一个。
+//
+// `MaxTail` 是**条数**上限，`MaxFrameBytes` 是**一个帧**的上限 —— 而这两个
+// 数是各自独立选出来的，于是条数上限能造出一个违反帧上限的回答。实测：
+// 写 5 条 300 KiB 的记录（每条都在帧上限之内），再 `audit.tail` 要
+// `limit: 1000`，回答是 **1537486 字节 = 1.47 MiB** —— 而 `MaxFrameBytes`
+// 是 1 MiB，它的注释写着「caps **one frame**」。
+//
+// 受害的是客户端：那条上限告诉它「一帧最多 1 MiB」，于是它按这个开缓冲区，
+// 然后在一个 1.47 MiB 的行上断掉。**一个只约束一个方向的上限不是一个上限，
+// 是一句话。**
+//
+// 所以这里从**最新**往回收，收到装不下为止。窗口因此会缩，而缩了是要说出来的：
+// 适配器已经报了 `returned` / `first_seq` / `last_seq` / `truncated`，读的人
+// 看得出他要的条数没有全拿到。**一个装不下的窗口应当变小并说清，而不是
+// 造一个比上限还大的帧。**
 func (l *Log) Tail(limit int) ([]Entry, *Refusal) {
 	if limit <= 0 {
 		return nil, Refuse(CodeBadRequest, "tail needs a positive limit")
@@ -213,19 +254,41 @@ func (l *Log) Tail(limit int) ([]Entry, *Refusal) {
 	if limit > MaxTail {
 		return nil, Refuse(CodeBadRequest, "tail is capped at "+itoa(MaxTail)+" records")
 	}
-	ring := make([]Entry, 0, limit)
+	var all []Entry
 	if ref := l.Replay(func(e Entry) error {
-		if len(ring) == limit {
-			copy(ring, ring[1:])
-			ring = ring[:limit-1]
-		}
-		ring = append(ring, e)
+		all = append(all, e)
 		return nil
 	}); ref != nil {
 		return nil, ref
 	}
-	return ring, nil
+	// 从最新往回收。`tailFrameReserve` 留给调用方在 entries 之外还要放的那些
+	// 字段（head / seq / epoch / basis / first_seq / last_seq / limit / returned）——
+	// 只按 entries 的字节数卡，回答仍然可能越界，而那样卡的就是一个假的界。
+	budget := MaxFrameBytes - tailFrameReserve
+	out := make([]Entry, 0, limit)
+	for i := len(all) - 1; i >= 0 && len(out) < limit; i-- {
+		size := len(all[i].Body) + len(all[i].Key) + len(all[i].Prev) + len(all[i].Head) + 128
+		if len(out) > 0 && size > budget {
+			break
+		}
+		out = append(out, all[i])
+		budget -= size
+	}
+	// 反转成链序（最旧在前）。
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
 }
+
+// tailFrameReserve is the room Tail leaves for everything a tail response carries
+// besides the records themselves.
+//
+// It is a named constant rather than a number inside the loop because it is the
+// answer to "why did my window shrink": the response has a head, a seq, an
+// epoch, a basis sentence and two window ends, and a budget that ignored them
+// would be a budget that is wrong by however much they weigh.
+const tailFrameReserve = 8 << 10
 
 // itoa is a local integer formatter, so this file keeps needing no imports
 // beyond what it already has.

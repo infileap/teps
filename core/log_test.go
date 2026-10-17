@@ -212,6 +212,181 @@ func TestTailReturnsTheLastRecordsInOrder(t *testing.T) {
 	}
 }
 
+// ★★★ 一个只约束一个方向的上限不是一个上限，是一句话。
+//
+// `MaxTail` 是**条数**上限，`MaxFrameBytes` 是**一个帧**的上限 —— 两个数各自
+// 独立选出来，于是条数上限能造出一个违反帧上限的回答。实测（写 5 条 300 KiB
+// 的记录、每条都在帧上限之内，再 `audit.tail` 要 `limit: 1000`）：
+//
+//	回答 1537486 字节 = 1.47 MiB，而 MaxFrameBytes = 1 MiB
+//
+// 而 `MaxFrameBytes` 的注释写着「caps **one frame**」。受害的是客户端：那条
+// 上限告诉它「一帧最多 1 MiB」，于是它按这个开缓冲区，然后在一个 1.47 MiB
+// 的行上断掉。
+//
+// 现在 Tail 从最新往回收，收到装不下为止 —— 窗口会缩，而缩了是要说出来的
+// （适配器报 returned / first_seq / last_seq / truncated）。
+func TestTailFitsInsideOneFrame(t *testing.T) {
+	l, ref := Open(t.TempDir())
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	defer l.Close()
+	blob := make([]byte, 300*1024)
+	for i := range blob {
+		blob[i] = 'x'
+	}
+	body := append([]byte(`{"blob":"`), blob...)
+	body = append(body, []byte(`"}`)...)
+	for i := 0; i < 5; i++ {
+		if _, ref := l.Append("big"+itoa(i), body); ref != nil {
+			t.Fatal(ref)
+		}
+	}
+	got, ref := l.Tail(MaxTail)
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	total := 0
+	for _, e := range got {
+		total += len(e.Body) + len(e.Key) + len(e.Prev) + len(e.Head) + 128
+	}
+	if total > MaxFrameBytes-tailFrameReserve {
+		t.Fatalf("the tail weighs %d bytes against a frame budget of %d",
+			total, MaxFrameBytes-tailFrameReserve)
+	}
+	// ★ 它必须**缩**，而不是拒绝，也不是造一个超大的帧。
+	if len(got) >= 5 {
+		t.Fatalf("five 300 KiB records cannot fit in one frame, got %d", len(got))
+	}
+	if len(got) == 0 {
+		t.Fatal("at least the newest record must come back: a tail that returns nothing " +
+			"is a client that cannot read the chain at all")
+	}
+	// ★ 窗口缩了，但**最新的那条必须在**：尾巴的定义就是它止于链头。
+	head, seq := l.Head()
+	last := got[len(got)-1]
+	if last.Head != head || last.Seq != seq {
+		t.Fatalf("the shrunk tail ends at %d/%s but the chain head is %d/%s", last.Seq, last.Head, seq, head)
+	}
+	// ★ 而链序没有被打乱：seq 仍然递增。
+	for i := 1; i < len(got); i++ {
+		if got[i].Seq <= got[i-1].Seq {
+			t.Fatalf("chain order is broken at %d: %d then %d", i, got[i-1].Seq, got[i].Seq)
+		}
+	}
+}
+
+// 反向对照：装得下的时候，字节预算不许把窗口缩小。
+// 没有这一条，上面那条可以被「反正永远只回一条」满足。
+func TestTailStillReturnsTheRequestedCountWhenItFits(t *testing.T) {
+	l, ref := Open(t.TempDir())
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	defer l.Close()
+	for i := 1; i <= 5; i++ {
+		if _, ref := l.Append("k"+itoa(i), []byte(`{"n":1}`)); ref != nil {
+			t.Fatal(ref)
+		}
+	}
+	got, ref := l.Tail(5)
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	if len(got) != 5 {
+		t.Fatalf("five tiny records fit easily, got %d", len(got))
+	}
+}
+
+// ★ 单条记录本身就超过**窗口预算**（但仍在帧上限之内）时，它仍然必须回来。
+//
+// 判据里的 `len(out) > 0 &&` 是承重的：没有它，一条装不下窗口预算的最新记录会
+// 让窗口变成空的 —— 而「尾巴是空的」与「链是空的」在回答里长得一样，客户端
+// 因此**根本读不了这条链**。
+//
+// 这条记录的大小是刻意选的：它比 `MaxFrameBytes - tailFrameReserve` 大，
+// 但比 `MaxFrameBytes` 小 —— 也就是「链收得下、窗口装不下」。
+func TestTailReturnsTheNewestRecordEvenWhenItAloneIsTooBigForTheWindow(t *testing.T) {
+	l, ref := Open(t.TempDir())
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	defer l.Close()
+	// 填到比窗口预算大、比帧上限小。
+	n := MaxFrameBytes - tailFrameReserve + 4096
+	body := append([]byte(`{"b":"`), make([]byte, n)...)
+	for i := len(body) - n; i < len(body); i++ {
+		body[i] = 'y'
+	}
+	body = append(body, []byte(`"}`)...)
+	if _, ref := l.Append("big", body); ref != nil {
+		t.Fatalf("a record inside the frame cap must be accepted: %s", ref.Reason)
+	}
+	got, ref := l.Tail(10)
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	if len(got) != 1 {
+		t.Fatalf("the newest record must come back even when it alone exceeds the window budget, got %d", len(got))
+	}
+	head, seq := l.Head()
+	if got[0].Head != head || got[0].Seq != seq {
+		t.Fatal("the record that came back is not the chain head")
+	}
+}
+
+// ★★★ 链读不回来的记录不是记录。
+//
+// `Append` 此前对写出去的那一行**一个字节都不查**。而 `Replay` 与 `load` 都用
+// `bufio.Scanner`，上限是 `MaxFrameBytes + 1`。于是一条更大的记录会让 `Replay`
+// 回 `recovery_required: bufio.Scanner: token too long`，而 `load` 在 `Open` 时
+// 跑 —— **服务起不来，链再也读不回来。** 那个失败是永久的、整条的。
+//
+// `ParseFrame` 那条入口上限让这件事从适配器走不到，但那是**调用方**守的规矩，
+// 而 `Append` 是内核的公开入口。**一个只有调用方遵守的上限不是一个上限。**
+func TestAppendRefusesARecordTheChainCouldNotReadBack(t *testing.T) {
+	l, ref := Open(t.TempDir())
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	defer l.Close()
+	// 先写一条正常的，证明链是可读的。
+	if _, ref := l.Append("ok", []byte(`{"n":1}`)); ref != nil {
+		t.Fatal(ref)
+	}
+	huge := make([]byte, MaxFrameBytes+1024)
+	for i := range huge {
+		huge[i] = 'z'
+	}
+	if _, ref := l.Append("huge", append(append([]byte(`{"b":"`), huge...), []byte(`"}`)...)); ref == nil {
+		t.Fatal("a record larger than the chain can read back must be refused")
+	} else if ref.Code != CodeFrameTooLarge {
+		t.Fatalf("want frame_too_large, got %s: %s", ref.Code, ref.Reason)
+	}
+	// ★ 最要紧的一条：链**仍然读得回来**。拒绝的价值就在这里 ——
+	// 写进去的话，坏的不是这一条，是整条链。
+	got, ref := l.Tail(10)
+	if ref != nil {
+		t.Fatalf("the chain must still be readable after a refused append: %s", ref.Reason)
+	}
+	if len(got) != 1 {
+		t.Fatalf("the refused record must not be on the chain, got %d records", len(got))
+	}
+	// 而且重开一次也读得回来 —— `load` 与 `Replay` 是两条不同的路径。
+	if ref := l.Close(); ref != nil {
+		t.Fatal(ref)
+	}
+	again, ref := Open(l.dir)
+	if ref != nil {
+		t.Fatalf("reopening must read the chain: %s", ref.Reason)
+	}
+	defer again.Close()
+	if _, ref := again.Tail(10); ref != nil {
+		t.Fatalf("the chain must be readable after reopen: %s", ref.Reason)
+	}
+}
+
 func TestTailLongerThanTheChainReturnsTheChain(t *testing.T) {
 	l, ref := Open(t.TempDir())
 	if ref != nil {
