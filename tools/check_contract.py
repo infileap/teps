@@ -8,6 +8,7 @@ drive.sh 断言 `unknown_session`，内核返回 `no_session`，而文档也写�
 
 import os
 import re
+import ast
 import subprocess
 import sys
 
@@ -856,6 +857,53 @@ def every_guard_has_a_selfcheck():
     return out
 
 
+# ★★★ README 里有 **56** 处「变异 N/N」的主张，而它们的证据此前在 `.mutbak/` ——
+# 那是一个**被 gitignore 的**目录。**一个克隆这个仓库的人跑不了其中任何一条。**
+#
+# ★ 而 `check_docs.py` 的规则 3 逐字写着这件事：「**`✅` 的断言必须点名一个真实
+# 存在的产物**……**一句「已做」在证据消失之后也不会自己变红**」——
+# 它只查「本地复现」那一格，而「变异 N/N」在状态表的别处，于是从它眼皮下走过去了。
+#
+# 判据：`mutations/` 必须存在、非空、**被 git 追踪**（证据要在仓库里，
+# 不在某个人的工作区里），而且每一个 `mut_*.py` 都必须**能解析**。
+# ★ 为什么只查到「能解析」为止：判据是**可算的**。要证明「变异 4/4」这句话，
+# 得真的跑那四条变异，那是分钟级的；而**「证据在不在、跑不跑得起来」
+# 是秒级的，且它正是这一轮要堵的那个洞** —— 一条跑不了的证据与没有证据一样。
+MUT_DIR = "mutations"
+
+
+def mutation_evidence_is_reachable():
+    d = os.path.join(ROOT, MUT_DIR)
+    if not os.path.isdir(d):
+        return [f"找不到 {MUT_DIR}/ —— README 里那些「变异 N/N」的证据必须在仓库里"]
+    files = sorted(f for f in os.listdir(d) if f.startswith("mut_") and f.endswith(".py"))
+    if not files:
+        return [f"{MUT_DIR}/ 里一个 mut_*.py 都没有"]
+    out = []
+    # 被 git 追踪吗。
+    r = subprocess.run(["git", "ls-files", MUT_DIR], cwd=ROOT,
+                       capture_output=True, text=True)
+    tracked = [x for x in r.stdout.splitlines() if x.endswith(".py")]
+    if len(tracked) < len(files):
+        out.append(f"{MUT_DIR}/ 里有 {len(files)} 个 mut_*.py，而 git 只追踪了 "
+                   f"{len(tracked)} 个 —— 证据要在仓库里，不在某个人的工作区里")
+    # 每一个都解析得了吗。
+    for f in files:
+        path = os.path.join(d, f)
+        try:
+            # ★ 用 `warnings` 压掉 SyntaxWarning：变异脚本里为了写正则，
+            # 有的地方用了非 raw 字符串（`"\s"`）。那是**警告不是错误**，
+            # 而它会把 stderr 弄脏 —— 脏 stderr 在 check_all.sh 里看起来像失败。
+            # 判据要的是「解析得了吗」，不是「一个字符都不许警告」。
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                ast.parse(open(path, encoding="utf-8").read(), filename=path)
+        except SyntaxError as e:
+            out.append(f"{MUT_DIR}/{f} 解析不了（第 {e.lineno} 行）：一条跑不了的证据与没有证据一样")
+    return out
+
+
 def main():
     if os.environ.get("TEPS_CONTRACT_SELF_TEST") == "1":
         bad = self_test()
@@ -928,6 +976,11 @@ def run():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ README 那些「变异 N/N」的证据必须在仓库里、且跑得起来。
+    for u in mutation_evidence_is_reachable():
+        print(u)
+        bad += 1
 
     # ★★★ 每一台守卫都要有自检，或者被明确列为豁免。
     for u in every_guard_has_a_selfcheck():
