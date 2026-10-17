@@ -453,6 +453,39 @@ def state_diagram_mismatches():
     return out
 
 
+# ★★★ `kind` 是执行形态的调度键，而契约那张表少列了一个。
+#
+# `store/manifest.go` 声明七个 Kind（algorithm / code / script / llm_api /
+# rl_policy / human / **compose**），而契约那一行此前只列六个 ——
+# 而 `Manifest.Validate` 里**四条**判据都以 `kind=compose` 为条件。
+# **整篇契约把 `compose` 只当作帧族名用，从没说过它是一个 kind。**
+#
+# 判据：`Kind\w+ Kind = "…"` 的每个值都必须在契约那一行的反引号列表里；
+# 而那一行里的每个值也必须是代码真的声明的。
+KIND_DECL = re.compile(r'^\tKind\w+\s+Kind\s*=\s*"([a-z_]+)"', re.M)
+KIND_LINE = re.compile(r'`kind` 是\*\*执行形态的调度键\*\*：(.+?)。', re.S)
+KIND_NAME = re.compile(r'`([a-z_]+)`')
+
+
+def kind_vocabulary_mismatches():
+    declared = set(KIND_DECL.findall(read("store/manifest.go")))
+    if not declared:
+        return ["一个 Kind 声明都找不到：判据的前提变了"]
+    contract = read("docs/CONTRACT.md")
+    m = KIND_LINE.search(contract)
+    if not m:
+        return ["契约里找不到 `kind` 是执行形态的调度键那一行"]
+    listed = set(KIND_NAME.findall(m.group(1)))
+    out = []
+    for v in sorted(declared):
+        if v not in listed:
+            out.append(f"kind {v} 在 store/manifest.go 里被声明，而契约那一行没有列它")
+    for v in sorted(listed):
+        if v not in declared:
+            out.append(f"契约那一行列了 kind {v}，而 store/manifest.go 没有声明它")
+    return out
+
+
 def main():
     src = read("core/refusal.go")
 
@@ -512,6 +545,11 @@ def main():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ kind 那张表必须与真的 Kind 声明对得上。
+    for u in kind_vocabulary_mismatches():
+        print(u)
+        bad += 1
 
     # ★★★ 契约的状态图必须与那张真的转换表对得上。
     for u in state_diagram_mismatches():

@@ -174,7 +174,14 @@ provenance{source, url, commit, captured_at}
 **明确标出来的缺口不是静默漂移。** 一个字段被点名却没人执行，只有写下来才算
 「已声明的缺口」，否则它读起来像一条承诺。
 
-`kind` 是**执行形态的调度键**：`algorithm` | `code` | `script` | `llm_api` | `rl_policy` | `human`。
+`kind` 是**执行形态的调度键**：`algorithm` | `code` | `script` | `llm_api` | `rl_policy` | `human` | `compose`。
+
+★★★ **最后那一个此前不在这张表里** —— 而 `compose` 是一个真的 `Kind`：
+`store/manifest.go` 的 `var kinds = map[Kind]bool{…}` 收七个，而这一行此前只列六个。
+★ 而它**不是**可有可无的：`Manifest.Validate` 里**四条**判据都以 `kind=compose` 为条件 ——
+不许声明 `verify_assert`、不许声明 `verify_refute`、不许声明解释器、必须声明 `deps` 闭包。
+**本文档此前在整篇里把 `compose` 只当作帧族名（`skill.compose` / `compose.propose` /
+`compose.build`）用，从没说过它是一个 kind。**
 **"热"是状态不是类型**——一个 `script` 会因为调用频次上升到 `code`。
 
 组合技能另有三条（见 [../store/README.md](../store/README.md)）：
