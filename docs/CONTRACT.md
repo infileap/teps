@@ -298,7 +298,7 @@ decide  → 占 grant
 
 // apply 之后写
 {"rec": "resolution", "of": "<intent head 哈希>",
- "outcome": "ok|error|timeout|refused|degraded",
+ "outcome": "ok|failed|timeout|refused",
  "verified_by": "verifier", "verify_assert": ...,
  "gain": ..., "actual": {...}}
 ```
@@ -307,6 +307,34 @@ decide  → 占 grant
 
 > **`intent` 之后没有同名 `resolution` ⇒ 读作 `unknown`，
 > 必须显式裁决，不许默认成 `ok`。**
+
+★★★ **上面那一行此前写的是 `"ok|error|timeout|refused|degraded"`，而它三个值都不对。**
+
+实测：写进链上的 `outcome` **逐字取自 `Verdict`** —— `organs/executor/verify.go:58-65`：
+
+	func (v Verdict) Outcome() (string, bool) {
+		switch v {
+		case VerdictOK, VerdictFailed, VerdictTimeout, VerdictRefused:
+			return string(v), true
+		default:
+			return "", false        // ★ VerdictUnknown 走这里：unknown 不写
+		}
+	}
+
+于是：
+
+| 契约此前写的 | 实际 |
+|---|---|
+| `error` | **不存在** —— 写进去的是 `failed`（`drive.sh` 里出现 8 次，`error` 0 次） |
+| `degraded` | **不存在** —— 那是 `session.State`（`organs/session/state.go:27`），不是一个 `Verdict`（`drive.sh` 里 0 次） |
+| （缺 `failed`） | 4 个被写出去的值之一 |
+| （缺 `unknown`） | **`unknown` 是被写出去的吗？不是** —— `VerdictUnknown` 让 `Outcome()` 回 `("", false)`，**没有 resolution 本身就是 unknown**。所以它属于**重放规则**，不属于这一行 |
+
+**一个消费者照着这一行写解析器，会认不出真正会出现的那两个值，
+而去处理两个永远不会出现的值。**
+
+⇒ 这一行现在只列**真的会被写出去的那四个**；`unknown` 由上面那条重放规则给出，
+因为它不是一个被写入的值，而是一个**缺失**。
 
 `unknown` 是**诚实的第三态**。把它并入 `ok` 会制造假成功；
 并入 `error` 会惩罚一次可能真的成功的执行。**两者都是撒谎。**

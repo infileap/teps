@@ -203,6 +203,65 @@ def undocumented_levels():
     return out
 
 
+# ★★★ 一个消费者照着契约写解析器，会认不出真正会出现的那两个值，
+# 而去处理两个永远不会出现的值。
+#
+# 契约此前那一行写的是 `"outcome": "ok|error|timeout|refused|degraded"`，而写进
+# 链上的 outcome **逐字取自 `Verdict`**（`organs/executor/verify.go:58-65` 的
+# `func (v Verdict) Outcome() (string, bool)`，`VerdictUnknown` 走 default 回
+# `("", false)` —— **没有 resolution 本身就是 unknown**）。实测：
+#
+#   `error`    不存在 —— 写进去的是 `failed`（drive.sh 里 8 次，error 0 次）
+#   `degraded` 不存在 —— 那是 session.State（organs/session/state.go:27）
+#   `failed`   缺
+#   `unknown`  缺（而它是契约**自己那条重放规则**给出的值）
+#
+# 判据是**两向**的：`Outcome()` 的 case 列表里每个常量解析出的值都必须在契约
+# 那一行里出现；而契约那一行里的每个值也必须在 case 列表里。
+VERDICT_DECL = re.compile(r'^\t(Verdict\w+)\s+Verdict\s*=\s*"([a-z]+)"', re.M)
+OUTCOME_CASE = re.compile(r'^\tcase ([^:]+):', re.M)
+OUTCOME_LINE = re.compile(r'"outcome":\s*"([a-z|]+)"')
+
+
+def written_outcomes():
+    """`Verdict.Outcome()` 真的会写出去的那些值。"""
+    src = read("organs/executor/verify.go")
+    decls = dict(VERDICT_DECL.findall(src))
+    i = src.find("func (v Verdict) Outcome()")
+    if i < 0:
+        return None
+    body = src[i:i + 400]
+    m = OUTCOME_CASE.search(body)
+    if not m:
+        return None
+    out = []
+    for name in m.group(1).split(","):
+        name = name.strip()
+        if name in decls:
+            out.append(decls[name])
+    return out
+
+
+def outcome_vocabulary_mismatches():
+    got = written_outcomes()
+    if got is None:
+        return ["Verdict.Outcome() 读不出来：判据的前提（那个函数与它的 case 列表）变了"]
+    contract = read("docs/CONTRACT.md")
+    m = OUTCOME_LINE.search(contract)
+    if not m:
+        return ['docs/CONTRACT.md 里找不到 `"outcome": "…"` 那一行']
+    listed = [x for x in m.group(1).split("|") if x]
+    out = []
+    for v in got:
+        if v not in listed:
+            out.append(f"outcome {v} 会被写进链上，而契约那一行没有列它")
+    for v in listed:
+        if v not in got:
+            out.append(f"契约那一行列了 outcome {v}，而 Verdict.Outcome() 从不写它 —— "
+                       f"照着这一行写解析器的人会去处理一个永远不会出现的值")
+    return out
+
+
 def main():
     src = read("core/refusal.go")
 
@@ -262,6 +321,11 @@ def main():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ outcome 的词汇表必须是**两向**对齐的。
+    for u in outcome_vocabulary_mismatches():
+        print(u)
+        bad += 1
 
     # ★★★ 契约没提过的等级，等于契约没做出的决定。
     for u in undocumented_levels():
