@@ -241,26 +241,91 @@ func Release(leases []Lease, holder string) []Lease {
 // cheaper price. Ties break by priority, then by id, so the answer does not
 // depend on the order the registry happened to be read in.
 func Cheapest(rs []Resource, work, available core.Budget, leases []Lease, now int64) (Resource, *core.Refusal) {
+	// ★★★ 三个事实，三个答案。
+	//
+	// 此前这里无论为什么找不到都回同一个 `budget_exhausted`，理由是一句
+	// 「either at capacity or costs more than X」。实测（一个容量 1 的资源，
+	// 预算给足 1000000）：
+	//
+	//   ① 容量空着   -> 估价成功
+	//   ② 租约被占住 -> {"code":"budget_exhausted","retryable":false,
+	//                    "reason":"...every one is either at capacity or costs more than
+	//                              1000000 money / 1000000 tokens"}
+	//   ③ 预算为 0   -> 同一句话，只有数字变成 0
+	//
+	// ② 的那句话**是假的**：那个资源要 0 money / 0 tokens，调用方刚刚证明了
+	// 它有 1000000。挡住它的是**容量**，而容量是暂时的 —— `core/refusal.go:50`
+	// 早就为这件事准备了 `CodeLeaseHeld: true`（可重试），旁边还写着
+	// 「the condition is temporary and the reason string names the wait」。
+	// 而 `CodeBudgetExhausted: false` 告诉调用方「重试没用」。
+	//
+	// **一个把容量说成预算的拒绝，把一个会自己变好的条件报成了不会。**
+	// 这与 `unknown_session` / `no_session` 那次漂移是同一条：一个事实一个码。
+	if len(rs) == 0 {
+		// 第四个事实：一个资源都没登记。这不是预算问题，也不是容量问题。
+		return Resource{}, core.Refuse(core.CodeBadRequest,
+			"no resource is registered, so there is nothing to price this work against: "+
+				"register one before asking what it costs")
+	}
 	var best Resource
 	var bestCost core.Budget
 	found := false
+	atCapacity, overBudget := 0, 0
+	var soonest int64
+	var cheapest core.Budget
 	for _, r := range rs {
-		if len(Live(leases, r.ID, now)) >= r.Capacity {
+		live := Live(leases, r.ID, now)
+		if len(live) >= r.Capacity {
+			atCapacity++
+			for _, l := range live {
+				if soonest == 0 || l.Expires < soonest {
+					soonest = l.Expires
+				}
+			}
 			continue
 		}
 		c := Cost(r, work)
 		if c.Money > available.Money || c.Tokens > available.Tokens {
+			overBudget++
+			if overBudget == 1 || c.Money < cheapest.Money {
+				cheapest = c
+			}
 			continue
 		}
 		if !found || better(r, c, best, bestCost) {
 			best, bestCost, found = r, c, true
 		}
 	}
-	if !found {
-		return Resource{}, core.Refuse(core.CodeBudgetExhausted,
-			"no resource can do this work within the budget: every one is either at capacity or costs more than "+itoa64(available.Money)+" money / "+itoa64(available.Tokens)+" tokens")
+	if found {
+		return best, nil
 	}
-	return best, nil
+	// 只有容量挡着：可重试，而且理由里点明等多久。
+	if atCapacity > 0 && overBudget == 0 {
+		wait := ""
+		if soonest > now {
+			wait = "; the soonest lease expires in " + itoa64(soonest-now) + "ms"
+		}
+		return Resource{}, core.Refuse(core.CodeLeaseHeld,
+			"every resource that could do this work is at capacity ("+itoa(atCapacity)+" of "+
+				itoa(len(rs))+")"+wait+". This is a lease, not a budget: it frees itself")
+	}
+	// 只有预算挡着：这不是暂时的，加预算才是答案。
+	if overBudget > 0 && atCapacity == 0 {
+		return Resource{}, core.Refuse(core.CodeBudgetExhausted,
+			"every resource costs more than the budget allows: the cheapest is "+
+				itoa64(cheapest.Money)+" money / "+itoa64(cheapest.Tokens)+" tokens, and the "+
+				"caller has "+itoa64(available.Money)+" money / "+itoa64(available.Tokens)+
+				" tokens. A bigger budget would make this work; waiting would not")
+	}
+	// 两个都挡着。码取预算那一个：容量会自己好，预算不会 —— 一条重试
+	// 改变不了预算，所以「可以重试」在这里仍然是一句假话。但理由必须把
+	// **两个**都说出来，否则读的人只会去修其中一个。
+	return Resource{}, core.Refuse(core.CodeBudgetExhausted,
+		"no resource can do this work: "+itoa(atCapacity)+" of "+itoa(len(rs))+
+			" are at capacity and the rest cost more than the budget allows (cheapest "+
+			itoa64(cheapest.Money)+" money / "+itoa64(cheapest.Tokens)+" tokens against "+
+			itoa64(available.Money)+" money / "+itoa64(available.Tokens)+
+			" tokens). Waiting frees the capacity; only a bigger budget fixes the rest")
 }
 
 func better(r Resource, c core.Budget, best Resource, bestCost core.Budget) bool {

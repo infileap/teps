@@ -1353,6 +1353,11 @@ fi
 
 echo
 echo "—— 算力池：容量是租约不是计数 ——"
+# ★★★ 第四个事实：一个资源都没登记。它不是预算问题，也不是容量问题。
+# 此前它与「都满了」「都太贵」回同一句话同一个码。
+r=$(req '{"t":"pool.quote","v":1,"body":{"ms":1000,"tokens":100,"available_money":100}}')
+expect "★ 登记表空着时：这不是预算问题" "$r" '"code":"bad_request"'
+expect "★ 理由说清是登记表空着，而不是钱不够" "$r" 'no resource is registered'
 r=$(req '{"t":"pool.register","v":1,"key":"pl1","body":{"id":"core.0","kind":"local","capacity":1,"note":"this machine"}}')
 expect "免费的本机核登记成功" "$r" '"id":"core.0"'
 r=$(req '{"t":"pool.register","v":1,"key":"pl2","body":{"id":"gpu.far","kind":"remote","money_per_ms":0.002,"capacity":2}}')
@@ -1373,6 +1378,21 @@ expect "报告用了几个槽" "$r" '"used":1'
 r=$(req '{"t":"pool.quote","v":1,"body":{"ms":1000,"tokens":100,"available_money":100}}')
 expect "★ 免费的被占了，于是选付费的（付不起的价格不是更便宜的价格）" "$r" '"id":"gpu.far"'
 expect "付费的报价算出钱" "$r" '"money":2'
+# ★★★ 三个事实，三个答案。报价被拒的时候，**为什么被拒**是三个不同的东西：
+# 一个资源都没登记 / 都满了 / 都太贵。此前它们回同一句话同一个码
+# （`budget_exhausted` + 「either at capacity or costs more than X」），
+# 于是「都满了」这个**会自己变好**的条件被报成了「重试没用」。
+#
+# 此刻免费的那个被占着，只剩付费的 ⇒ 预算给 0 就是**真的**预算不够。
+rb=$(req '{"t":"pool.quote","v":1,"body":{"ms":1000,"tokens":100,"available_money":0}}')
+expect "★ 预算真的不够时：码是 budget_exhausted" "$rb" '"code":"budget_exhausted"'
+expect "★ 而它不是可重试的（等下去不会让预算变大）" "$rb" '"retryable":false'
+# 此刻是**两个都挡着**（免费的被占着、付费的太贵）⇒ 码取预算那一个
+# （容量会自己好，预算不会），但理由必须把**两个**都说出来 ——
+# 否则读的人只会去修其中一个。
+expect "★ 两个都挡着时，理由把两个原因都说出来（不只是修一个）" "$rb" 'are at capacity'
+expect "★ 它也说出最便宜的那一个要多少" "$rb" 'cheapest'
+expect "★ 而且它说清等待只能修容量那一半" "$rb" 'only a bigger budget fixes the rest'
 r=$(req '{"t":"pool.lease","v":1,"key":"pl7","body":{"id":"core.0","holder":"job.b","ttl_ms":60000}}')
 expect "★ 容量满了被拒" "$r" 'lease_held'
 expect "★ 拒绝点名持有者（「池满了」不是可执行的信息）" "$r" 'job.a'
@@ -1555,8 +1575,26 @@ expect "再把收费的两个槽都占住" "$r" '"holder":"hog"'
 r=$(req '{"t":"pool.lease","v":1,"key":"pa12","body":{"id":"core.paid","holder":"hog","ttl_ms":60000}}')
 expect "占满" "$r" '"holder":"hog"'
 r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"pa13\",\"body\":{\"ref\":\"$xok\",\"attempt\":\"p-full\",\"task_class\":\"task_exec\",\"pick\":true}}")
-expect "★ 一个槽都没有了，于是这次执行不发生" "$r" 'budget_exhausted'
-expect "★ 被拒的执行没有在链上留下已付费的痕迹" "$r" 'no resource can do this work'
+# ★★★ 挡住它的是**容量**，不是预算 —— 而这两条断言此前都写成了预算。
+#
+# 一个槽都没有了的时候，`Cheapest` 曾经无论为什么找不到候选都回
+# `budget_exhausted`（不可重试），理由是一句「either at capacity or costs more
+# than X」。而容量是**暂时的**：`core/refusal.go:50` 早就为它准备了
+# `CodeLeaseHeld: true`，旁边还写着「the condition is temporary and the reason
+# string names the wait」。**一个把容量说成预算的拒绝，把一个会自己变好的
+# 条件报成了不会。** 这两条断言把那个缺陷写进了期望，所以它们红了 —— 红得对。
+expect "★ 一个槽都没有了 ⇒ 拒绝的码是容量（租约），不是预算" "$r" '"code":"lease_held"'
+expect "★ 容量会自己好，所以它是可重试的" "$r" '"retryable":true'
+expect "★ 而且理由里点明还要等多久（没有数字的「等一下」不可执行）" "$r" 'expires in'
+expect "★ 它说清这是租约不是预算" "$r" 'not a budget'
+# ★ 这一条此前查的是拒绝的**文本**（'no resource can do this work'），
+# 而它的标签写的是「链上没有留下痕迹」—— 一个查文本的断言配了一句承诺查链的
+# 标签。现在真的查链：这次尝试的 id 不该出现在 audit.tail 里。
+if req '{"t":"audit.tail","v":1,"body":{"limit":400}}' | grep -q '"p-full"'; then
+  printf '  FAIL  ★ 被拒的执行在链上留下了痕迹\n'; fails=$((fails + 1))
+else
+  printf '  ok    ★ 被拒的执行在链上什么都没留下（真的查了链）\n'
+fi
 r=$(req '{"t":"pool.release","v":1,"key":"pa14","body":{"holder":"hog"}}')
 expect "释放 hog" "$r" '"holder":"hog"'
 
