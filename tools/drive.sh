@@ -379,6 +379,27 @@ expect "★ 说清把未知折成 E0 就是把一个打字错误变成一次信�
 expect "★ 对照：memory.retrieve 的 min_evidence 也拒未知等级" "$(req '{"t":"memory.retrieve","v":1,"body":{"query":"x","min_evidence":"E9"}}')" 'unknown min_evidence'
 expect "各段预算被报告" "$r" '"recent"'
 expect "用量被报告" "$r" '"used"'
+# ★★★ 总数是一个读法，它的分项是另一个。
+#
+# 此前 `allocated` 是**逐段**预算而 `used` 是一个**总和**：读的人看到
+# `allocated: {retrieval: 35, recent: 15, ...}` 与 `used: 30`，**分不出那 30
+# 来自哪一段** —— 而「哪一段还有余量」正是调用方决定「还能不能再塞一条」时
+# 唯一需要的那个数。一个只报总数的回答，把「哪一段满了」这个问题留给了猜。
+expect "★ 用量有分项（哪一段用了多少）" "$r" '"used_by_section"'
+expect "★ 它说清 used 是分项之和" "$r" 'used is their sum'
+expect "★ 而且它说清「哪一段满了」是加料的人唯一需要知道的" "$r" 'which section is full'
+# ★ 那个等式要**算**出来，不能靠数一行里的字面量。
+if printf '%s' "$r" | python3 -c '
+import json,sys
+b=json.load(sys.stdin)["body"]
+assert b["used"] == sum(b["used_by_section"].values()), "used != sum(used_by_section)"
+for sec, n in b["used_by_section"].items():
+    assert n <= b["allocated"][sec], f"{sec} 用了 {n}，超过它的预算 {b['allocated'][sec]}"
+'; then
+  printf '  ok    ★ 分项之和等于总数，且每一段都没超过自己的预算（算出来的）\n'
+else
+  printf '  FAIL  ★ 分项与总数或预算对不上\n'; fails=$((fails + 1))
+fi
 
 r=$(req '{"t":"compose.build","v":1,"body":{"class":"task_exec","budget":1000,"candidates":[{"id":"d1","section":"retrieval","text":"the kernel keeps only four concepts because a concept earns its place by being authoritative or atomic or crossed by every request and nothing else does","similarity":1,"evidence":"E2","recency":1,"task_relevance":1},{"id":"d2","section":"retrieval","text":"the kernel keeps only four concepts because a concept earns its place by being authoritative or atomic or crossed by every reply and nothing else does","similarity":0.9,"evidence":"E2","recency":1,"task_relevance":1}]}}')
 expect "★ 近重复被去掉，留下更强的那条" "$r" '"kept":["d1"]'

@@ -302,6 +302,56 @@ func TestComposeRespectsTheBudget(t *testing.T) {
 	}
 }
 
+// ★★★ 总数是一个读法，它的分项是另一个。
+//
+// 此前 `Result` 有 `Allocated map[string]int`（**逐段**预算）与 `Used int`
+// （一个**总和**）。于是读的人看到 `allocated: {retrieval: 35, recent: 15}` 与
+// `used: 20`，**分不出那 20 来自哪一段** —— 而「哪一段还有余量」正是调用方
+// 决定「还能不能再塞一条」时唯一需要的那个数。
+//
+// 一个只报总数的回答，把「哪一段满了」这个问题留给了猜。
+func TestUsedIsReportedWithItsParts(t *testing.T) {
+	var cands []Candidate
+	for i := 0; i < 12; i++ {
+		// 两个段各放一半：只放一段的话，分项与总数恰好相等，
+		// 「报的是总和还是某一段」就分不出来 —— 那正是这一轮要抓的东西。
+		sec := "retrieval"
+		if i%2 == 0 {
+			sec = "recent"
+		}
+		text := strings.Repeat("s"+strconv.Itoa(i)+" ", 4)
+		cands = append(cands, cand("c"+strconv.Itoa(i), sec, text, float64(12-i)/12))
+	}
+	res, ref := Compose(Request{Class: ClassTaskExec, Budget: 200, Candidates: cands})
+	if ref != nil {
+		t.Fatalf("unexpected refusal: %s", ref.Reason)
+	}
+	if res.Used == 0 {
+		t.Fatal("precondition: something must have been kept")
+	}
+	if len(res.UsedBySection) == 0 {
+		t.Fatal("used must come with its parts: a total does not say which section is full")
+	}
+	sum := 0
+	for _, n := range res.UsedBySection {
+		sum += n
+	}
+	if sum != res.Used {
+		t.Fatalf("the parts sum to %d but the total says %d — one of them is a second fact", sum, res.Used)
+	}
+	// ★ 每一段都不能超过自己的预算，而这件事只有在分项存在时才可查。
+	for sec, n := range res.UsedBySection {
+		if n > res.Allocated[sec] {
+			t.Fatalf("section %s used %d against a budget of %d", sec, n, res.Allocated[sec])
+		}
+	}
+	// ★ 而且分项必须真的**分**开：全塞在同一个键上的分项与一个总数没有区别。
+	if len(res.UsedBySection) < 2 {
+		t.Fatalf("two sections were offered and both fit, so the parts must name both: %v",
+			res.UsedBySection)
+	}
+}
+
 func TestComposeKeepsChronologyOfRecentTurns(t *testing.T) {
 	cands := []Candidate{
 		cand("r1", "recent", "first turn", 0.1),

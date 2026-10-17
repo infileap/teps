@@ -295,8 +295,22 @@ func (s *server) handleCompose(f core.Frame, out *core.Frame) {
 	for _, c := range res.Dropped {
 		dropped = append(dropped, c.ID)
 	}
+	// ★★★ 总数是一个读法，它的分项是另一个。
+	//
+	// 此前这里报的是 `allocated`（**逐段**预算）与 `used`（一个**总和**）。
+	// 读的人看到 `allocated: {retrieval: 14, recent: 6, system: 6}` 与
+	// `used: 10`，**分不出那 10 来自哪一段** —— 而「哪一段还有余量」正是调用方
+	// 决定「还能不能再塞一条」时唯一需要的那个数。
+	//
+	// 一个只报总数的回答，把「哪一段满了」这个问题留给了猜。
 	out.Body = mustJSON(map[string]any{
-		"kept": kept, "dropped": dropped, "used": res.Used,
-		"allocated": res.Allocated, "order_free": []string{"retrieval"},
+		"kept": kept, "dropped": dropped,
+		"used": res.Used,
+		// ★ 分项。它必须与 used 一致：`used == sum(used_by_section)`。
+		"used_by_section": res.UsedBySection,
+		"allocated":       res.Allocated, "order_free": []string{"retrieval"},
+		"basis": "allocated is the per-section budget and used_by_section is the per-section " +
+			"usage; used is their sum. A total without its parts does not say which section is " +
+			"full, and which section is full is the only thing a caller adding material needs",
 	})
 }

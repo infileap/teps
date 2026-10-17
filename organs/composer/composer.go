@@ -404,6 +404,17 @@ type Result struct {
 	Split     Split
 	Allocated map[string]int
 	Used      int
+	// UsedBySection 是 Used 的**分项**。
+	//
+	// ★★★ 此前只报了总数：`Allocated` 是**逐段**的，而 `Used` 是一个总和。
+	// 于是读的人看到 `allocated: {retrieval: 14, recent: 6, system: 6}` 与
+	// `used: 10`，**分不出那 10 来自哪一段** —— 而「哪一段还有余量」正是
+	// 调用方决定「还能不能再塞一条」时唯一需要的那个数。
+	//
+	// 与 `metrics.accuracy` 报 `traced`/`chains_run`/`unrun`、与 `audit.tail`
+	// 报它自己的窗口是同一条：**一个总数是一个读法，它的分项是另一个。**
+	// 一个只报总数的回答，把「哪一段满了」这个问题留给了猜。
+	UsedBySection map[string]int
 }
 
 // Compose runs the whole pipeline: allocate, dedup, pack, order.
@@ -429,7 +440,7 @@ func Compose(req Request) (Result, *core.Refusal) {
 		bySection[c.Section] = append(bySection[c.Section], c)
 	}
 
-	res := Result{Split: sp, Allocated: alloc}
+	res := Result{Split: sp, Allocated: alloc, UsedBySection: map[string]int{}}
 	for _, name := range Sections() {
 		group := bySection[name]
 		if len(group) == 0 {
@@ -447,6 +458,7 @@ func Compose(req Request) (Result, *core.Refusal) {
 		res.Kept = append(res.Kept, kept...)
 		for _, c := range kept {
 			res.Used += c.Len
+			res.UsedBySection[name] += c.Len
 		}
 	}
 	// Required material that still does not fit is a refusal, not a smaller
