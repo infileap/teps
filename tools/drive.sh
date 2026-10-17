@@ -288,6 +288,21 @@ r=$(req '{"t":"skill.publish","v":1,"key":"p3","body":{"manifest":{"skill_id":"b
 expect "越界载荷路径被拒" "$r" 'bad_request'
 r=$(req '{"t":"skill.publish","v":1,"key":"p4","body":{"manifest":{"skill_id":"bad.net","version":"1","kind":"code","verify_assert":["x"],"evidence":"E1","idempotent":true,"license":"MIT","provenance":{"source":"x"},"env":{"interpreter":"builtin","network":true}},"files":{"a":"x"}}}')
 expect "运行期联网被拒（不可复现）" "$r" 'bad_request'
+
+# ★★★ 而那条判据有**第二扇门，而那扇门是开着的**。
+#
+# `effects[]` 与 `Env` 说的是同一件事（这个技能会碰什么），而实测：
+#   ① env.network:true     -> 被拒：「…is not reproducible…」
+#   ② effects:["network"]  -> **通过了**
+# 同一句话、两个字段、相反的判决 —— 而**被拒的那一个是有人检查的那一个**。
+# 于是「不可复现」这条规矩换个字段写就能绕过去。
+# ★ 与 ShouldEscalate 那条「两扇门对同一个字段给了相反的答案」是同一条，
+# 只是这里更糟：那扇没人查的门**通往同一件被禁止的事**。
+r=$(req '{"t":"skill.publish","v":1,"key":"ef1","body":{"manifest":{"skill_id":"eff.net","version":"1.0.0","kind":"script","verify_assert":["exit == 0"],"budget":{"ms":1000},"evidence":"E0","idempotent":true,"license":"MIT","effects":["network"],"provenance":{"source":"handwritten"},"env":{"interpreter":"/bin/sh"}},"files":{"run.sh":"exit 0\n"}}}')
+expect "★★ effects 里点名 network 也被拒（同一个事实的第二个入口）" "$r" 'Env already governs'
+expect "★★ 而理由点名它撞上了谁（只说「不许」读者会去猜该写成什么）" "$r" 'env.network'
+r=$(req '{"t":"skill.publish","v":1,"key":"ef2","body":{"manifest":{"skill_id":"eff.fs","version":"1.0.0","kind":"script","verify_assert":["exit == 0"],"budget":{"ms":1000},"evidence":"E0","idempotent":true,"license":"MIT","effects":["filesystem"],"provenance":{"source":"handwritten"},"env":{"interpreter":"/bin/sh"}},"files":{"run.sh":"exit 0\n"}}}')
+expect "★★ 而描述性的 effects 照旧放行（堵的是 Env 管着的那几个，不是所有 effects）" "$r" '"ref"'
 expect "被拒时也带回已经走过的步骤" "$r" '"steps"'
 r=$(req '{"t":"skill.resolve","v":1,"body":{"ref":"../../etc/passwd"}}')
 expect "非哈希的 ref 被拒" "$r" 'bad_request'

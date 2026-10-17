@@ -1270,3 +1270,55 @@ func TestAManifestMustDeclareItselfIdempotent(t *testing.T) {
 		t.Fatalf("the reason must say why a false declaration is refused, got %q", ref.Reason)
 	}
 }
+
+// ★★★ 一条为了「不可复现」立下的规矩，换个字段写就能绕过去。
+//
+// `effects[]` 与 `Env` 说的是同一件事（这个技能会碰什么），而实测：
+//
+//	① env.network:true     -> 被拒：「…is not reproducible…」
+//	② effects:["network"]  -> **通过了**（ref=8ed1eed1f32a5359）
+//
+// 同一句话、两个字段、相反的判决 —— 而**被拒的那一个是有人检查的那一个**。
+// 于是 `Validate` 里那条 `env.network` 的判据有**第二扇门，而那扇门是开着的**。
+//
+// ★ 与 `ShouldEscalate` 那条「两扇门对同一个字段给了相反的答案」是同一条，
+// 只是这里更糟：那扇没人查的门**通往同一件被禁止的事**。
+func TestEffectsCannotNameWhatEnvAlreadyGoverns(t *testing.T) {
+	base := Manifest{
+		SkillID: "x.y", Version: "1", Kind: KindScript, Evidence: Evidence("E1"),
+		License: "MIT", Idempotent: true, Provenance: Provenance{Source: "test"},
+		Env:    Env{Interpreter: "/bin/sh"},
+		Verify: []string{"exit == 0"},
+		Refute: []Refutation{{Input: []byte(`{}`), Assert: "exit == 1"}},
+	}
+	// ★ 而**对照**：同一个事实写成 `env.network` 必须被拒 —— 否则这一条测的是别的东西。
+	viaEnv := base
+	viaEnv.Env.Network = true
+	if ref := viaEnv.Validate(); ref == nil {
+		t.Fatal("precondition: env.network:true is refused")
+	}
+	// ★ 而写成 effects 也必须被拒。
+	for _, eff := range []string{"network", " NETWORK ", "Socket", "remote"} {
+		m := base
+		m.Effects = []string{eff}
+		ref := m.Validate()
+		if ref == nil {
+			t.Fatalf("effects %q is the same claim as env.network, and that one is refused: a second, unchecked spelling of a refused claim is a door around the rule", eff)
+		}
+		// ★ 而理由必须说清它撞上了谁 —— 只说「不许」读者会去猜该写成什么。
+		for _, want := range []string{"Env already governs", "env.network"} {
+			if !strings.Contains(ref.Reason, want) {
+				t.Fatalf("the reason must mention %q, got %q", want, ref.Reason)
+			}
+		}
+	}
+	// ★ 而**描述性**的那些照旧放行：`effects` 本来就没有定义过词汇表，
+	// 这一条判据堵的是「Env 已经管着的那几个」，不是「所有 effects」。
+	for _, eff := range []string{"filesystem", "process", "cpu"} {
+		m := base
+		m.Effects = []string{eff}
+		if ref := m.Validate(); ref != nil {
+			t.Fatalf("effects %q is descriptive and must stay allowed: %s", eff, ref.Reason)
+		}
+	}
+}

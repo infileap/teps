@@ -254,6 +254,16 @@ func bad(reason string) *core.Refusal {
 // It **fails closed**: anything it does not recognise is a refusal, never a
 // default. Defaults are how a field that nobody filled in becomes a claim that
 // nobody checked.
+// reachWords 是 `Env` 已经管着的那些「这个技能会碰到什么」的名字。
+//
+// ★ 它是一张**小而明确**的表，不是词汇表 —— `effects` 本来就没有定义过词汇表
+// （见那一段的说明）。这里只列 `Env` 真的在检查的那几件事：碰到别的机器
+// （`env.network`）与碰到本机的某个端点（`env.reaches`）。
+var reachWords = map[string]bool{
+	"network": true, "net": true, "socket": true, "reaches": true,
+	"host": true, "remote": true,
+}
+
 func (m *Manifest) Validate() *core.Refusal {
 	if !ValidName(m.SkillID) {
 		return bad("skill_id must match [a-z0-9][a-z0-9._-]*: " + m.SkillID)
@@ -340,6 +350,26 @@ func (m *Manifest) Validate() *core.Refusal {
 	}
 	if m.Env.Network {
 		return bad("env.network must be false: a skill that reaches another host at runtime is not reproducible — the answer depends on what that host says today, and the content hash still claims this ref names one thing")
+	}
+	// ★★★ 而上面这条判据有**第二扇门，而那扇门是开着的**。
+	//
+	// `effects[]` 与 `Env` 说的是同一件事（这个技能会碰什么），而实测：
+	//
+	//   ① env.network:true        -> 被拒：「…is not reproducible…」
+	//   ② effects:["network"]     -> **通过了**（ref=8ed1eed1f32a5359）
+	//
+	// 同一句话、两个字段、相反的判决 —— 而**被拒的那一个是有人检查的那一个**。
+	// 于是一条为了「不可复现」立下的规矩，**换个字段写就能绕过去**。
+	//
+	// ★ 与 `ShouldEscalate` 那条「两扇门对同一个字段给了相反的答案」是同一条，
+	// 只是这里更糟：这里那扇没人查的门**通往同一件被禁止的事**。
+	//
+	// 判据取「`effects` 不许点名 `Env` 已经管着的那些reach」：其余的
+	// （描述性的）照旧放行，因为 `effects` 本来就没有定义过词汇表。
+	for _, e := range m.Effects {
+		if reachWords[strings.ToLower(strings.TrimSpace(e))] {
+			return bad("effects names " + e + ", which Env already governs: env.network / env.reaches are the checked spelling of the same fact, and a second, unchecked spelling of a claim that is refused in the first one is a door around the rule rather than a description of the skill")
+		}
 	}
 	if ref := m.Env.validate(); ref != nil {
 		return ref
