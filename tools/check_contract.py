@@ -147,6 +147,33 @@ def unenforced_manifest_fields():
     return problems
 
 
+# ★★★ 一个存储**恰好有两个通道**，而契约此前一次都没提过它们。
+#
+# `store/refs.go` 声明了 `ChannelCanary = "canary"` 与 `ChannelStable = "stable"`，
+# `store/register.go:399-402` 的 `Catalog()` 按 **stable 先、canary 后** 解析 ——
+# 而这个顺序此前只写在 `Catalog()` 的**注释**里：
+#
+#	// The stable pointer answers first, because that is what a caller would get.
+#
+# **一条只活在注释里的决定，是一条契约没有做出的决定。**
+#
+# 判据是**可算的**：`store/refs.go` 里每一个 `Channel\w+ = "值"` 的值，
+# 都必须在 `docs/CONTRACT.md` 里出现。
+CHANNEL_CONST = re.compile(r'^\tChannel\w+\s*=\s*"([a-z0-9-]+)"', re.M)
+
+
+def undocumented_channels():
+    src = read("store/refs.go")
+    contract = read("docs/CONTRACT.md")
+    out = []
+    for m in CHANNEL_CONST.finditer(src):
+        ch = m.group(1)
+        if ch not in contract:
+            out.append(f"通道 {ch} 在 store/refs.go 里被声明，而 docs/CONTRACT.md 一次都没提过它"
+                       f"（通道决定 resolve 给哪一个 ref，它不是一个实现细节）")
+    return out
+
+
 def main():
     src = read("core/refusal.go")
 
@@ -206,6 +233,11 @@ def main():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ 契约没提过的通道，等于契约没做出的决定。
+    for u in undocumented_channels():
+        print(u)
+        bad += 1
 
     # ★★★ 契约点名过的每一个清单字段，要么有人执行，要么标明没人执行。
     unenforced = unenforced_manifest_fields()

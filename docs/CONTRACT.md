@@ -180,6 +180,34 @@ provenance{source, url, commit, captured_at}
 组合技能另有三条（见 [../store/README.md](../store/README.md)）：
 数据流接线、`evidence = min(子技能)`、可靠性是乘积 `∏P_i`。
 
+### Channel ABI
+
+★★★ **这一段此前不存在。** `docs/CONTRACT.md` 在 Round 73 之前**一次都没有提到
+`channel` / `canary` / `stable`** —— 而通道是决定「`resolve` 会给你哪一个 ref」的
+那个东西：
+
+```
+canary   新技能落地的地方。skill.publish 总是落在这里（register.go:301）。
+stable   固化过的地方。Promote 是一支指针移动 —— 而回滚也是，
+         那正是这个存储被分成两半的全部理由。
+```
+
+**解析顺序：`stable` 先答，`canary` 后答**（`store/register.go:399-402` 的
+`Catalog()`）。这个顺序是**承重的**：一个把技能提升到 `stable` 的发布者，
+改变的是**每一个消费者**解析到的 ref。
+
+★ 而这个顺序此前只写在 `Catalog()` 的**注释**里：
+
+	// The stable pointer answers first, because that is what a caller would get.
+	// A canary-only skill is still listed: hiding it would make the catalog
+	// disagree with what skill.list shows.
+
+**一条只活在注释里的决定，是一条契约没有做出的决定。**
+
+★ 通道是**恰好两个**，不是「任何合法的名字」：`ValidChannel`（`store/refs.go`）
+只认上面那两个常量，写进第三个通道的指针**没有任何读能得到它**（Round 71）。
+理由说的是「未知通道」，而不是「没有这个文件」。
+
 ### Session ABI
 
 ```
