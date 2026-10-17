@@ -990,6 +990,49 @@ def every_rule_function_is_called():
     return out
 
 
+# ★★★ 一条「变异 N/N」的主张必须**告诉读者怎么核它**。
+#
+# README 里有 59 处「变异 N/N」（Round 91 之前是 56，后来又加了三条）。
+# Round 91 把 `mutations/` 追进了 git，Round 92 补了 `tools/run_mutations.sh` ——
+# **证据在仓库里、也有一条命令能跑一遍**。
+#
+# ★ 而「有一条命令」与「读的人知道那条命令」是两件事：一个只在 README 的
+# 状态表里读「变异 4/4」的人，**没有任何线索**指向 `tools/run_mutations.sh`。
+#
+# 判据是**可算的**：任何一份 .md 里出现「变异 N/N」，它就必须也提到那个 runner。
+MUT_CLAIM = re.compile(r'变异 \d+/\d+')
+
+
+def mutation_claims_name_their_runner():
+    """**按节**判：一个含「变异 N/N」的节，它自己必须提到那个 runner。
+
+    ★★ 第一版只判「整份 README 里出现过 runner」—— 而那被**一条**提到就满足了，
+    59 处主张全靠那一处救活。**一条能被「出现过一次」满足的判据，检查的是
+    存在性，不是那件事**（这个坑本项目已经踩过很多次，Round 43 / Round 77）。
+    按节判才说得通：读者是在某一节里读到那些主张的，那一节就得告诉他怎么核。
+
+    ★★★ **而按节判仍然不够，这一点实测确认过**：`## 当前状态` 这一节里
+    Round 92 那一条状态行**也**提到了 runner，所以把我新加的「怎么核」那一小段
+    整段删掉之后，判据照样绿。**这一条判据能保证的只有「这一节里有人说过」，
+    不能保证「说的是在这一节的开头、读者读那些主张之前」** —— 那是它的边界，
+    写下来。要真的钉住位置，得判「标题之后到第一处「变异 N/N」之间出现过」，
+    而那会把 README 的排版当成契约，比它要防的风险更脆。
+    """
+    out = []
+    for rel in ["README.md"]:
+        lines = read(rel).splitlines()
+        # 把文件切成「节」：从每个标题行到下一个标题行。
+        heads = [i for i, l in enumerate(lines) if l.startswith("#")]
+        bounds = list(zip(heads, heads[1:] + [len(lines)]))
+        for a, b in bounds:
+            sect = "\n".join(lines[a:b])
+            if MUT_CLAIM.search(sect) and MUT_RUNNER not in sect:
+                out.append(f"{rel}:{a + 1} 这一节（{lines[a][:40]}…）里有「变异 N/N」的主张，"
+                           f"却一次都没提到 {MUT_RUNNER} —— "
+                           f"**证据在仓库里、也有一条命令能跑一遍，而读的人不知道那条命令。**")
+    return out
+
+
 def main():
     if os.environ.get("TEPS_CONTRACT_SELF_TEST") == "1":
         bad = self_test()
@@ -1062,6 +1105,11 @@ def run():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ 一条「变异 N/N」的主张必须告诉读者怎么核它。
+    for u in mutation_claims_name_their_runner():
+        print(u)
+        bad += 1
 
     # ★★★ 一条定义了却没人调用的规则，与一条不存在的规则一样。
     for u in every_rule_function_is_called():
