@@ -200,7 +200,20 @@ func (s *Store) Register(reg Registration) (*Result, *core.Refusal) {
 	// 所以这里只**检查**声明不超上限，入账仍然用声明值。
 	if m.Kind == KindCompose {
 		ceiling := MinEvidenceAll(depEvidence)
-		if evidenceRank(m.Evidence) > evidenceRank(ceiling) {
+		// ★ 两边都要读得懂才比。`Rank` 的 ok 此前被丢掉，未知因此被当成 E0 ——
+		// 而「一个读不懂的等级」与「梯子上最弱的那一级」是两个不同的事实。
+		declaredRank, declaredKnown := evidenceRank(m.Evidence)
+		ceilingRank, ceilingKnown := evidenceRank(ceiling)
+		if !declaredKnown || !ceilingKnown {
+			return fail("evidence", &core.Refusal{
+				Code: core.CodeBadRequest,
+				Reason: "cannot compare evidence levels: the composition declares " + string(m.Evidence) +
+					" and its children's minimum is " + string(ceiling) + ". A level that is not on the " +
+					"ladder is not the weakest level — it is an unreadable one, and a ceiling nobody can " +
+					"read is not a ceiling",
+			})
+		}
+		if declaredRank > ceilingRank {
 			return fail("evidence", &core.Refusal{
 				Code: core.CodeBadRequest,
 				Reason: "this composition declares " + string(m.Evidence) + " but its children's minimum is " + string(ceiling) +

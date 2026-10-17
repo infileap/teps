@@ -348,6 +348,35 @@ echo
 echo "—— 上下文合成器：背包、年表、去重 ——"
 r=$(req '{"t":"compose.build","v":1,"body":{"class":"chat","budget":200,"candidates":[{"id":"t1","section":"recent","text":"first turn","similarity":1,"evidence":"E2","recency":1,"task_relevance":1},{"id":"t2","section":"recent","text":"second turn","similarity":1,"evidence":"E2","recency":1,"task_relevance":1},{"id":"t3","section":"recent","text":"third turn","similarity":1,"evidence":"E2","recency":1,"task_relevance":1}]}}')
 expect "★ recent 段保持年表（打包不许重写时间）" "$r" '"kept":["t1","t2","t3"]'
+
+# ★★★ 梯子上没有的证据等级必须被**拒**，不许被折到 E0。
+#
+# 此前 `compose.build` 是 `rank := 0.0; if r, ok := evidence.Rank(...); ok { rank = r/4 }`
+# —— `ok` 被检查了，然后未知的那一种照样落到 0.0，也就是 E0。实测（两条只有
+# evidence 不同的候选，预算只够留一条）：
+#
+#   a=E4 b=E0 -> kept=["a"]      a=E0 b=E4 -> kept=["b"]
+#   a=E4 b=E9 -> kept=["a"]      a=E9 b=E4 -> kept=["b"]
+#
+# 第二行与第一行逐字相同：E9 与 E0 在这里没有区别。
+#
+# 而同一份代码库里另一扇门不这样：`memory.retrieve` 对 min_evidence:"E9"
+# 回的是 bad_request / "unknown min_evidence: E9"。一个事实两扇门两个答案 ——
+# 而这里是那个更糟的答案：它不报错，它按最弱的等级静默处理。
+#
+# `evidence.Rank` 的注释逐字写着那件事不许发生：
+#   An unknown level is deliberately **not** mapped to zero. Zero is a real level
+#   (E0), and folding "E9" onto it would turn a typo into a trust decision.
+# ★ 用独立变量：这一段插在 compose.build 那一组断言中间，覆盖 $r 会把后面
+# 还在用 $r 的两条（各段预算、用量）一起弄红 —— 而它们红的原因与它们要检查
+# 的事毫无关系。
+rbad=$(req '{"t":"compose.build","v":1,"body":{"class":"task_exec","budget":40,"candidates":[{"id":"a","section":"retrieval","text":"aaaaaaaaaa","similarity":1,"evidence":"E4","recency":1,"task_relevance":1},{"id":"b","section":"retrieval","text":"zzzzzzzzzz","similarity":1,"evidence":"E9","recency":1,"task_relevance":1}]}}')
+expect "★ 梯子上没有的证据等级被拒（不许折成 E0）" "$rbad" '"code":"bad_request"'
+expect "★ 拒绝点名是第几条候选、它的 id、以及那个读不懂的等级" "$rbad" 'candidate 1 (b) declares evidence E9'
+expect "★ 而且它说清「读不懂」与「最弱」是两件事" "$rbad" 'not a level on the ladder'
+expect "★ 说清把未知折成 E0 就是把一个打字错误变成一次信任决定" "$rbad" 'turn a typo into a trust decision'
+# 对照：同一份代码库里另一扇门也拒（两扇门一个答案）。
+expect "★ 对照：memory.retrieve 的 min_evidence 也拒未知等级" "$(req '{"t":"memory.retrieve","v":1,"body":{"query":"x","min_evidence":"E9"}}')" 'unknown min_evidence'
 expect "各段预算被报告" "$r" '"recent"'
 expect "用量被报告" "$r" '"used"'
 

@@ -385,7 +385,20 @@ func (m *Manifest) Verified() bool {
 // levels without importing the ladder directly — the store reads the ladder
 // through exactly one door (manifest.go), which is what keeps the store and the
 // memory from drifting apart on what E2 means.
-func evidenceRank(l Evidence) int {
-	r, _ := evidence.Rank(l)
-	return r
+//
+// ★★★ 它此前**丢掉了 `Rank` 的第二个返回值**：`r, _ := evidence.Rank(l)`。
+// 未知等级因此落到 0，而 0 正是 E0 的秩。`Rank` 的注释逐字写着那件事不许发生：
+//
+//	An unknown level is deliberately **not** mapped to zero. Zero is a real level
+//	(E0), and folding "E9" onto it would turn a typo into a trust decision.
+//
+// 也就是说：**这个前向器把它所前向的那个函数的、写在注释里的唯一一条禁令，
+// 恰好执行反了。** 它今天还不可达（`Validate` 拦住未知的声明值，孩子又都过了
+// `Validate`），但一个「读起来是 A、底下是 B」的转发器不需要等到可达才算错：
+// 下一个人加一条旁路，它就活了。
+//
+// 现在它返回 `(秩, 在梯子上吗)`，而调用方必须**两边都读得懂**才比较 ——
+// 一个读不懂的等级必须让检查更严，不是更松。
+func evidenceRank(l Evidence) (int, bool) {
+	return evidence.Rank(l)
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 
 	"teps/core"
@@ -237,14 +238,43 @@ func (s *server) handleCompose(f core.Frame, out *core.Frame) {
 		return
 	}
 	cands := make([]composer.Candidate, 0, len(body.Candidates))
-	for _, c := range body.Candidates {
-		rank := 0.0
-		if r, ok := evidence.Rank(evidence.Level(c.Evidence)); ok {
-			rank = float64(r) / 4.0
+	for i, c := range body.Candidates {
+		// ★★★ 梯子上没有的等级必须被**拒**，不许被折到 E0。
+		//
+		// 此前这里是 `rank := 0.0; if r, ok := evidence.Rank(...); ok { rank = r/4 }`
+		// —— `ok` 被检查了，然后**未知的那一种照样落到 0.0**，也就是 E0。
+		// 而 `evidence.Rank` 的注释逐字写着：
+		//
+		//   An unknown level is deliberately **not** mapped to zero. Zero is a real
+		//   level (E0), and folding "E9" onto it would turn a typo into a trust
+		//   decision.
+		//
+		// 实测（两条只有 evidence 不同的候选，预算只够留一条）：
+		//
+		//   a=E4 b=E0 -> kept=["a"]      a=E0 b=E4 -> kept=["b"]
+		//   a=E4 b=E9 -> kept=["a"]      a=E9 b=E4 -> kept=["b"]
+		//
+		// 第二行与第一行**逐字相同**：`E9` 与 `E0` 在这里没有区别。
+		//
+		// 而同一份代码库里另一扇门不这样：`memory.retrieve` 对
+		// `min_evidence:"E9"` 回的是 `{"code":"bad_request","reason":"unknown
+		// min_evidence: E9"}`。**一个事实两扇门两个答案** —— 而这里是那个更糟的
+		// 答案：它不报错，它按最弱的等级静默处理。
+		//
+		// 拒绝的理由与 store/manifest.go:245 的 `unknown evidence level:` 同一句话，
+		// 因为那是同一件事。
+		rank, ok := evidence.Rank(evidence.Level(c.Evidence))
+		if !ok {
+			out.Err = core.Refuse(core.CodeBadRequest,
+				"candidate "+strconv.Itoa(i)+" ("+c.ID+") declares evidence "+c.Evidence+
+					", which is not a level on the ladder: an unrecognised level is not the weakest "+
+					"one, it is an unrecognised one, and folding it onto E0 would turn a typo into a "+
+					"trust decision")
+			return
 		}
 		cands = append(cands, composer.Candidate{
 			ID: c.ID, Section: c.Section, Text: c.Text, Len: len(c.Text),
-			Similarity: c.Similarity, EvidenceRank: rank, Recency: c.Recency,
+			Similarity: c.Similarity, EvidenceRank: float64(rank) / 4.0, Recency: c.Recency,
 			TaskRelevance: c.TaskRelevance, Redundancy: c.Redundancy,
 			Required: c.Required,
 		})
