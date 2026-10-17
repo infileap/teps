@@ -623,6 +623,39 @@ def drive_assertion_count():
     return out
 
 
+# ★★★ 一个数如果不说它数的是什么，它就会读成另一个数。
+#
+# README 的标题此前写着「### **五**条守卫各自被注入测试证过」，而
+# `tools/check_all.sh` 里有**六**条 `selfcheck`（nomodel / clients / examples /
+# 收件箱分账 / docs / organs）。而那一节下面展开的**是另外五条**
+# （check_kernel / check_contract / check_frames / check_organs / check_docs）——
+# 两个数说的不是同一件事，而标题只写了一个数。
+#
+# 判据：标题里的数必须等于 `^selfcheck ` 的行数。
+# ★★ 而标题里用的是**中文数字**（「六条」「五条」），第一版的正则写的是 `\d+`
+# —— 它一次都没匹配上，于是判据**静默地什么都没查**（两个方向的注入都不红）。
+# **一个只认 ASCII 数字的判据，在一份写中文数字的文档上是空的。**
+# ★★★ 而中文里「六条」是**连着写**的，没有空格 —— 第一版的正则写的是
+# `([一二三四五六七八九十]+) 条`（中间一个空格），于是它**又一次**什么都没匹配到。
+# **一个在数字与量词之间要求空格的判据，在一份「六条」这样写的文档上是空的。**
+# 这一条我连错两次，两次都表现为「守卫不红」而不是「守卫报错」。
+SELFCHECK_HEAD = re.compile(r'^### ([一二三四五六七八九十]+)条守卫各自被注入测试证过', re.M)
+CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
+          "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def selfcheck_count():
+    n = sum(1 for line in read("tools/check_all.sh").splitlines()
+            if line.startswith("selfcheck "))
+    if n == 0:
+        return ["tools/check_all.sh 里数不出 selfcheck 行：判据的前提变了"]
+    out = []
+    for m in SELFCHECK_HEAD.finditer(read("README.md")):
+        if CN_NUM.get(m.group(1)) != n:
+            out.append(f"README 的标题说 {m.group(1)} 条守卫有注入自检，而 check_all.sh 里有 {n} 条 selfcheck")
+    return out
+
+
 def main():
     src = read("core/refusal.go")
 
@@ -682,6 +715,11 @@ def main():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ 一个数如果不说它数的是什么，它就会读成另一个数。
+    for u in selfcheck_count():
+        print(u)
+        bad += 1
 
     # ★★★ 一个现在时的数是可核的，也就该被核。
     for u in drive_assertion_count():
