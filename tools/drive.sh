@@ -334,6 +334,24 @@ expect "stable 与 canary 指向同一个 ref" "$r" "\"stable\":\"$skref\""
 r=$(req '{"t":"skill.promote","v":1,"key":"pr2","body":{"name":"read.file","from":"canary"}}')
 expect "from/to 没有默认值" "$r" 'bad_request'
 
+# ★★★ 一个**没人读得到的写**不是一条记录，是一次丢弃。
+#
+# store/refs.go:16-20 声明了这个存储恰好有两个通道（canary / stable），而
+# register.go:399-402 的解析**只看这两个**（先 stable、再 canary）。
+# 而 Set / Get / History 此前用 ValidName 校验通道 —— 它接受任何
+# [a-z0-9][a-z0-9._-]*。实测（E2 的技能）：
+#   promote canary -> 'whatever' -> **成功了**
+#   promote canary -> 'prod'     -> **成功了**
+#   通道列表现在： ['a.b-c_d', 'canary', 'prod', 'stable', 'whatever']
+# promote 写了一个指针与一条历史，而**没有任何一次读能够到达它**。
+# ★ 这比死代码更坏：skill.list 会把这些通道**报出来**，于是读的人看见
+# channels: ["a.b-c_d", "prod", "whatever"] 并相信它们有意义。
+r=$(req '{"t":"skill.promote","v":1,"key":"pr3","body":{"name":"read.file","from":"canary","to":"whatever"}}')
+expect "★★ 未声明的通道被拒（写进去的指针没有任何读能得到）" "$r" 'unknown channel'
+expect "★★ 而理由说清这个存储定义了哪两个（只说「未知」读者会去猜）" "$r" 'canary and stable'
+r=$(req '{"t":"skill.list","v":1,"body":{"name":"read.file"}}')
+expect "★★ 而通道列表里没有多出第三个" "$r" '"channels":["canary","stable"]'
+
 echo
 echo "—— 记忆：写不是编辑，纠正靠取代 ——"
 r=$(req '{"t":"memory.write","v":1,"key":"m1","body":{"id":"r1","text":"the kernel keeps four concepts","evidence":"E2","recorded_at":100,"tags":["kernel"]}}')

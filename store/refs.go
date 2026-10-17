@@ -19,6 +19,32 @@ const (
 	ChannelStable = "stable"
 )
 
+// ValidChannel reports whether ch is a channel this store defines.
+//
+// ★★★ 一个**没人读得到的写**不是一条记录，是一次丢弃。
+//
+// 上面那两条常量声明了这个存储恰好有两个通道，而 `register.go:399-402` 的解析
+// **只看这两个**（先 `stable`、再 `canary`）。而 `Set` / `Get` / `History` 此前
+// 用 `ValidName` 校验通道 —— 它接受任何 `[a-z0-9][a-z0-9._-]*`。实测：
+//
+//	② 通道列表： ['canary']
+//	   promote canary -> 'stable'     -> 成功了
+//	   promote canary -> 'whatever'   -> **成功了**
+//	   promote canary -> 'prod'       -> **成功了**
+//	   promote canary -> 'a.b-c_d'    -> **成功了**
+//	③ 通道列表现在： ['a.b-c_d', 'canary', 'prod', 'stable', 'whatever']
+//
+// `promote` 写了一个指针与一条历史，而**没有任何一次读能够到达它**。
+//
+// ★ 这比死代码更坏：`skill.list` 会把这些通道**报出来**，于是读的人看见
+// `channels: ["a.b-c_d", "prod", "whatever"]` 并相信它们有意义。
+//
+// ★ 而它与这一整轮的主题同一条：**一个名字被接受、被写下来、被报出来，
+// 而没有任何一条路径能读到它** —— 只是这次的对象是一个通道。
+func ValidChannel(ch string) bool {
+	return ch == ChannelCanary || ch == ChannelStable
+}
+
 // ValidName reports whether n is safe to use as a path element.
 //
 // Same boundary as ValidHash, for the same reason: names arrive from the wire,
@@ -67,6 +93,10 @@ func (r *Refs) Get(name, channel string) (string, *core.Refusal) {
 	if !ValidName(name) || !ValidName(channel) {
 		return "", &core.Refusal{Code: core.CodeBadRequest, Reason: "bad ref name: " + name + "/" + channel}
 	}
+	if !ValidChannel(channel) {
+		return "", &core.Refusal{Code: core.CodeBadRequest, Reason: "unknown channel " + channel +
+			": this store defines " + ChannelCanary + " and " + ChannelStable}
+	}
 	data, err := os.ReadFile(r.ptr(name, channel))
 	if err != nil {
 		// No dedicated "not found" code. The codes are about what a client can
@@ -95,6 +125,13 @@ func (r *Refs) Get(name, channel string) (string, *core.Refusal) {
 func (r *Refs) Set(name, channel, hash string) *core.Refusal {
 	if !ValidName(name) || !ValidName(channel) {
 		return &core.Refusal{Code: core.CodeBadRequest, Reason: "bad ref name: " + name + "/" + channel}
+	}
+	// ★ 而通道必须是**这个存储定义过的**那两个之一：写进第三个通道的指针
+	// 没有任何读能得到它（解析只看 stable 与 canary）。
+	if !ValidChannel(channel) {
+		return &core.Refusal{Code: core.CodeBadRequest, Reason: "unknown channel " + channel +
+			": this store defines " + ChannelCanary + " and " + ChannelStable +
+			", and a pointer written to any other channel is a write no read can reach"}
 	}
 	if !ValidHash(hash) {
 		return &core.Refusal{Code: core.CodeBadRequest, Reason: "a ref must point at a content hash: " + hash}

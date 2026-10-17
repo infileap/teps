@@ -1357,3 +1357,87 @@ func TestEffectsCannotNameWhatEnvAlreadyGoverns(t *testing.T) {
 		}
 	}
 }
+
+// ★★★ 一个**没人读得到的写**不是一条记录，是一次丢弃。
+//
+// store/refs.go:16-20 声明了这个存储恰好有两个通道（canary / stable），而
+// register.go:399-402 的解析**只看这两个**（先 stable、再 canary）。
+// 而 Set / Get / History 此前用 ValidName 校验通道 —— 它接受任何
+// [a-z0-9][a-z0-9._-]*。实测（E2 的技能）：
+//
+//	② 通道列表： ['canary']
+//	   promote canary -> 'stable'     -> 成功了
+//	   promote canary -> 'whatever'   -> **成功了**
+//	   promote canary -> 'prod'       -> **成功了**
+//	   promote canary -> 'a.b-c_d'    -> **成功了**
+//	③ 通道列表现在： ['a.b-c_d', 'canary', 'prod', 'stable', 'whatever']
+//
+// promote 写了一个指针与一条历史，而**没有任何一次读能够到达它**。
+//
+// ★ 这比死代码更坏：skill.list 会把这些通道**报出来**，于是读的人看见
+// channels: ["a.b-c_d", "prod", "whatever"] 并相信它们有意义。
+func TestOnlyDeclaredChannelsCanBeWritten(t *testing.T) {
+	// ★ 先钉住这个存储定义了哪两个 —— 否则这一条会在常量改名之后静静失效。
+	if !ValidChannel(ChannelCanary) || !ValidChannel(ChannelStable) {
+		t.Fatal("precondition: the two declared channels must be valid")
+	}
+	refs, err := OpenRefs(t.TempDir())
+	if err != nil {
+		t.Fatalf("open refs: %v", err)
+	}
+	h := strings.Repeat("a", 64)
+	for _, ch := range []string{ChannelCanary, ChannelStable} {
+		if ref := refs.Set("x.y", ch, h); ref != nil {
+			t.Fatalf("the declared channel %q must be writable: %s", ch, ref.Reason)
+		}
+	}
+	// ★ 而**两件事要分开**：名字不合法（`Canary` / `CANARY` / 空串）与
+	// 名字合法但这个存储没有这个通道（`whatever` / `prod` / `a.b-c_d`）。
+	// 这与 Round 70 的 `wellFormedEndpoint` / `isLoopback` 是同一条：
+	// **一条分不清两种拒绝的表，与一条分不清两种事实的判据，是同一件事的两面。**
+	for _, ch := range []string{"Canary", "CANARY", ""} {
+		ref := refs.Set("x.y", ch, h)
+		if ref == nil {
+			t.Fatalf("channel %q is not a legal path element and must be refused", ch)
+		}
+		if !strings.Contains(ref.Reason, "bad ref name") {
+			t.Fatalf("%q is a malformed name, not an unknown channel: %s", ch, ref.Reason)
+		}
+	}
+	for _, ch := range []string{"whatever", "prod", "a.b-c_d", "canary2"} {
+		ref := refs.Set("x.y", ch, h)
+		if ref == nil {
+			t.Fatalf("channel %q is not one this store defines, and a pointer written to it is a write no read can reach", ch)
+		}
+		// ★ 而理由必须说清**这个存储定义了哪两个** —— 只说「未知通道」读者
+		// 会去猜该写什么。
+		for _, want := range []string{"unknown channel", ChannelCanary, ChannelStable} {
+			if !strings.Contains(ref.Reason, want) {
+				t.Fatalf("the reason must mention %q, got %q", want, ref.Reason)
+			}
+		}
+		// ★ 而它**不许**说成名字不合法 —— 那会把读的人指向一个错的修法。
+		if strings.Contains(ref.Reason, "bad ref name") {
+			t.Fatalf("%q is a well-formed name and an undeclared channel; saying it is malformed sends the reader to the wrong fix: %s", ch, ref.Reason)
+		}
+	}
+	// ★ 而读也要拒 —— 一个能读到的未知通道意味着它可能已经被写过了。
+	//
+	// ★★ 而这里必须断言**理由**，不能只断言「被拒了」：`whatever` 从来没有
+	// 被写成功过，所以就算 `Get` 不检查通道，它也会因为「no such ref」而被拒 ——
+	// **一条只断言「有错」的检查，分不出「因为未知通道」与「因为文件不存在」。**
+	// 实测：删掉 `Get` 里那条判据，这一条照样通过（变异报「漏网」）。
+	if _, ref := refs.Get("x.y", "whatever"); ref == nil {
+		t.Fatal("reading an undeclared channel must be refused")
+	} else if !strings.Contains(ref.Reason, "unknown channel") {
+		t.Fatalf("reading an undeclared channel must be refused AS an undeclared channel, "+
+			"not as a missing file: %s", ref.Reason)
+	}
+	// ★ 而写下去的那两个真的读得回来。
+	for _, ch := range []string{ChannelCanary, ChannelStable} {
+		got, ref := refs.Get("x.y", ch)
+		if ref != nil || got != h {
+			t.Fatalf("the declared channel %q must read back: %v %v", ch, got, ref)
+		}
+	}
+}
