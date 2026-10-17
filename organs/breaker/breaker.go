@@ -147,6 +147,7 @@ func Allow(trips []Trip, host string, now int64) *core.Refusal {
 	}
 }
 
+// DEAD-API: 半开由 Allow 与 StateOf 判
 // HalfOpenProbe reports whether this attempt is the single probe.
 //
 // The caller needs it because the state alone does not say whether the attempt

@@ -220,6 +220,7 @@ func Match(stimulus string, rules []Rule) (Rule, bool) {
 	return best, found
 }
 
+// DEAD-API: reflex 的率只报在 reflex.state 的逐行里，这个函数没有调用点
 // Rate is the number this layer exists to move: the share of requests answered
 // with no context at all.
 //

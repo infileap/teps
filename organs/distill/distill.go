@@ -107,6 +107,7 @@ func Propose(t Trace) (Proposal, *core.Refusal) {
 	}, nil
 }
 
+// DEAD-API: 蒸馏的准入由 distill.Propose 判
 // Distillable is Propose without the explanation, for callers that only branch.
 func Distillable(t Trace) bool {
 	_, ref := Propose(t)

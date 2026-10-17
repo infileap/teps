@@ -187,6 +187,7 @@ func Rank(offers []Offer, t Table) []Ranked {
 	return out
 }
 
+// DEAD-API: 报价排序走 Rank；Choose 是给「只选一个」的调用方准备的，目前没有
 // Choose returns the best offer, or a refusal when there is nothing to choose.
 //
 // An empty offer list is a refusal rather than a default action: choosing

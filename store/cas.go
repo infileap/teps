@@ -208,6 +208,7 @@ func (c *CAS) Get(digest string) ([]byte, error) {
 	return data, nil
 }
 
+// DEAD-API: CAS 的存在性检查没有调用点
 // Has reports presence only. It does not verify the bytes.
 //
 // It splits the digest first, for the same reason Get does: a store where Get

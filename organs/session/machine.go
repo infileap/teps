@@ -178,6 +178,7 @@ func (m Machine) Flags() Flags {
 	return f
 }
 
+// DEAD-API: session.status 直接报 flags，没有走 Stuck 的入口
 // Stuck reports whether the session should abandon its current approach.
 //
 // A stall or a loop is a reason to change strategy. It is not by itself a

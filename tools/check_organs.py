@@ -99,6 +99,135 @@ def names_organ(row, name):
     return re.search(pat, row) is not None
 
 
+# ★★★ 一个没有调用点的导出函数是一个承诺。
+#
+# 这与 `check_frames.py` 的「写进契约但没人分派」、与 `check_contract.py` 新加的
+# 「一个没有生产点的拒绝码」是同一条，只是对象换成了函数。
+#
+# 实测：`organs/` `store/` `evidence/` 里的导出函数有 13 个在**任何非测试代码里
+# 都没有调用点**（`Rate` `Edges` `Stuck` `Chain` `DefaultCompileCriteria`
+# `ShouldCompile` `Choose` `Layers` `Distillable` `HalfOpenProbe` `ReliabilityOf`
+# `Prune` `Has`）。而其中至少一个已经造成了真实的分歧：`arbiter.ShouldFix` 的
+# 注释逐字写着那个比较为什么必须**严格**，而适配器自己重写了一遍 `v > 0` ——
+# **器官那一份是死的，活着的那一份在适配器里**。两份今天恰好一致，
+# 而「今天恰好一致」正是这个项目付过很多次学费的那种说法。
+#
+# ★ 判据必须先剥掉注释：第一版没剥，于是每个函数的**文档注释**都被当成了调用点，
+# 报出来是 0 个孤儿 —— 一个读注释的守卫报的是散文，不是代码
+# （与 Round 49 的 `check_adapters.py` 是同一个坑）。
+#
+# 处置与帧表、拒绝码表一致：**明确标出来的缺口不是静默漂移**。所以导出函数
+# 允许暂时没有调用点，但它上方的文档注释里必须带上 `DEAD-API:` 与一句理由。
+DEAD_API_MARK = "DEAD-API:"
+EXPORTED_FUNC = re.compile(r'^func (?:\[[^\]]*\] )?(?:(\([^)]*\))\s+)?([A-Z]\w*)\(')
+
+
+def strip_comments(src):
+    """去掉 Go 注释，保留行号（注释行变空行）。与 check_adapters.py 同一份逻辑。"""
+    n = len(src)
+    kept, buf = [], []
+    i = 0
+    while i < n:
+        c = src[i]
+        if c == '"':
+            j = i + 1
+            while j < n and src[j] != '"':
+                if src[j] == "\\":
+                    j += 1
+                j += 1
+            buf.append(src[i:j + 1])
+            i = j + 1
+            continue
+        if c == "`":
+            j = i + 1
+            while j < n and src[j] != "`":
+                j += 1
+            buf.append(src[i:j + 1])
+            i = j + 1
+            continue
+        if c == "/" and i + 1 < n and src[i + 1] == "/":
+            while i < n and src[i] != "\n":
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and src[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (src[i] == "*" and src[i + 1] == "/"):
+                if src[i] == "\n":
+                    buf.append("\n")
+                i += 1
+            i += 2
+            continue
+        if c == "\n":
+            kept.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(c)
+        i += 1
+    kept.append("".join(buf))
+    return "\n".join(kept)
+
+
+def doc_block_above(lines, idx):
+    """idx 之上连续的 `//` 注释行（文档注释）。"""
+    out = []
+    i = idx - 1
+    while i >= 0 and lines[i].lstrip().startswith("//"):
+        out.append(lines[i])
+        i -= 1
+    return "\n".join(reversed(out))
+
+
+def check_exported_functions_have_callers():
+    problems = []
+    for d in ("organs", "store", "evidence"):
+        base = os.path.join(ROOT, d)
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [x for x in dirnames if not x.startswith(".")]
+            for fn in sorted(filenames):
+                if not fn.endswith(".go") or fn.endswith("_test.go"):
+                    continue
+                path = os.path.join(dirpath, fn)
+                rel = os.path.relpath(path, ROOT)
+                raw = open(path, encoding="utf-8").read()
+                lines = raw.splitlines()
+                code = strip_comments(raw).splitlines()
+                # 全仓非测试代码，剥掉注释后的样子。**包括定义它的那个文件** ——
+                # 一个只被同一个文件里的另一个函数调用的导出函数是**有人用的**，
+                # 而第一版把定义文件整个排除掉了，于是 `FixValue`（由同一个文件里的
+                # `ShouldFix` 调用）被误报成孤儿。
+                # 定义那一行本身要抹掉，否则每个函数都会「用到」自己。
+                others = []
+                for dp2, dn2, fs2 in os.walk(ROOT):
+                    dn2[:] = [x for x in dn2 if x not in (".git", ".toolchain")]
+                    for f2 in fs2:
+                        if not f2.endswith(".go") or f2.endswith("_test.go"):
+                            continue
+                        p2 = os.path.join(dp2, f2)
+                        body = strip_comments(open(p2, encoding="utf-8").read())
+                        if p2 == path:
+                            body = "\n".join(
+                                "" if EXPORTED_FUNC.match(l) else l
+                                for l in body.splitlines())
+                        others.append(body)
+                for i, line in enumerate(code):
+                    m = EXPORTED_FUNC.match(line)
+                    if not m:
+                        continue
+                    name = m.group(2)
+                    if name in ("String", "Error", "MarshalJSON", "UnmarshalJSON"):
+                        continue  # 接口方法，由标准库调用
+                    used = any(re.search(r"\b" + name + r"\b", body) for body in others)
+                    if used:
+                        continue
+                    if DEAD_API_MARK in doc_block_above(lines, i):
+                        continue
+                    problems.append(
+                        f"{rel}:{i + 1} 导出函数 {name} 在任何非测试代码里都没有调用点"
+                        f"（要么接上它，要么在上方的文档注释里写 {DEAD_API_MARK} 与一句理由）")
+    return problems
+
+
 def run():
     organs = discover()
     organ_doc = read(ORGAN_DOC)
@@ -122,6 +251,9 @@ def run():
     for name, label in sorted(referenced):
         if name not in organs:
             problems.append(f"{label} 里写到了 {name}/，但 organs/{name}/ 不存在")
+
+    # 方向三：导出函数要么有调用点，要么被标成已声明的缺口。
+    problems += check_exported_functions_have_callers()
 
     # 反向的平凡真也要说出来：一个器官都没有时，上面两条都成立而没有意义。
     if not organs:

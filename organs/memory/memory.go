@@ -232,6 +232,7 @@ func (s *Store) AsOf(t int64) []Record {
 	return out
 }
 
+// DEAD-API: memory 的链只由 Retrieve 折出来
 // Chain walks a record's replacement chain, oldest first.
 func (s *Store) Chain(id string) []Record {
 	var out []Record

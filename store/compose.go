@@ -112,6 +112,7 @@ func minOf(xs []float64) float64 {
 	return out
 }
 
+// DEAD-API: 组合的可靠性没有消费方
 // ReliabilityOf returns the probability that a composition succeeds, given each
 // child's measured success rate.
 //
@@ -203,6 +204,7 @@ type Candidate struct {
 	Depth    int      `json:"depth"`
 }
 
+// DEAD-API: 组合的修剪没有调用点
 // Prune drops candidates that fall below the reliability floor or exceed the
 // depth the floor implies, and **returns what it dropped**.
 //

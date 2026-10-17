@@ -525,7 +525,24 @@ func (s *server) arbiterFix(f core.Frame, out *core.Frame) {
 		out.Err = ref
 		return
 	}
-	v, ok := arbiter.FixValue(arbiter.Fixing{
+	// ★★★ 判据只有一份。
+	//
+	// 此前这里是 `v, ok := arbiter.FixValue(...)` 然后 `"fix": v > 0` —— 也就是
+	// **适配器自己重写了那个严格比较**。而器官里有一个 `ShouldFix`，它的注释
+	// 逐字写着为什么要严格：
+	//
+	//	The comparison is strict. Breaking even is not a reason to accumulate
+	//	something: a skill that costs exactly what it saves adds a moving part, a
+	//	licence obligation and a poison surface for no return.
+	//
+	// 于是「严格」这件事有两份拷贝，而**器官那一份是死的**（`ShouldFix` 在
+	// 非测试代码里一个调用点都没有）。两份拷贝今天恰好一致（都取 `v > 0`），
+	// 而「今天恰好一致」正是这个项目付过很多次学费的那种说法：
+	// **第二份拷贝就是会烂掉的那一份。**
+	//
+	// 现在适配器问器官，而不是自己再答一遍。`ShouldFix` 同时把「读不懂的等级」
+	// 那一路也答了（回 `ok = false`），所以下面那次拒绝也来自同一个地方。
+	fix, v, ok := arbiter.ShouldFix(arbiter.Fixing{
 		Calls: body.Calls, OpexNow: body.OpexNow, OpexAfter: body.OpexAfter,
 		Capex: body.Capex, ExpectedCalls: body.ExpectedCalls, Loss: body.Loss,
 		At: evidence.Level(body.At),
@@ -534,7 +551,7 @@ func (s *server) arbiterFix(f core.Frame, out *core.Frame) {
 		out.Err = core.Refuse(core.CodeBadRequest, "unknown evidence level: "+body.At)
 		return
 	}
-	out.Body = mustJSON(map[string]any{"value": round(v), "fix": v > 0})
+	out.Body = mustJSON(map[string]any{"value": round(v), "fix": fix})
 }
 
 type offerJSON struct {

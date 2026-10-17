@@ -151,6 +151,7 @@ func Summarise(records []Record) Stats {
 	return s
 }
 
+// DEAD-API: 任务分层还没有消费方
 // Layers lists the layers that appear, sorted, so a caller can print a stable
 // report rather than whatever order a map happened to iterate in.
 func (s Stats) Layers() []Layer {

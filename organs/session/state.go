@@ -110,6 +110,7 @@ func Terminal(s State) bool {
 	return ok && len(byEvent) == 0
 }
 
+// DEAD-API: 只有穷尽性测试用得到它
 // Edges returns every allowed edge as "state+event->next", in the order the
 // exhaustiveness test expects.
 func Edges() []string {

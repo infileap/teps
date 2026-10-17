@@ -130,11 +130,13 @@ type CompileCriteria struct {
 	MinStartupShare float64
 }
 
+// DEAD-API: 编译升级那一级还没有接上：script → compiled 的判据有了，消费方没有
 // DefaultCompileCriteria is the threshold set used when none is given.
 func DefaultCompileCriteria() CompileCriteria {
 	return CompileCriteria{MinCalls: 50, MinSuccess: 0.99, MinStartupShare: 0.5}
 }
 
+// DEAD-API: 同上：编译升级那一级还没有接上
 // ShouldCompile applies the criteria to a script's track record.
 func ShouldCompile(calls int, p Posterior, startupShare float64, c CompileCriteria) bool {
 	if calls < c.MinCalls {
