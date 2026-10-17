@@ -942,6 +942,54 @@ def mutation_runner_is_complete():
     return out
 
 
+# ★★★ 一条定义了却没人**调用**的规则，与一条不存在的规则一样。
+#
+# 这一条是被 Round 92 逼出来的：`mutation_runner_is_complete()` 我写出来了、
+# 也以为测了它「两个方向都会红」，而它**一次都没被 `main()` 调用过** ——
+# 我的替换把新块插到了**文档注释**那一处。**一个定义了却没人调用的判据，
+# 与一个不存在的判据一样；而它的自检也会假装通过。**
+#
+# ★ 而 `check_organs.py` 里**早就有**这条判据：`check_exported_functions_have_callers()`
+# —— 只不过它管的是 `organs/`，**管不到 `tools/` 里的守卫自己**。
+# **一台守卫最不会去查的，就是它自己。**
+#
+# 判据是**可算的**：`tools/check_*.py` 里每一个顶层函数，它的名字必须**作为一次调用**
+# 出现过（`名字(`，且不在 `def` 那一行上）。不读懂语义，只数括号。
+TOOL_DEF = re.compile(r'^def ([A-Za-z_]\w*)\s*\(', re.M)
+
+
+def every_rule_function_is_called():
+    out = []
+    for rel in sorted(os.listdir(os.path.join(ROOT, "tools"))):
+        if not rel.startswith("check_") or not rel.endswith(".py"):
+            continue
+        src = read(os.path.join("tools", rel))
+        defs = TOOL_DEF.findall(src)
+        # ★★★ 而「出现过名字」不等于「被调用过」——**注释里也会出现名字**。
+        #
+        # 第一版是把 `def` 那一行抹掉再找 `名字(`，于是**我写在函数上方的那段
+        # 文档注释**里那句 `mutation_runner_is_complete()` 把它自己救活了：
+        # 删掉 `main()` 里的调用点，判据照样绿。
+        # **一个读注释的判据报的是散文，不是代码** —— 这正是 Round 88 给
+        # `check_adapters.py` 写 `strip_comments` 时立下的那条规矩，
+        # 而我在同一个坑里摔了第二次。
+        #
+        # 修法：**用语法树**。`ast` 只认真正的调用点，注释与字符串都不在其中。
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            continue
+        calls = {n.func.id for n in ast.walk(tree)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        for d in defs:
+            if d == "main" or d.startswith("_"):
+                continue
+            if d not in calls:
+                out.append(f"tools/{rel} 定义了 {d}() 而**没有任何地方调用它** —— "
+                           f"一个定义了却没人调用的判据，与一个不存在的判据一样")
+    return out
+
+
 def main():
     if os.environ.get("TEPS_CONTRACT_SELF_TEST") == "1":
         bad = self_test()
@@ -1014,6 +1062,11 @@ def run():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ 一条定义了却没人调用的规则，与一条不存在的规则一样。
+    for u in every_rule_function_is_called():
+        print(u)
+        bad += 1
 
     # ★★★ 「证据在仓库里」与「跑得起来」是两件事。
     #
