@@ -107,6 +107,28 @@ func (s *server) distillApply(f core.Frame, out *core.Frame) {
 		out.Err = ref
 		return
 	}
+	// ★★★ note 必须由状态推出来，不能是一句常量。
+	//
+	// 此前它无条件写着「established, not confirmed: it will answer only after
+	// the same stimulus is seen working once more」。而蒸馏**同一个刺激两次**
+	// 会让 `applyRecord` 对已有的那一行再 `Reinforce` 一次：`0.3 + 0.2 = 0.5`
+	// 变成 `0.7`，越过 `FireThreshold = 0.6`。实测第二次蒸馏的同一份 JSON：
+	//
+	//   {"strength": 0.7, "fires": true,
+	//    "note": "established, not confirmed: it will answer only after the same
+	//             stimulus is seen working once more"}
+	//
+	// **`fires: true` 旁边放着一句「它现在还不会回答」。** 与 Round 41 那个
+	// `fires: false` 配 `firings: 1` 是同一个形状：同一份 JSON 里两个字段
+	// 说的是相反的事。
+	//
+	// 而 `drive.sh` 那条断言（`expect "★ 现在它会回答了" "$r" '"fires":true'`）
+	// 只查了 `fires`，**从来没有查过那句话** —— 一句话只要不随状态变，就没有
+	// 任何东西会让它变红。
+	note := "established, not confirmed: it will answer only after the same stimulus is seen working once more"
+	if fires {
+		note = "confirmed: this stimulus has now been seen working twice, so the rule answers with no context at all. Distilling it again would only raise its strength"
+	}
 	out.Seq, out.Rev = entry.Seq, entry.Seq
 	out.Body = mustJSON(map[string]any{
 		"proposal": prop, "rule_id": rec.ID,
@@ -114,7 +136,10 @@ func (s *server) distillApply(f core.Frame, out *core.Frame) {
 		// Reported so the caller can see the point: a distilled rule is a
 		// candidate, and a candidate that already answers would be a promotion.
 		"fires": fires,
-		"note":  "established, not confirmed: it will answer only after the same stimulus is seen working once more",
-		"head":  entry.Head,
+		// ★ 阈值也在：没有它，`strength: 0.7` 与 `fires: true` 之间的那条线
+		// 只活在读的人的印象里。
+		"threshold": reflex.FireThreshold,
+		"note":      note,
+		"head":      entry.Head,
 	})
 }

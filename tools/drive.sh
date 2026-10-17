@@ -1132,6 +1132,19 @@ expect "★ 第一次蒸馏之后，同一个刺激仍然落下去（一次成�
 r=$(req '{"t":"distill.apply","v":1,"key":"ds4","body":{"task_id":"d2","stimulus":"translate this paragraph","layer":"full","outcome":"ok","action":"translate.run"}}')
 expect "★ 第二次确认之后它才够强" "$r" '"strength":0.7'
 expect "★ 现在它会回答了" "$r" '"fires":true'
+# ★★★ note 必须由状态推出来，不能是一句常量。
+#
+# 此前它无条件写着「established, not confirmed: it will answer only after the
+# same stimulus is seen working once more」。而上面这一条断言刚刚证明
+# `fires` 已经是 true —— 于是同一份 JSON 里 **`fires: true` 旁边放着一句
+# 「它现在还不会回答」**。与 Round 41 那个 `fires: false` 配 `firings: 1`
+# 是同一个形状：同一份 JSON 里两个字段说的是相反的事。
+#
+# 而那条断言只查了 `fires`，从来没有查过那句话 ——
+# **一句话只要不随状态变，就没有任何东西会让它变红。**
+expect "★ 而那句话跟着状态变：确认之后不再是「还没确认」" "$r" 'confirmed: this stimulus has now been seen working twice'
+expect "★ 它说清再来一次只会把强度抬高，不会改变什么" "$r" 'only raise its strength'
+expect "★ 阈值也报出来（那条线不能只活在读的人的印象里）" "$r" '"threshold":0.6'
 
 r=$(req '{"t":"task.intake","v":1,"key":"ds5","body":{"task_id":"d3","stimulus":"translate this paragraph"}}')
 expect "★★ 同一个刺激，这一次是反射层答的" "$r" '"layer":"reflex"'
