@@ -90,7 +90,18 @@ printf '%s\n' \
 curl -sS --data-binary '{"t":"ops","v":1}' -H 'Content-Type: application/x-ndjson' http://127.0.0.1:8787/k
 ```
 
-这条路径**不需要任何 SDK、任何语言运行时**——`tools/drive.sh` 的 478 条断言全程只用 `curl`。
+这条路径**不需要任何 SDK、任何语言运行时**——`tools/drive.sh` 的 613 条断言全程只用 `curl`。
+
+★★★ **这个数此前写的是 478，而实测是 613。** 它与 `docs/CONTRACT.md` 里那一段
+自己立下的规矩是同一条：
+
+> 一个历史数没有任何东西能核它：它既不是现在的事实，也不是一条可以复跑的判据。
+> **写不成判据的数，就不该写成数。**
+
+★ 而这一句用的是**现在时**（「`drive.sh` 的 N 条断言全程只用 `curl`」）——
+它主张的是**此刻**这件事，所以它是**可以核**的，也就该被核。
+`tools/check_contract.py` 的 `drive_assertion_count()` 现在就核它：
+`tools/drive.sh` 的 `^  ok` 行数必须与这一句里的数一致。
 
 ## 4. 接不上时：一类失败一段
 

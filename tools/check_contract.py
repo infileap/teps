@@ -8,6 +8,7 @@ drive.sh 断言 `unknown_session`，内核返回 `no_session`，而文档也写�
 
 import os
 import re
+import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -574,6 +575,54 @@ def doc_number_mismatches():
     return out
 
 
+# ★★★ 一个**现在时**的数是可核的，也就该被核。
+#
+# `docs/CLIENTS.md:93` 此前写着「`tools/drive.sh` 的 **478** 条断言全程只用
+# `curl`」，而实测是 **613**。这一句用的是**现在时** —— 它主张的是**此刻**这件事，
+# 所以它是可以核的。
+#
+# ★ 而 `docs/CONTRACT.md` 里那一段自己立下了规矩：
+#
+#	一个历史数没有任何东西能核它：它既不是现在的事实，也不是一条可以复跑的判据。
+#	**写不成判据的数，就不该写成数。**
+#
+# 于是同一件事有两种正确处置，而判据要分得开：
+#   - **现在时**的主张 ⇒ 核它（这一条规则）；
+#   - **历史**的数 ⇒ 删掉它（那一段里 `drive.sh` 的 243 与测试总数 249 都被删了）。
+#
+# ★ 模式要求 `tools/drive.sh` 全名 —— 那两处**引着旧值**的说明用的是 `drive.sh`，
+# 不该被当成主张（Round 76/81 的同一个坑）。
+DRIVE_CLAIM = re.compile(r'`tools/drive\.sh` 的 (\d+) 条断言')
+
+
+def drive_assertion_count():
+    # ★★ 而 `^  ok` 是**跑出来的输出**，不是源文件里的行：
+    # 源文件里那些是 `printf '  ok …'`，静态数一遍只会得到 0。
+    # 第一版就是这么写的，于是它报的是「数不出 ok 行」—— **那不是「文档错了」，
+    # 是判据看错了地方**（Round 77 的 `path.startswith` 是同一个坑）。
+    #
+    # ★ 判据改成**真的跑一遍**，与 `check_docs.py` 规则 4（「那个包真的跑一遍，
+    # 数 `=== RUN`」）同一个做法：一张对照表就是被检查之物的第二份拷贝。
+    # 实测 `drive.sh` 跑一遍约 8 秒 —— 与那条规则跑 `go test` 是同量级。
+    env = dict(os.environ)
+    env["PATH"] = os.path.join(ROOT, "tools") + os.pathsep + env.get("PATH", "")
+    try:
+        r = subprocess.run(["bash", "tools/drive.sh"], cwd=ROOT, env=env,
+                           capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired:
+        return ["tools/drive.sh 跑超时了：这一条判据要跑它，超时就不算通过"]
+    n = sum(1 for line in r.stdout.splitlines() if line.startswith("  ok"))
+    if n == 0:
+        return ["tools/drive.sh 跑完数不出 ok 行：判据的前提变了"]
+    out = []
+    for rel in ["docs/CLIENTS.md", "README.md"]:
+        body = read(rel)
+        for m in DRIVE_CLAIM.finditer(body):
+            if int(m.group(1)) != n:
+                out.append(f"{rel} 说 tools/drive.sh 的 {m.group(1)} 条断言，而实测是 {n} 条")
+    return out
+
+
 def main():
     src = read("core/refusal.go")
 
@@ -633,6 +682,11 @@ def main():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ 一个现在时的数是可核的，也就该被核。
+    for u in drive_assertion_count():
+        print(u)
+        bad += 1
 
     # ★★★ 文档里的一个数也是一个主张。
     for u in doc_number_mismatches():
