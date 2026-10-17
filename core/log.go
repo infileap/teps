@@ -322,11 +322,47 @@ func (l *Log) Epoch() uint64 {
 	return l.epoch
 }
 
+// bumpEpoch moves the run counter forward by one.
+//
+// ★★★ 一个会倒退的计数器不是一个计数器。
+//
+// 此前这里是 `n, _ = strconv.ParseUint(...)` —— 解析错误被丢掉。于是 epoch
+// 文件里只要有一个字节不是数字，`ParseUint` 回 `(0, err)`、`n = 0`、
+// `n++` ⇒ **1**。实测（第一次启动 epoch=1、第二次 2，然后把文件写成 "abc"
+// 再启动）：**epoch 变成 1**。
+//
+// 而 `Epoch` 的注释逐字写着它的用途：
+//
+//	Epoch identifies one run of the server over this chain. It grows on every
+//	Open, so a client holding a stale epoch can tell that the process it was
+//	talking to is gone.
+//
+// 一个能**缩小**的 epoch 让那句话反过来：持着 2 的客户端看到 1，于是它以为
+// 自己是对的，而它其实在跟另一个进程说话。`docs/CONTRACT.md:67` 承诺的
+// 「服务端重启后客户端靠它察觉」因此在一份坏文件上恰好失效。
+//
+// 所以坏文件不是「从头开始」，是**读不懂**：拒绝，并说清读到了什么。
+// 这与 `load` 对一条读不回来的链的处置是同一条 —— 盘上的东西读不懂时，
+// 猜一个默认值比停下更贵。
 func (l *Log) bumpEpoch() *Refusal {
 	p := filepath.Join(l.dir, "epoch")
 	var n uint64
-	if b, err := os.ReadFile(p); err == nil {
-		n, _ = strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+	b, err := os.ReadFile(p)
+	if err == nil {
+		raw := strings.TrimSpace(string(b))
+		if raw != "" {
+			parsed, perr := strconv.ParseUint(raw, 10, 64)
+			if perr != nil {
+				return Refuse(CodeRecoveryRequired,
+					"the epoch file holds "+strconv.Quote(raw)+", which is not a number: "+
+						"the epoch must grow on every Open, and a counter that can go backwards "+
+						"cannot tell a client that the process it was talking to is gone. "+
+						"Fix or remove "+p+" rather than letting the next Open start from one")
+			}
+			n = parsed
+		}
+	} else if !os.IsNotExist(err) {
+		return Refuse(CodeRecoveryRequired, err.Error())
 	}
 	n++
 	if err := os.WriteFile(p, []byte(strconv.FormatUint(n, 10)), 0o644); err != nil {

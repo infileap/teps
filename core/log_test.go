@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -384,6 +385,88 @@ func TestAppendRefusesARecordTheChainCouldNotReadBack(t *testing.T) {
 	defer again.Close()
 	if _, ref := again.Tail(10); ref != nil {
 		t.Fatalf("the chain must be readable after reopen: %s", ref.Reason)
+	}
+}
+
+// ★★★ 一个会倒退的计数器不是一个计数器。
+//
+// `bumpEpoch` 此前是 `n, _ = strconv.ParseUint(...)` —— 解析错误被丢掉。
+// 于是 epoch 文件里只要有一个字节不是数字，`ParseUint` 回 `(0, err)`、
+// `n = 0`、`n++` ⇒ **1**。实测（第一次启动 epoch=1、第二次 2，然后把文件
+// 写成 "abc" 再启动）：**epoch 变成 1**。
+//
+// 而 `Epoch` 的注释逐字写着它的用途：「It grows on every Open, so a client
+// holding a stale epoch can tell that the process it was talking to is gone.」
+// 一个能**缩小**的 epoch 让那句话反过来：持着 2 的客户端看到 1，于是它以为
+// 自己是对的，而它其实在跟另一个进程说话。
+func TestACorruptedEpochFileIsRefusedRatherThanReset(t *testing.T) {
+	dir := t.TempDir()
+	l, ref := Open(dir)
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	first := l.Epoch()
+	if first == 0 {
+		t.Fatal("the epoch must start somewhere")
+	}
+	if ref := l.Close(); ref != nil {
+		t.Fatal(ref)
+	}
+	l2, ref := Open(dir)
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	second := l2.Epoch()
+	if second <= first {
+		t.Fatalf("the epoch must grow on every Open: %d then %d", first, second)
+	}
+	if ref := l2.Close(); ref != nil {
+		t.Fatal(ref)
+	}
+
+	// 把 epoch 文件写成不是数字。
+	if err := os.WriteFile(filepath.Join(dir, "epoch"), []byte("abc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l3, ref := Open(dir)
+	if ref == nil {
+		defer l3.Close()
+		t.Fatalf("a counter that can go backwards cannot do its job: Open accepted a corrupt "+
+			"epoch file and produced epoch %d (it was %d)", l3.Epoch(), second)
+	}
+	if ref.Code != CodeRecoveryRequired {
+		t.Fatalf("want recovery_required, got %s: %s", ref.Code, ref.Reason)
+	}
+	if !strings.Contains(ref.Reason, "abc") {
+		t.Fatalf("the reason must say what it read, got %q", ref.Reason)
+	}
+	// ★ 而修好之后必须能起来 —— 拒绝的价值是让人去修，不是把链锁死。
+	if err := os.Remove(filepath.Join(dir, "epoch")); err != nil {
+		t.Fatal(err)
+	}
+	l4, ref := Open(dir)
+	if ref != nil {
+		t.Fatalf("removing the corrupt file must make Open work again: %s", ref.Reason)
+	}
+	defer l4.Close()
+	if l4.Epoch() == 0 {
+		t.Fatal("a fresh epoch file starts the counter again, at a nonzero value")
+	}
+}
+
+// 空文件是「还没有过」而不是「读不懂」：它必须被当成第一次启动。
+func TestAnEmptyEpochFileIsNotCorruption(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "epoch"), []byte("\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l, ref := Open(dir)
+	if ref != nil {
+		t.Fatalf("an empty epoch file means the counter has not been written yet: %s", ref.Reason)
+	}
+	defer l.Close()
+	if l.Epoch() != 1 {
+		t.Fatalf("epoch = %d, want 1", l.Epoch())
 	}
 }
 
