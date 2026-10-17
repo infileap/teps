@@ -525,6 +525,55 @@ def action_vocabulary_mismatches():
     return out
 
 
+# ★★★ 两个数漂了而没人查，与「一个只被写、从不被读的字段」是同一条 ——
+# 只不过这里的字段是文档里的一个数。
+#
+# docs/KERNEL.md:65 说「`Refusal` + **13** 个拒绝码常量」，而 core/refusal.go 里是
+# **14** 个；:69 说「**456** 行（Gate 1 上限 3000）」，而 core/ 的非测试 .go 是
+# **661** 行。`check_contract.py` 数拒绝码时**只看 docs/CONTRACT.md**。
+#
+# ★ 而 456 那一个数是 **Gate 1** 的声明 —— 内核有多小，是这一条在说的。
+#
+# ★★ 判据只认**主张**的写法，不认引号里的旧值：这一节里就引着 `13 个拒绝码常量`
+# 与 `456 行` 这两个旧数（它们是那段说明的一部分）。
+# **一个把「被否定的旧值」当成主张的判据，会把纠正它的人判成错的**（Round 76 的坑）。
+CLAIM_CODES = re.compile(r'\| Refusal \| `Refusal` \+ (\d+) 个拒绝码常量')
+CLAIM_LINES = re.compile(r'，(\d+) 行（Gate 1')
+
+
+def _code_count():
+    src = read("core/refusal.go")
+    i = src.find("const (")
+    j = src.find("\n)", i)
+    return len(re.findall(r'^\tCode\w+\s*=\s*"', src[i:j], re.M))
+
+
+def _core_lines():
+    n = 0
+    for dp, dn, fs in os.walk(os.path.join(ROOT, "core")):
+        for f in fs:
+            if f.endswith(".go") and not f.endswith("_test.go"):
+                n += sum(1 for _ in open(os.path.join(dp, f), encoding="utf-8"))
+    return n
+
+
+def doc_number_mismatches():
+    out = []
+    want_codes = _code_count()
+    want_lines = _core_lines()
+    if want_codes == 0 or want_lines == 0:
+        return ["读不出 core 的拒绝码数或行数：判据的前提变了"]
+    for rel in ["docs/KERNEL.md"]:
+        body = read(rel)
+        for m in CLAIM_CODES.finditer(body):
+            if int(m.group(1)) != want_codes:
+                out.append(f"{rel} 说 {m.group(1)} 个拒绝码常量，而 core/refusal.go 里是 {want_codes} 个")
+        for m in CLAIM_LINES.finditer(body):
+            if int(m.group(1)) != want_lines:
+                out.append(f"{rel} 说 {m.group(1)} 行（Gate 1），而 core/ 的非测试 .go 是 {want_lines} 行")
+    return out
+
+
 def main():
     src = read("core/refusal.go")
 
@@ -584,6 +633,11 @@ def main():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ 文档里的一个数也是一个主张。
+    for u in doc_number_mismatches():
+        print(u)
+        bad += 1
 
     # ★★★ 仲裁器的动作表必须与真的 Action 声明对得上。
     for u in action_vocabulary_mismatches():

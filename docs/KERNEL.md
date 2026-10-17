@@ -62,11 +62,23 @@
 | 概念 | 类型 | 文件 |
 |---|---|---|
 | Frame | `Frame` + `ParseFrame` / `Marshal` / `Canonical` | `core/frame.go` |
-| Refusal | `Refusal` + 13 个拒绝码常量（每个自带可重试答案） | `core/refusal.go` |
+| Refusal | `Refusal` + 14 个拒绝码常量（每个自带可重试答案） | `core/refusal.go` |
 | Log | `Log` / `Entry` + `Open` / `Append` / `Replay` | `core/log.go` |
 | Budget | `Budget` / `Account` | `core/budget.go` |
 
-公开类型共 **6** 个（Gate 3 上限 12），456 行（Gate 1 上限 3000）。
+公开类型共 **6** 个（Gate 3 上限 12），661 行（Gate 1 上限 3000）。
+
+★★★ **上面这三个数此前有两个是错的，而没有任何守卫看着它们。**
+
+- `13 个拒绝码常量` —— `core/refusal.go` 里是 **14** 个。`check_contract.py`
+  数拒绝码时**只看 `docs/CONTRACT.md`**，这份文档不在它的范围里。
+- `456 行` —— `core/` 的非测试 `.go` 是 **661** 行。而这一个数是**Gate 1** 的声明
+  （上限 3000），也就是说它承重：**内核有多小，是这一条在说的。**
+- `公开类型共 6 个` —— **对**（`Budget` / `Account` / `Frame` / `Entry` / `Log` /
+  `Refusal`）。
+
+**两个数漂了而没人查，与「一个只被写、从不被读的字段」是同一条** ——
+只不过这里的字段是文档里的一个数。
 `Account` 是唯一持有可变值之物——理由正是"检查与扣减必须不可分割"。
 
 **追加的顺序是被刻意排定的**：先落盘并 `Sync`，**成功之后**位置才前移。
