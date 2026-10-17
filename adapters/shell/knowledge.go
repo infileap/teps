@@ -187,6 +187,24 @@ func (s *server) handleMemory(f core.Frame, out *core.Frame) {
 			out.Err = ref
 			return
 		}
+		// ★★★ 一次检索必须报出**它按什么滤的**，以及**每条命中的是什么**。
+		//
+		// 此前这里只回 `count` / `ids` / `texts` / `total`，而 `Retrieve`
+		// （`organs/memory/memory.go:276`）正是按 `MinEvidence` 与 `Tags` 过滤的，
+		// `Record` 还有 `Evidence` / `Tags` / `Source` / 三个时间字段。
+		// 实测（三条记录 E0/E1/E2，标签分别 x/x/y）：
+		//
+		//   默认（min_evidence 缺省 = E1）  -> count=2 ids=['r1','r2'] total=3
+		//   min_evidence=E2                 -> count=1 ids=['r2']     total=3
+		//   tags=["y"]                      -> count=1 ids=['r2']     total=3
+		//   min_evidence=E0 + tags=["x"]    -> count=2 ids=['r0','r1'] total=3
+		//
+		// 返回字段**永远只有 `['count','ids','texts','total']`**。登记表里共 3 条，
+		// 四次查询回了 2/1/1/2 —— 而**读的人分不出某一条是因为等级不够被滤掉、
+		// 还是因为标签不对、还是根本不存在。**
+		//
+		// 与 `audit.tail` 报自己的窗口、与 `coverage` 报 `by_layer` 与 `scope`
+		// 是同一条：**一个数是一次查询的结果时，那次查询的判据是它的一部分。**
 		ids := make([]string, 0, len(recs))
 		texts := make([]string, 0, len(recs))
 		for _, r := range recs {
@@ -194,8 +212,47 @@ func (s *server) handleMemory(f core.Frame, out *core.Frame) {
 			texts = append(texts, r.Text)
 		}
 		sort.Strings(ids)
+		// 命中的每一条，**带上下判据的那些字段** —— 否则读者只能信 `count`。
+		rows := make([]map[string]any, 0, len(recs))
+		for _, r := range recs {
+			row := map[string]any{
+				"id": r.ID, "text": r.Text,
+				"evidence": string(r.Evidence), "recorded_at": r.RecordedAt,
+			}
+			if len(r.Tags) > 0 {
+				row["tags"] = r.Tags
+			}
+			if r.Source != "" {
+				row["source"] = r.Source
+			}
+			if r.ValidFrom != 0 {
+				row["valid_from"] = r.ValidFrom
+			}
+			if r.ValidUntil != 0 {
+				row["valid_until"] = r.ValidUntil
+			}
+			rows = append(rows, row)
+		}
+		// ★ 生效的过滤条件。缺省值必须**报出来**（`min_evidence` 缺省是 E1），
+		// 否则「我没传 min_evidence」与「我传了 E1」在回答里长得一样。
+		floor := evidence.Level(body.MinEvidence)
+		if floor == "" {
+			floor = evidence.L1
+		}
 		out.Body = mustJSON(map[string]any{
-			"count": len(recs), "ids": ids, "texts": texts, "total": s.memory.store.Len(),
+			"count": len(recs), "ids": ids, "texts": texts,
+			// ★ 命中的记录本身（带证据等级与标签），不是只有 id 与正文。
+			"records": rows,
+			// ★ 生效的判据。
+			"filter": map[string]any{
+				"min_evidence": string(floor), "tags": body.Tags, "as_of": body.AsOf,
+			},
+			// 登记表总数。`count < total` 说明**被滤掉了**，而 `filter` 说明按什么滤的。
+			"total": s.memory.store.Len(),
+			"basis": "count is what passed the filter and total is the whole store; " +
+				"a record that is missing from ids was excluded by one of the filter's " +
+				"conditions, and the records that did come back carry the evidence level and " +
+				"tags the filter reads",
 		})
 
 	default:

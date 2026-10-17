@@ -344,6 +344,39 @@ expect "缺一个标签就不算命中" "$r" '"ids":[]'
 r=$(req '{"t":"memory.retrieve","v":1,"body":{"min_evidence":"E9"}}')
 expect "未知证据等级被拒" "$r" 'bad_request'
 
+# ★★★ 一次检索必须报出**它按什么滤的**，以及**每条命中的是什么**。
+#
+# 此前这里只回 count / ids / texts / total，而 Retrieve 正是按 MinEvidence 与
+# Tags 过滤的，Record 还有 Evidence / Tags / Source / 三个时间字段。
+# 实测（三条记录 E0/E1/E2，标签分别 x/x/y）：登记表里共 3 条，四次查询回了
+# 2/1/1/2 —— 而**读的人分不出某一条是因为等级不够被滤掉、还是因为标签不对、
+# 还是根本不存在**。返回字段永远只有 ['count','ids','texts','total']。
+r=$(req '{"t":"memory.retrieve","v":1,"body":{"min_evidence":"E0"}}')
+expect "★ 命中的记录本身带上了证据等级（不是只有 id 与正文）" "$r" '"evidence":"'
+expect "★ 生效的过滤条件也报出来（缺省值必须说出来）" "$r" '"filter":{'
+expect "★★ 而 count 与 total 的差就是「被滤掉了」这件事" "$r" '"basis":"count is what passed the filter'
+# ★★ 缺省值必须**报出来**：不传 min_evidence 与传 E1 在回答里必须长得一样，
+# 否则「我没传」与「我传了 E1」是两件事，而读的人只能猜。
+r=$(req '{"t":"memory.retrieve","v":1,"body":{}}')
+expect "★★ 不传 min_evidence 时报的是生效的缺省值 E1，不是空字符串" "$r" '"min_evidence":"E1"'
+# ★ 那个等式要**算**出来：命中的每一条都得真的满足 filter 里的条件。
+if printf '%s' "$(req '{"t":"memory.retrieve","v":1,"body":{"min_evidence":"E1","tags":["kernel"]}}')" | python3 -c '
+import json,sys
+b=json.load(sys.stdin)["body"]
+f=b["filter"]
+assert f["min_evidence"]=="E1", f
+assert f["tags"]==["kernel"], f
+rank={"E0":0,"E1":1,"E2":2,"E3":3,"E4":4}
+for r in b["records"]:
+    assert rank[r["evidence"]] >= rank[f["min_evidence"]], ("等级不够却命中了", r)
+    assert "kernel" in (r.get("tags") or []), ("标签不对却命中了", r)
+assert b["count"]==len(b["records"])==len(b["ids"]), b
+'; then
+  printf '  ok    ★ 命中的每一条都真的满足 filter 里的条件（算出来的，不是数一个字面量）\n'
+else
+  printf '  FAIL  ★ 有命中不满足它自己报出来的过滤条件\n'; fails=$((fails + 1))
+fi
+
 echo
 echo "—— 上下文合成器：背包、年表、去重 ——"
 r=$(req '{"t":"compose.build","v":1,"body":{"class":"chat","budget":200,"candidates":[{"id":"t1","section":"recent","text":"first turn","similarity":1,"evidence":"E2","recency":1,"task_relevance":1},{"id":"t2","section":"recent","text":"second turn","similarity":1,"evidence":"E2","recency":1,"task_relevance":1},{"id":"t3","section":"recent","text":"third turn","similarity":1,"evidence":"E2","recency":1,"task_relevance":1}]}}')
