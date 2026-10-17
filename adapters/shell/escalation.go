@@ -198,8 +198,35 @@ func (s *server) escalationQuote(f core.Frame, out *core.Frame) {
 	for _, r := range ranked {
 		rows = append(rows, map[string]any{
 			"action": string(r.Offer.Action), "skill": r.Offer.Skill,
-			"p": round(r.Prob), "utility": round(r.Utility),
+			// ★ task_class 必须跟着走：价格是**在某个类下**读的，而 Round 61
+			// 之前顶层那个类根本没被读（见 priceOf 的注释）。
+			"task_class": r.Offer.TaskClass,
+			"p":          round(r.Prob), "utility": round(r.Utility),
 			"cost": r.Offer.Cost, "latency": r.Offer.Latency,
+			// ★★★ 一个概率必须带着它的样本量。
+			//
+			// `p` 是 `UpperBound`，而它在 `Exploration = 0.25` 下**被夹在 1 上**
+			// 一大片：实测（同一个技能的一生）
+			//
+			//   obs=  0 mean=0.5000 upper=1.0000 p=1      id=08c6d3a1c40c…
+			//   obs= 20 mean=0.9628 upper=1.0000 p=1      id=08c6d3a1c40c…
+			//   obs= 40 mean=0.9844 upper=1.0000 p=1      id=08c6d3a1c40c…
+			//   obs= 45 mean=0.8302 upper=0.9162 p=0.9162 id=cb988612684a…
+			//
+			// 前三行**报出来的是同一个数、同一个 id**，而它们说的是三件完全不同
+			// 的事：「从没跑过」「20 次全成」「40 次全成」。
+			//
+			// 而 `metrics.get` 报 `beta: [α, β]`、`arbiter.state` 报
+			// `alpha`/`beta`/`observations` —— **那是另一扇门**。只拿着这一份报价
+			// 的调用方，看到 `p = 1` 无从知道那是「没试过」还是「一千次全成」。
+			// 与 `memory.retrieve` 报 `count` 不报判据、`coverage` 报率不报分母
+			// 是同一条：**一个数是一次估计的结果时，它的样本量是它的一部分。**
+			// ★ `weight` 是**带遗忘的有效样本量**，不是条数：实测记 1 次
+			// 它是 0.96、记 3 次是 2.82、记 7 次是 6.33（先验的两个伪计数
+			// 也一起在衰减）。真实的条数只有登记表知道 —— 这一帧拿不到，
+			// `arbiter.state` 拿得到，它报在 `observations`。
+			"weight":    round(r.Post.Weight()),
+			"posterior": map[string]any{"alpha": round(r.Post.Alpha), "beta": round(r.Post.Beta)},
 		})
 	}
 	// No chain write and no budget spend. This response is the whole side effect,
@@ -207,8 +234,12 @@ func (s *server) escalationQuote(f core.Frame, out *core.Frame) {
 	out.Body = mustJSON(map[string]any{
 		"quote_id": id, "ranked": rows,
 		"chosen": string(chosen.Offer.Action), "chosen_skill": chosen.Offer.Skill,
-		"utility": round(chosen.Utility), "p": round(chosen.Prob),
-		"grant_ms": ceil64(chosen.Offer.Latency), "grant_cost": ceil64(chosen.Offer.Cost),
+		"chosen_task_class": chosen.Offer.TaskClass,
+		"utility":           round(chosen.Utility), "p": round(chosen.Prob),
+		// ★ 被选中的那一条也要带样本量 —— 只看顶层这两个数的人是最多的。
+		"weight":    round(chosen.Post.Weight()),
+		"posterior": map[string]any{"alpha": round(chosen.Post.Alpha), "beta": round(chosen.Post.Beta)},
+		"grant_ms":  ceil64(chosen.Offer.Latency), "grant_cost": ceil64(chosen.Offer.Cost),
 		"spent": 0,
 	})
 }

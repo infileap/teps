@@ -430,6 +430,22 @@ func (s *server) resolveOffers(in []offerJSON, tbl arbiter.Table) ([]arbiter.Off
 	return offers, meta, skipped, nil
 }
 
+// obsForKey 数出**某一个 key** 在登记表里被看过几次。
+//
+// ★ 条数只有登记表知道：后验里那个 `Weight()` 是**带遗忘的有效样本量**
+// （`DefaultDecay = 0.98` 下记 1 次是 0.96、3 次是 2.82、7 次是 6.33，
+// 因为先验的两个伪计数也在一起衰减）。它有用（UCB 的宽度该按它收窄），
+// 但它不是「几次」。两件事两个名字，所以这个数从 `s.decisions.obs` 里数。
+func obsForKey(obs []arbiter.Observation, k arbiter.Key) int {
+	n := 0
+	for _, o := range obs {
+		if o.Key == k {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *server) arbiterState(f core.Frame, out *core.Frame) {
 	var body struct {
 		Skill     string `json:"skill"`
@@ -457,7 +473,28 @@ func (s *server) arbiterState(f core.Frame, out *core.Frame) {
 			"alpha": round(p.Alpha), "beta": round(p.Beta),
 			"mean": round(p.Mean()), "upper": round(p.UpperBound()),
 			"rules": rules[k], "mixed": len(rules[k]) > 1,
-			"observations": n, "open": open, "spent": round(spent),
+			// ★★★ 这个 key 自己被看过几次 —— 不是登记表的次数，也不是
+			// `weight`（那是带遗忘的有效样本量：记 1 次是 0.96、记 3 次是 2.82）。
+			// 条数只有登记表知道，所以它从登记表里按 key 数出来。
+			//
+			// 此前这里报的是 `n := len(s.decisions.obs)`，也就是**整张表**的观测
+			// 次数，而它旁边坐的是**这一个 key** 的 alpha/beta/mean/upper。实测
+			// （s.a 拿 3 次、s.b 拿 7 次，表里共 10 次）：
+			//
+			//   arbiter.state {skill:s.a} -> alpha=3.8816 beta=0.9412，而 observations = 10
+			//   arbiter.state {skill:s.b} -> alpha=7.4618 beta=0.8681，而 observations = 10
+			//
+			// 同一个数报给了两个证据量差三倍的技能。而「这个技能证据够不够」
+			// 正是读的人拿 `observations` 要回答的那个问题。
+			//
+			// ★ 而**同一个字段名在这个帧里还有第二个意思**：不点名时它就是表级的
+			// 那一个数。一个名字两个意思，在同一个帧里 —— 那就不是一个名字。
+			// 所以现在两个数两个名字：`observations` 是这一个 key 的，
+			// `table_observations` 是整张表的（不论点不点名都在）。
+			"observations":       obsForKey(s.decisions.obs, k),
+			"weight":             round(p.Weight()),
+			"table_observations": n,
+			"open":               open, "spent": round(spent),
 			// ★★★ 三个量、三个名字。
 			//
 			// `mean` 是带遗忘折出来的（DefaultDecay = 0.98）。
@@ -485,7 +522,12 @@ func (s *server) arbiterState(f core.Frame, out *core.Frame) {
 		})
 	}
 	out.Body = mustJSON(map[string]any{
-		"posteriors": rows, "observations": n, "open": open, "spent": round(spent),
+		// ★ 不点名时 `observations` 就是表级的那一个数 —— 而它旁边多一个同名同义
+		// 的 `table_observations`，于是**同一个名字在两条分支上指的是同一件事**。
+		// 一个名字两个意思（点名时是这一个 key 的、不点名时是整张表的）比两个
+		// 名字难查得多，而这一帧此前正是那样。
+		"posteriors": rows, "observations": n, "table_observations": n,
+		"open": open, "spent": round(spent),
 		"successes": s.decisions.ok,
 		"raw_rate":  round(rawRate(s.decisions.ok, n)),
 		// ★★★ 三个量、三个名字。`decay_gap` 现在是**同一批记录折两次之差**，

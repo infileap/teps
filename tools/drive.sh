@@ -494,7 +494,44 @@ r=$(req '{"t":"arbiter.state","v":1,"body":{"skill":"read.file","task_class":"ta
 # number. One verified ok on a Beta(1,1) prior is 2/3, so 0.6 is also the
 # arithmetic, not a magic threshold.
 expect "后验被报告，且是数字不是字符串" "$r" '"mean":0.6'
-expect "★ 被拒的观测一条都没上链" "$r" '"observations":1'
+# ★★★ 这个 key 自己被看过几次 —— 不是登记表的次数，也不是带遗忘的权重。
+#
+# 此前这里报的是 `n := len(s.decisions.obs)`（**整张表**的观测次数），而它旁边
+# 坐的是**这一个 key** 的 alpha/beta/mean/upper。实测（s.a 拿 3 次、s.b 拿 7 次，
+# 表里共 10 次）：两个技能都报 observations = 10，而它们的证据量差三倍。
+# 而「这个技能证据够不够」正是读的人拿 observations 要回答的那个问题。
+#
+# ★ 而**同一个字段名在这个帧里还有第二个意思**：不点名时它就是表级的那个数。
+# 一个名字两个意思，在同一个帧里 —— 那就不是一个名字。所以现在三个数三个名字。
+expect "★ 这个 key 自己的观测次数（不是整张表的）" "$r" '"observations":1'
+expect "★ 带遗忘的有效样本量是另一个数、另一个名字" "$r" '"weight":0.96'
+expect "★ 表级的那个数也在，且与前者不同名" "$r" '"table_observations":1'
+# ★ 而那个等式要**算**出来：observations 必须等于登记表里这个 key 的条数，
+# 而 weight 必须**小于** observations（先验的两个伪计数也在衰减）。
+if printf '%s' "$r" | python3 -c '
+import json,sys
+b=json.load(sys.stdin)["body"]
+assert b["observations"] == 1, b
+assert b["weight"] < b["observations"], ("一次观测的权重应当小于 1", b)
+assert b["table_observations"] >= b["observations"], b
+'; then
+  printf '  ok    ★★ 条数与权重是两个数，且权重小于条数（先验的伪计数也在衰减）\n'
+else
+  printf '  FAIL  ★★ observations 与 weight 的关系不对\n'; fails=$((fails + 1))
+fi
+
+# ★★★ 而上面那三条在**表里只有这一个 key** 时是分不出好坏的：那时
+# `n == obsForKey(...)`，于是「报整张表的次数」这个原缺陷**照样通过**。
+# 所以这里再记一个**别的技能**一次 —— 此后表级是 2、而这个 key 仍然是 1。
+# **一条在两种实现下都给同一个数的断言，断言的不是它们之间的差别。**
+req '{"t":"arbiter.observe","v":1,"key":"other-i","body":{"attempt":"other-1","skill":"other.skill","task_class":"task_exec","strategy":"invoke"}}' >/dev/null
+req '{"t":"arbiter.observe","v":1,"key":"other-r","body":{"attempt":"other-1","skill":"other.skill","task_class":"task_exec","outcome":"ok","verified_by":"executor"}}' >/dev/null
+r=$(req '{"t":"arbiter.state","v":1,"body":{"skill":"read.file","task_class":"task_exec"}}')
+expect "★★ 表里多了一个别的技能之后，这个 key 的 observations 仍然是 1" "$r" '"observations":1'
+expect "★★ 而表级那个数涨到 2（两个数真的不同）" "$r" '"table_observations":2'
+r=$(req '{"t":"arbiter.state","v":1,"body":{"skill":"other.skill","task_class":"task_exec"}}')
+expect "★★ 反过来问那个新技能：它自己的是 1、表级是 2" "$r" '"observations":1'
+expect "★★ 而它的表级同样是 2" "$r" '"table_observations":2'
 
 echo
 echo "—— 仲裁器：技能腐烂，没人通知它 ——"
