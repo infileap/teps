@@ -150,6 +150,10 @@ func (s *server) taskIntake(f core.Frame, out *core.Frame) {
 	})
 }
 
+// taskRecentLimit 是 task.stats 的 recent 窗口。它是一个**被报出来**的上限：
+// 一个不说的上限与没有上限在回答里长得一样。
+const taskRecentLimit = 20
+
 func (s *server) taskStats(f core.Frame, out *core.Frame) {
 	s.tasks.lock()
 	stats := s.tasks.summarise()
@@ -158,10 +162,39 @@ func (s *server) taskStats(f core.Frame, out *core.Frame) {
 		recent = append(recent, r)
 	}
 	s.tasks.unlock()
-	if len(recent) > 20 {
-		recent = recent[len(recent)-20:]
+	// ★★★ 一个被截断的列表必须说它被截断了。
+	//
+	// 此前这里是 `if len(recent) > 20 { recent = recent[len(recent)-20:] }`
+	// 然后只回 `{"stats": stats, "recent": recent}`。实测（取进 25 个任务）：
+	//
+	//   {"recent":[…20 条…], "stats":{"total":25,"by_layer":{"full":25},…}}
+	//
+	// `total` 是 25，`recent` 有 20 条，而**没有一处说这件事**；也没有一处说
+	// 那 20 条是**最新**的（`t6`…`t25`）而不是最早的。读的人只能做减法，
+	// 还得猜方向。
+	//
+	// 这与 `audit.tail` 那一轮是同一条（那里现在报
+	// `limit`/`returned`/`first_seq`/`last_seq`/`truncated`/`basis`），
+	// 只是换了一处：**一个数的窗口是它的一部分。**
+	limit := taskRecentLimit
+	if len(recent) > limit {
+		recent = recent[len(recent)-limit:]
 	}
-	out.Body = mustJSON(map[string]any{"stats": stats, "recent": recent})
+	body := map[string]any{
+		"stats": stats, "recent": recent,
+		// ★ 窗口本身：上限、实际给了几条。
+		"limit": limit, "returned": len(recent),
+		// ★ 被截断了吗。
+		"truncated": len(recent) < stats.Total,
+		"basis": "recent is the newest arrivals, oldest first within the window; " +
+			"a truncated list means stats.total counts more arrivals than recent holds",
+	}
+	// ★ 端点必须点名，否则「那 20 条是哪 20 条」只能靠数。
+	if len(recent) > 0 {
+		body["first_task_id"] = recent[0].TaskID
+		body["last_task_id"] = recent[len(recent)-1].TaskID
+	}
+	out.Body = mustJSON(body)
 }
 
 func (st *taskStore) summarise() intake.Stats {

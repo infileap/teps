@@ -1137,6 +1137,35 @@ expect "★ 完整路径一次" "$r" '"full":1'
 expect "★★ 拦截率现在是一个真的数（2/3）" "$r" '"intercept_rate":0.6667'
 expect "★★ 率带着它的作用域（没有分母的率就是一句没人能核对的话）" "$r" '"scope":"tasks that arrived at this intake"'
 
+# ★★★ 一个被截断的列表必须说它被截断了。
+#
+# 此前 task.stats 只回 {"stats":…,"recent":…}，而 recent 在 20 条处被**静默**截断。
+# 实测（取进 25 个任务）：{"recent":[…20 条…],"stats":{"total":25,…}} —— total 是 25、
+# recent 有 20 条，而没有一处说这件事；也没有一处说那 20 条是**最新**的（t6…t25）
+# 而不是最早的。读的人只能做减法，还得猜方向。
+# 与 audit.tail 那一轮是同一条（那里现在报 limit/returned/first_seq/last_seq/
+# truncated/basis），只是换了一处：**一个数的窗口是它的一部分。**
+expect "★ 窗口的上限报出来了" "$r" '"limit":20'
+expect "★ 实际给了几条也报出来了" "$r" '"returned":3'
+expect "★ 没截断时也必须说没截断（沉默与「没截断」在回答里长得一样）" "$r" '"truncated":false'
+expect "★★ 窗口的两个端点必须点名，否则「哪三条」只能靠数" "$r" '"first_task_id":"'
+expect "★★ 而 last_task_id 与 first 不同（否则端点是一份拷贝）" "$r" '"last_task_id":"'
+expect "★ 说清 recent 是最新的那几条、窗口内最旧在前" "$r" 'newest arrivals'
+# ★ 那个等式要**算**出来：returned 必须等于 recent 的长度，truncated 必须等于
+# returned < stats.total。
+if printf '%s' "$r" | python3 -c '
+import json,sys
+b=json.load(sys.stdin)["body"]
+assert b["returned"] == len(b["recent"]), (b["returned"], len(b["recent"]))
+assert b["truncated"] == (b["returned"] < b["stats"]["total"]), b
+assert b["first_task_id"] == b["recent"][0]["task_id"], b
+assert b["last_task_id"] == b["recent"][-1]["task_id"], b
+'; then
+  printf '  ok    ★★ returned/truncated/端点与 recent 逐条一致（算出来的）\n'
+else
+  printf '  FAIL  ★★ 窗口那几个字段与 recent 对不上\n'; fails=$((fails + 1))
+fi
+
 echo
 echo "—— 任务入口跨重启：统计是链的投影 ——"
 r=$(req '{"t":"task.stats","v":1,"body":{}}')
