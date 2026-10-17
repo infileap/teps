@@ -259,6 +259,24 @@ func (m *Manifest) Validate() *core.Refusal {
 		// yet, and until it is, an assertion here would be decoration.
 		return bad("kind=compose declares no verify_assert: a composition produces no observation of its own, and the children already carry theirs")
 	}
+	// ★★★ 一个**声明了却没人执行**的字段是一句装饰。
+	//
+	// `Effects` 与 `Idempotent` 在 `docs/CONTRACT.md:157` 的 Skill ABI 那一行里
+	// 是契约承诺过的字段（`effects[]  evidence  idempotent  license`）。
+	// 实测（`skill.publish` 带 `idempotent:false` 与 `effects:["network","filesystem"]`，
+	// 再 `skill.resolve`）：**两个都被报出来了** —— 所以它们不是「没人读」，
+	// 它们是「**被读出来、却从来不被执行**」。
+	//
+	// ★ 而 `idempotent` 尤其刺眼：契约 A2 说「所有变更幂等」，内核是靠 `attempt`
+	// 那把键做到的 —— 也就是说**一个声明 `idempotent: false` 的技能，在声称一件
+	// 内核不会兑现的事**，而系统照样发布它、照样按幂等的方式跑它。
+	// **声明与行为不一致，而不一致是静默的。**
+	//
+	// 上面那条 `kind=compose` 的判据逐字写着同一个理由：
+	// 「a claim nothing reads」/「would be decoration」。
+	if !m.Idempotent {
+		return bad("idempotent must be true: the ABI makes every change idempotent by the attempt key (A2), so a skill declaring otherwise is claiming something the kernel will not honour — the declaration would be decoration")
+	}
 	if m.Kind == KindCompose && len(m.Refute) != 0 {
 		// Same reason as verify_assert: a composition produces no observation
 		// of its own, so a must-fail case here would be a claim nothing reads.

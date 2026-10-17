@@ -29,6 +29,7 @@ func TestExpansionRefusesPastTheDepthBound(t *testing.T) {
 			Version:    "1.0.0",
 			Kind:       store.KindCompose,
 			Evidence:   evidence.L1,
+			Idempotent: true,
 			License:    "MIT",
 			Provenance: store.Provenance{Source: "test"},
 			Deps:       []string{prev},
@@ -67,6 +68,7 @@ func TestShallowNestingStillExpands(t *testing.T) {
 	inner := &store.Manifest{
 		SkillID: "in", Version: "1.0.0", Kind: store.KindCompose,
 		Evidence: evidence.L1, License: "MIT",
+		Idempotent: true,
 		Provenance: store.Provenance{Source: "test"},
 		Deps:       []string{leaf},
 		Compose:    &store.Composition{Op: store.OpSerial, Children: []string{leaf}},
@@ -98,6 +100,7 @@ func TestAParallelChildIsRefusedByName(t *testing.T) {
 	par := &store.Manifest{
 		SkillID: "par", Version: "1.0.0", Kind: store.KindCompose,
 		Evidence: evidence.L1, License: "MIT",
+		Idempotent: true,
 		Provenance: store.Provenance{Source: "test"},
 		Deps:       []string{a, b},
 		Compose:    &store.Composition{Op: store.OpParallel, Children: []string{a, b}},
@@ -129,6 +132,7 @@ func registerLeafNamed(t *testing.T, st *store.Store, id string) string {
 		Version:    "1.0.0",
 		Kind:       store.KindScript,
 		Evidence:   evidence.L1,
+		Idempotent: true,
 		License:    "MIT",
 		Provenance: store.Provenance{Source: "test"},
 		Env:        store.Env{Interpreter: "/bin/sh"},
@@ -165,6 +169,7 @@ func TestOneOneSidedChildBlocksACompositionsElevation(t *testing.T) {
 
 	self := &store.Manifest{SkillID: "comb.two", Version: "1", Kind: store.KindCompose,
 		Evidence: evidence.L0, License: "MIT",
+		Idempotent: true,
 		Provenance: store.Provenance{Source: "test"},
 		Deps:       []string{childA, childB},
 		Compose:    &store.Composition{Op: "serial", Children: []string{childA, childB}}}
@@ -203,6 +208,7 @@ func TestEachComposeElevationRefusalNamesADifferentFact(t *testing.T) {
 	childB := registerTestChild(t, st, "child.b")
 	self := &store.Manifest{SkillID: "comb.two", Version: "1", Kind: store.KindCompose,
 		Evidence: evidence.L0, License: "MIT",
+		Idempotent: true,
 		Provenance: store.Provenance{Source: "test"},
 		Deps:       []string{childA, childB},
 		Compose:    &store.Composition{Op: "serial", Children: []string{childA, childB}}}
@@ -232,6 +238,10 @@ func registerTestChild(t *testing.T, st *store.Store, id string) string {
 	t.Helper()
 	m := &store.Manifest{
 		SkillID: id, Version: "1", Kind: store.KindScript, Evidence: evidence.L1, License: "MIT",
+		// ★ `idempotent` 是契约 ABI 里的字段（docs/CONTRACT.md:157），而
+		// `Manifest.Validate` 现在会拒 `false` —— 一个声明非幂等的技能在声称
+		// 一件内核不会兑现的事（A2 靠 attempt 键做到幂等）。
+		Idempotent: true,
 		Provenance: store.Provenance{Source: "test"},
 		Env:        store.Env{Interpreter: "/bin/sh"},
 		Verify:     []string{"exit == 0"},
@@ -262,6 +272,7 @@ func TestADeclaredRefutationThatDoesNotHoldIsStillOneSided(t *testing.T) {
 	childB := registerTestChild(t, st, "child.b")
 	self := &store.Manifest{SkillID: "comb.two", Version: "1", Kind: store.KindCompose,
 		Evidence: evidence.L0, License: "MIT",
+		Idempotent: true,
 		Provenance: store.Provenance{Source: "test"},
 		Deps:       []string{childA, childB},
 		Compose:    &store.Composition{Op: "serial", Children: []string{childA, childB}}}

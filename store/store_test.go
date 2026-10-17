@@ -36,6 +36,7 @@ func goodManifest() *Manifest {
 		Kind:       KindCode,
 		Verify:     []string{"exit == 0"},
 		Evidence:   E1,
+		Idempotent: true,
 		License:    "MIT",
 		Provenance: Provenance{Source: "handwritten"},
 		Env:        Env{Interpreter: "builtin"},
@@ -982,6 +983,7 @@ func TestACompositionCannotLaunderItsChildrensEvidence(t *testing.T) {
 		m := &Manifest{
 			SkillID: id, Version: "1.0.0", Kind: KindCompose,
 			Evidence: lvl, License: "MIT", Deps: kids,
+			Idempotent: true,
 			Provenance: Provenance{Source: "handwritten"},
 			Compose:    &Composition{Op: OpSerial, Children: kids},
 		}
@@ -1054,6 +1056,7 @@ func TestTheCeilingIsTheMinimumNotTheFirst(t *testing.T) {
 		m := &Manifest{
 			SkillID: "mix.combo", Version: "1.0.0", Kind: KindCompose,
 			Evidence: E1, License: "MIT", Deps: order,
+			Idempotent: true,
 			Provenance: Provenance{Source: "handwritten"},
 			Compose:    &Composition{Op: OpSerial, Children: order},
 		}
@@ -1070,6 +1073,7 @@ func TestTheCeilingIsTheMinimumNotTheFirst(t *testing.T) {
 	m := &Manifest{
 		SkillID: "mix.allstrong", Version: "1.0.0", Kind: KindCompose,
 		Evidence: E1, License: "MIT", Deps: []string{strong},
+		Idempotent: true,
 		Provenance: Provenance{Source: "handwritten"},
 		Compose:    &Composition{Op: OpSerial, Children: []string{strong}},
 	}
@@ -1218,5 +1222,51 @@ func TestTheSameSocketTwiceIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(ref.Reason, "one endpoint, one entry") {
 		t.Fatalf("got: %s", ref.Reason)
+	}
+}
+
+// ★★★ 一个**声明了却没人执行**的字段是一句装饰。
+//
+// `Effects` 与 `Idempotent` 在 `docs/CONTRACT.md:157` 的 Skill ABI 那一行里是
+// 契约承诺过的字段（`effects[]  evidence  idempotent  license`）。实测
+// （`skill.publish` 带 `idempotent:false` 与 `effects:["network","filesystem"]`，
+// 再 `skill.resolve`）：**两个都被报出来了** —— 所以它们不是「没人读」，
+// 它们是「**被读出来、却从来不被执行**」。
+//
+// ★ 而 `idempotent` 尤其刺眼：契约 A2 说「所有变更幂等」，内核是靠 `attempt`
+// 那把键做到的 —— 一个声明 `idempotent: false` 的技能，在声称一件内核不会
+// 兑现的事，而系统照样发布它、照样按幂等的方式跑它。
+// **声明与行为不一致，而不一致是静默的。**
+//
+// 上面那条 `kind=compose` 的判据逐字写着同一个理由：
+// 「a claim nothing reads」/「would be decoration」。
+func TestAManifestMustDeclareItselfIdempotent(t *testing.T) {
+	good := Manifest{
+		SkillID: "x.y", Version: "1", Kind: KindScript, Evidence: Evidence("E1"), License: "MIT",
+		Idempotent: true, Provenance: Provenance{Source: "test"},
+		Env: Env{Interpreter: "/bin/sh"},
+		// ★ 一条能失败、也能通过的断言 —— `Validate` 要求它（
+		// 「an unverifiable skill can only self-report」）。
+		Verify: []string{"exit == 0"},
+		Refute: []Refutation{{Input: []byte(`{}`), Assert: "exit == 1"}},
+	}
+	if ref := good.Validate(); ref != nil {
+		t.Fatalf("the good manifest must pass: %s", ref.Reason)
+	}
+	bad := good
+	bad.Idempotent = false
+	ref := bad.Validate()
+	if ref == nil {
+		t.Fatal("a skill declaring idempotent:false claims something the kernel will not honour (A2 makes every change idempotent by the attempt key)")
+	}
+	// ★ 而理由必须**点名 A2 与 attempt 键** —— 只说「不许」读者无从下手。
+	for _, want := range []string{"attempt key", "A2"} {
+		if !strings.Contains(ref.Reason, want) {
+			t.Fatalf("the reason must mention %q, got %q", want, ref.Reason)
+		}
+	}
+	// ★ 而「装饰」这件事必须说出来 —— 那才是这条判据的理由。
+	if !strings.Contains(ref.Reason, "decoration") {
+		t.Fatalf("the reason must say why a false declaration is refused, got %q", ref.Reason)
 	}
 }

@@ -246,7 +246,7 @@ expect "★ 而它的分母是 0，不是一个看不见的数" "$r" '"escalatio
 
 echo
 echo "—— 技能店：内容寻址，canary 先行 ——"
-pub1='{"t":"skill.publish","v":1,"key":"p1","body":{"manifest":{"skill_id":"read.file","version":"1.0.0","kind":"code","verify_assert":["exit == 0"],"evidence":"E1","license":"MIT","provenance":{"source":"handwritten"},"env":{"interpreter":"builtin"}},"files":{"main.go":"package main\n"}}}'
+pub1='{"t":"skill.publish","v":1,"key":"p1","body":{"manifest":{"skill_id":"read.file","version":"1.0.0","kind":"code","verify_assert":["exit == 0"],"evidence":"E1","idempotent":true,"license":"MIT","provenance":{"source":"handwritten"},"env":{"interpreter":"builtin"}},"files":{"main.go":"package main\n"}}}'
 r=$(req "$pub1")
 expect "注册成功，落在 canary" "$r" '"channel":"canary"'
 expect "许可证闭包被算出（MIT = permissive = 0）" "$r" '"class":0'
@@ -266,13 +266,27 @@ r=$(req "{\"t\":\"skill.resolve\",\"v\":1,\"body\":{\"ref\":\"$skref\"}}")
 expect "resolve 读回清单" "$r" '"skill_id":"read.file"'
 expect "resolve 读回载荷索引" "$r" '"files":["main.go"]'
 
+# ★★★ 一个**声明了却没人执行**的字段是一句装饰。
+#
+# `Effects` 与 `Idempotent` 在 `docs/CONTRACT.md:157` 的 Skill ABI 那一行里是
+# 契约承诺过的字段（`effects[]  evidence  idempotent  license`）。实测
+# （publish 带 `idempotent:false` 与 `effects:["network","filesystem"]`，再 resolve）：
+# **两个都被报出来了** —— 所以它们不是「没人读」，它们是「被读出来、却从来不
+# 被执行」。而 `idempotent` 尤其刺眼：契约 A2 说「所有变更幂等」，内核是靠
+# `attempt` 那把键做到的 —— 一个声明 `idempotent: false` 的技能在声称一件内核
+# 不会兑现的事，而系统照样发布它、照样按幂等的方式跑它。
+r=$(req '{"t":"skill.publish","v":1,"key":"ni1","body":{"manifest":{"skill_id":"not.idem","version":"1.0.0","kind":"script","verify_assert":["exit == 0"],"budget":{"ms":1000},"evidence":"E0","idempotent":false,"license":"MIT","provenance":{"source":"handwritten"},"env":{"interpreter":"/bin/sh"}},"files":{"run.sh":"exit 0\n"}}}')
+expect "★★ 声明 idempotent:false 的技能被拒" "$r" 'idempotent must be true'
+expect "★★ 而理由点名 A2 与 attempt 键（只说「不许」读者无从下手）" "$r" 'attempt key'
+expect "★★ 而「那会是一句装饰」这件事必须说出来 —— 那才是这条判据的理由" "$r" 'decoration'
+
 echo
 echo "—— 技能店：三道门各拒一次，且都带回诊断 ——"
-r=$(req '{"t":"skill.publish","v":1,"key":"p2","body":{"manifest":{"skill_id":"bad.lic","version":"1","kind":"code","verify_assert":["x"],"evidence":"E1","license":"WTFPL","provenance":{"source":"x"},"env":{"interpreter":"builtin"}},"files":{"a":"x"}}}')
+r=$(req '{"t":"skill.publish","v":1,"key":"p2","body":{"manifest":{"skill_id":"bad.lic","version":"1","kind":"code","verify_assert":["x"],"evidence":"E1","idempotent":true,"license":"WTFPL","provenance":{"source":"x"},"env":{"interpreter":"builtin"}},"files":{"a":"x"}}}')
 expect "未知许可证被拒（未知不等于宽松）" "$r" 'license_conflict'
-r=$(req '{"t":"skill.publish","v":1,"key":"p3","body":{"manifest":{"skill_id":"bad.path","version":"1","kind":"code","verify_assert":["x"],"evidence":"E1","license":"MIT","provenance":{"source":"x"},"env":{"interpreter":"builtin"}},"files":{"../evil":"x"}}}')
+r=$(req '{"t":"skill.publish","v":1,"key":"p3","body":{"manifest":{"skill_id":"bad.path","version":"1","kind":"code","verify_assert":["x"],"evidence":"E1","idempotent":true,"license":"MIT","provenance":{"source":"x"},"env":{"interpreter":"builtin"}},"files":{"../evil":"x"}}}')
 expect "越界载荷路径被拒" "$r" 'bad_request'
-r=$(req '{"t":"skill.publish","v":1,"key":"p4","body":{"manifest":{"skill_id":"bad.net","version":"1","kind":"code","verify_assert":["x"],"evidence":"E1","license":"MIT","provenance":{"source":"x"},"env":{"interpreter":"builtin","network":true}},"files":{"a":"x"}}}')
+r=$(req '{"t":"skill.publish","v":1,"key":"p4","body":{"manifest":{"skill_id":"bad.net","version":"1","kind":"code","verify_assert":["x"],"evidence":"E1","idempotent":true,"license":"MIT","provenance":{"source":"x"},"env":{"interpreter":"builtin","network":true}},"files":{"a":"x"}}}')
 expect "运行期联网被拒（不可复现）" "$r" 'bad_request'
 expect "被拒时也带回已经走过的步骤" "$r" '"steps"'
 r=$(req '{"t":"skill.resolve","v":1,"body":{"ref":"../../etc/passwd"}}')
@@ -293,7 +307,7 @@ expect "★ 前缀合法但十六进制畸形，是另一个答案" "$r" 'not a 
 
 echo
 echo "—— 技能店：证据等级是固化闸门 ——"
-r=$(req '{"t":"skill.publish","v":1,"key":"p5","body":{"manifest":{"skill_id":"raw.guess","version":"1","kind":"code","verify_assert":["x"],"evidence":"E0","license":"MIT","provenance":{"source":"model"},"env":{"interpreter":"builtin"}},"files":{"a":"x"}}}')
+r=$(req '{"t":"skill.publish","v":1,"key":"p5","body":{"manifest":{"skill_id":"raw.guess","version":"1","kind":"code","verify_assert":["x"],"evidence":"E0","idempotent":true,"license":"MIT","provenance":{"source":"model"},"env":{"interpreter":"builtin"}},"files":{"a":"x"}}}')
 expect "E0 可以进 canary（生成不等于可用）" "$r" '"channel":"canary"'
 r=$(req '{"t":"skill.promote","v":1,"key":"pr0","body":{"name":"raw.guess","from":"canary","to":"stable"}}')
 expect "E0 不许固化到 stable" "$r" 'bad_request'
@@ -808,7 +822,7 @@ expect "组合的理由点名是哪一个孩子" "$r" '"reason":"child 0'
 echo
 echo "—— 组合作为一种技能：它有自己的 ref，所以可以再被组合 ——"
 xmanC() { # xmanC <skill_id> <op> <children-json> <deps-json>
-  printf '{"skill_id":"%s","version":"1.0.0","kind":"compose","evidence":"E0","license":"MIT","provenance":{"source":"handwritten"},"deps":%s,"compose":{"op":"%s","children":%s}}' "$1" "$4" "$2" "$3"
+  printf '{"skill_id":"%s","version":"1.0.0","kind":"compose","evidence":"E0","idempotent":true,"license":"MIT","provenance":{"source":"handwritten"},"deps":%s,"compose":{"op":"%s","children":%s}}' "$1" "$4" "$2" "$3"
 }
 cPair=$(xpub cp1 "$(xmanC comb.pair serial "[\"$cA\",\"$cB\"]" "[\"$cA\",\"$cB\"]")" '{}')
 if [ -n "$cPair" ]; then
@@ -838,13 +852,13 @@ expect "★ ref 与内联组合不能同时给" "$r" 'not both'
 
 echo
 echo "—— 组合声明里的三道门 ——"
-r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp9\",\"body\":{\"manifest\":{\"skill_id\":\"comb.owner\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"license\":\"MIT\",\"provenance\":{\"source\":\"x\"},\"deps\":[\"$cA\"],\"env\":{\"interpreter\":\"/bin/sh\"},\"compose\":{\"op\":\"serial\",\"children\":[\"$cA\"]}},\"files\":{}}}")
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp9\",\"body\":{\"manifest\":{\"skill_id\":\"comb.owner\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"idempotent\":true,\"license\":\"MIT\",\"provenance\":{\"source\":\"x\"},\"deps\":[\"$cA\"],\"env\":{\"interpreter\":\"/bin/sh\"},\"compose\":{\"op\":\"serial\",\"children\":[\"$cA\"]}},\"files\":{}}}")
 expect "★ 组合不许声明解释器（那是没人读的字段）" "$r" 'declares no interpreter'
-r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp10\",\"body\":{\"manifest\":{\"skill_id\":\"comb.orphan\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"license\":\"MIT\",\"provenance\":{\"source\":\"x\"},\"deps\":[\"$cA\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$cA\",\"$cB\"]}},\"files\":{}}}")
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp10\",\"body\":{\"manifest\":{\"skill_id\":\"comb.orphan\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"idempotent\":true,\"license\":\"MIT\",\"provenance\":{\"source\":\"x\"},\"deps\":[\"$cA\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$cA\",\"$cB\"]}},\"files\":{}}}")
 expect "★ 组合必须声明它调用的东西（闭包）" "$r" 'is not in deps'
-r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp11\",\"body\":{\"manifest\":{\"skill_id\":\"comb.files\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"license\":\"MIT\",\"provenance\":{\"source\":\"x\"},\"deps\":[\"$cA\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$cA\"]}},\"files\":{\"run.sh\":\"echo hi\n\"}}}")
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp11\",\"body\":{\"manifest\":{\"skill_id\":\"comb.files\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"idempotent\":true,\"license\":\"MIT\",\"provenance\":{\"source\":\"x\"},\"deps\":[\"$cA\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$cA\"]}},\"files\":{\"run.sh\":\"echo hi\n\"}}}")
 expect "★ 组合不许带不会被运行的载荷" "$r" 'carries no files'
-r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp12\",\"body\":{\"manifest\":{\"skill_id\":\"comb.liar\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"verify_assert\":[\"exit == 0\"],\"license\":\"MIT\",\"provenance\":{\"source\":\"x\"},\"deps\":[\"$cA\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$cA\"]}},\"files\":{}}}")
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp12\",\"body\":{\"manifest\":{\"skill_id\":\"comb.liar\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"idempotent\":true,\"verify_assert\":[\"exit == 0\"],\"license\":\"MIT\",\"provenance\":{\"source\":\"x\"},\"deps\":[\"$cA\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$cA\"]}},\"files\":{}}}")
 expect "★ 组合不许声明自己无从对证的断言" "$r" 'no observation of its own'
 echo
 echo "—— 规划器：让系统提议一条没人写过的链 ——"
@@ -928,7 +942,7 @@ expect "★ 但它报告自己探索过多少状态" "$r" '"states"'
 r=$(req '{"t":"compose.propose","v":1,"body":{"from":["doc"],"to":["tagged"],"task_class":"task_exec","max_depth":4,"floor":0.99}}')
 expect "★ 可靠性地板把链剪掉，并说明理由" "$r" 'below the floor'
 
-r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"tp1\",\"body\":{\"manifest\":{\"skill_id\":\"auto.tag\",\"version\":\"1.0.0\",\"kind\":\"compose\",\"evidence\":\"E0\",\"license\":\"MIT\",\"provenance\":{\"source\":\"planner\"},\"deps\":[\"$tA\",\"$tB\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$tA\",\"$tB\"]}},\"files\":{}}}")
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"tp1\",\"body\":{\"manifest\":{\"skill_id\":\"auto.tag\",\"version\":\"1.0.0\",\"kind\":\"compose\",\"evidence\":\"E0\",\"idempotent\":true,\"license\":\"MIT\",\"provenance\":{\"source\":\"planner\"},\"deps\":[\"$tA\",\"$tB\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$tA\",\"$tB\"]}},\"files\":{}}}")
 cTag=$(printf '%s' "$r" | sed -n 's/.*"ref":"\([0-9a-f]\{64\}\)".*/\1/p')
 
 autoRef=$(printf '%s' "$r" | sed -n 's/.*"ref":"\([0-9a-f]\{64\}\)".*/\1/p')
@@ -969,7 +983,7 @@ expect "★★ 它的证据等级就是 E1" "$r" '"evidence":"E1"'
 #   组合本身不产生任何观测——它没有自己的进程、没有自己的断言。所以它没有
 #   自己的证据等级：它的等级是孩子们的最小值。这一条在文档里写了很久，
 #   而在代码里从来没被检查过。
-r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp13\",\"body\":{\"manifest\":{\"skill_id\":\"comb.launder\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E1\",\"license\":\"MIT\",\"provenance\":{\"source\":\"x\"},\"deps\":[\"$cA\",\"$cB\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$cA\",\"$cB\"]}},\"files\":{}}}")
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"cp13\",\"body\":{\"manifest\":{\"skill_id\":\"comb.launder\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E1\",\"idempotent\":true,\"license\":\"MIT\",\"provenance\":{\"source\":\"x\"},\"deps\":[\"$cA\",\"$cB\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$cA\",\"$cB\"]}},\"files\":{}}}")
 expect "★ 两个 E0 孩子组成的组合不许声明 E1" "$r" 'cannot claim more trust'
 expect "★ 拒绝说出孩子里最弱的那一个是谁" "$r" 'minimum is E0'
 expect "★ 也说出它自己声称的是什么" "$r" 'declares E1'
@@ -1000,16 +1014,16 @@ else
 fi
 
 # 一条发布了却从没跑过的规划器链：没有它，「未跑过」这条路径就没有样本。
-r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"tp5\",\"body\":{\"manifest\":{\"skill_id\":\"auto.never\",\"version\":\"1.0.0\",\"kind\":\"compose\",\"evidence\":\"E0\",\"license\":\"MIT\",\"provenance\":{\"source\":\"planner\"},\"deps\":[\"$tA\",\"$tB\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$tA\",\"$tB\"]}},\"files\":{}}}")
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"tp5\",\"body\":{\"manifest\":{\"skill_id\":\"auto.never\",\"version\":\"1.0.0\",\"kind\":\"compose\",\"evidence\":\"E0\",\"idempotent\":true,\"license\":\"MIT\",\"provenance\":{\"source\":\"planner\"},\"deps\":[\"$tA\",\"$tB\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$tA\",\"$tB\"]}},\"files\":{}}}")
 expect "★ 一条发布了却从没跑过的规划器链" "$r" '"channel":"canary"'
 
 r=$(req "{\"t\":\"skill.compose\",\"v\":1,\"key\":\"tp2\",\"body\":{\"ref\":\"$autoRef\",\"attempt\":\"tp-auto\",\"task_class\":\"task_exec\",\"input\":{}}}")
 expect "★★ 没人写过这条链，它跑通了" "$r" '"outcome":"ok"'
 expect "★★ 它的行为不是任何单个技能的行为（同一个输入，单跑是 SOLO）" "$r" '"index":1'
 
-r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"tp3\",\"body\":{\"manifest\":{\"skill_id\":\"auto.bad\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"license\":\"MIT\",\"provenance\":{\"source\":\"planner\"},\"deps\":[],\"compose\":{\"op\":\"serial\",\"children\":[]}},\"files\":{}}}")
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"tp3\",\"body\":{\"manifest\":{\"skill_id\":\"auto.bad\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"idempotent\":true,\"license\":\"MIT\",\"provenance\":{\"source\":\"planner\"},\"deps\":[],\"compose\":{\"op\":\"serial\",\"children\":[]}},\"files\":{}}}")
 expect "空组合不许被注册" "$r" 'needs at least one child'
-r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"tp4\",\"body\":{\"manifest\":{\"skill_id\":\"auto.orphan\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"license\":\"MIT\",\"provenance\":{\"source\":\"planner\"},\"deps\":[\"$tA\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$tA\",\"$tB\"]}},\"files\":{}}}")
+r=$(req "{\"t\":\"skill.publish\",\"v\":1,\"key\":\"tp4\",\"body\":{\"manifest\":{\"skill_id\":\"auto.orphan\",\"version\":\"1\",\"kind\":\"compose\",\"evidence\":\"E0\",\"idempotent\":true,\"license\":\"MIT\",\"provenance\":{\"source\":\"planner\"},\"deps\":[\"$tA\"],\"compose\":{\"op\":\"serial\",\"children\":[\"$tA\",\"$tB\"]}},\"files\":{}}}")
 expect "★ 组合必须声明它调用的东西" "$r" 'is not in deps'
 
 echo
@@ -1550,7 +1564,7 @@ open(tmp + "/ac1.json", "w").write(json.dumps({"t": "skill.publish", "v": 1, "ke
     "body": {"manifest": leaf, "files": files}}))
 open(tmp + "/ac2.json", "w").write(json.dumps({"t": "skill.publish", "v": 1, "key": "ac2",
     "body": {"manifest": {"skill_id": "auto.flat", "version": "1.0.0", "kind": "compose",
-                          "evidence": "E0", "license": "MIT",
+                          "evidence": "E0", "idempotent": True, "license": "MIT",
                           "provenance": {"source": "planner"}, "deps": ["@LEAF@"],
                           "compose": {"op": "serial", "children": ["@LEAF@"]}}, "files": {}}}))
 PYGEN
