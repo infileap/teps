@@ -217,6 +217,44 @@ func (s *server) escalationDecide(f core.Frame, out *core.Frame) {
 			"action "+body.Action+" was not among the quoted offers")
 		return
 	}
+	// ★★★ 记录必须**全部来自被定价的那一条 offer**，不能一半来自请求。
+	//
+	// 此前 `rec.Skill` 与 `rec.TaskClass` 取的是 `body.Skill` / `body.TaskClass`，
+	// 而 `utility` / `p` / `grant_cost` / `grant_ms` 取的是 `chosen`。实测
+	// （两条都是 `skill` 动作的 offer：`read.file` cost 1 / latency 5，
+	// `write.file` cost 50 / latency 900）：
+	//
+	//   quote 选的： skill / read.file   grant_cost=1  grant_ms=5
+	//   decide 传 skill=write.file，quote_id 照旧匹配 ⇒ 链上写下
+	//   {"action":"skill","grant_cost":1,"grant_ms":5,"p":1,"rec":"escalation",
+	//    "skill":"write.file","utility":8.5,...}
+	//
+	// **那条记录说「关于 write.file 做了一次决定，它花 1、效用 8.5」——
+	// 而这三件事没有一件是关于 write.file 的。** write.file 花 50、延迟 900、
+	// 效用是负的。`priceOf` 的注释写着「Two computations of the same price is how
+	// a system ends up quoting one number and acting on another」；这里比那更糟：
+	// 只算了一次价，而**记录把它挂在了另一个主体上**。
+	//
+	// `task_class` 是同一件事的第二个入口：它是 `decideBody` 的字段，`priceOf`
+	// 根本不读它（后验是按 `offer.TaskClass` 查的），于是把 `task_exec` 换成
+	// `chat` 之后 quote_id **照旧匹配**，而链上记下了 `"task_class":"chat"` ——
+	// 一个后验从未在那个类下被读过的类。
+	//
+	// 判据取「调用方说了就必须一致，没说就用被定价的那一条」：一个不点名的
+	// 决定没有错，一个点名点错的必须被拒，而不是被静默改写成对的那个。
+	if body.Skill != "" && body.Skill != chosen.Offer.Skill {
+		out.Err = core.Refuse(core.CodeBadRequest,
+			"the decision names skill "+body.Skill+" but the price it cites is for "+
+				chosen.Offer.Skill+": a record must name the thing that was priced")
+		return
+	}
+	if body.TaskClass != "" && body.TaskClass != chosen.Offer.TaskClass {
+		out.Err = core.Refuse(core.CodeBadRequest,
+			"the decision names task class "+body.TaskClass+" but the price it cites was read "+
+				"under "+chosen.Offer.TaskClass+": recording another one would name a fact that "+
+				"never happened")
+		return
+	}
 	grant := core.Budget{MS: ceil64(chosen.Offer.Latency), Money: ceil64(chosen.Offer.Cost)}
 	// The grant is charged before the record is written. A record of a decision
 	// that was never funded would be a decision the chain claims and the ledger
@@ -228,8 +266,13 @@ func (s *server) escalationDecide(f core.Frame, out *core.Frame) {
 	}
 	rec := escalationRecord{
 		Rec: "escalation", Attempt: body.Attempt, QuoteID: body.QuoteID,
-		Action: body.Action, Skill: body.Skill, TaskClass: body.TaskClass,
-		Utility: round(chosen.Utility), P: round(chosen.Prob),
+		// ★ 这四行全部来自 `chosen`。此前 `Skill` 与 `TaskClass` 来自请求，
+		// 于是同一个记录里一半描述被定价的那一条、一半描述调用方说出口的
+		// 那一条 —— 而它们可以是两条不同的 offer。
+		Action:    string(chosen.Offer.Action),
+		Skill:     chosen.Offer.Skill,
+		TaskClass: chosen.Offer.TaskClass,
+		Utility:   round(chosen.Utility), P: round(chosen.Prob),
 		GrantMS: grant.MS, GrantCost: grant.Money,
 	}
 	canon, ref := core.Canonical(mustJSON(rec))

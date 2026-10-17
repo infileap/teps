@@ -1105,6 +1105,34 @@ expect "★ 没有报价 id 的决定被拒" "$r" 'needs the quote_id'
 r=$(req "{\"t\":\"escalation.decide\",\"v\":1,\"id\":\"e5\",\"body\":{\"quote_id\":\"$qid\",\"action\":\"teleport\",\"attempt\":\"esc3\",\"offers\":$off}}")
 expect "★ 没被报价过的动作被拒" "$r" 'was not among the quoted offers'
 
+# ★★★ 记录必须**全部来自被定价的那一条 offer**，不能一半来自请求。
+#
+# 此前 `rec.Skill` 与 `rec.TaskClass` 取的是请求，而 `utility` / `p` /
+# `grant_cost` / `grant_ms` 取的是 arbiter 选中的那一条。两条都是 `skill`
+# 动作、但技能与价格不同的时候，链上会写下「关于 write.file 做了一次决定，
+# 它花 1、效用 8.5」—— 而这三件事没有一件是关于 write.file 的
+# （write.file 花 50、延迟 900、效用是负的）。
+#
+# `priceOf` 的注释写着「Two computations of the same price is how a system
+# ends up quoting one number and acting on another」；这里比那更糟：
+# **只算了一次价，而记录把它挂在了另一个主体上。**
+off2='[{"action":"skill","skill":"read.file","task_class":"task_exec","value":10,"cost":1,"latency":5,"latency_weight":0.1},{"action":"skill","skill":"write.file","task_class":"task_exec","value":8,"cost":50,"latency":900,"latency_weight":0.1}]'
+r=$(req "{\"t\":\"escalation.quote\",\"v\":1,\"id\":\"e11\",\"body\":{\"task_class\":\"task_exec\",\"offers\":$off2}}")
+expect "★ 两条同名动作的 offer 里，报价选出的是 read.file" "$r" '"chosen_skill":"read.file"'
+expect "★ 而它报的价是 read.file 的（不是 write.file 的 50）" "$r" '"grant_cost":1'
+qid3=$(printf '%s' "$r" | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["quote_id"])')
+r=$(req "{\"t\":\"escalation.decide\",\"v\":1,\"key\":\"d4\",\"id\":\"e12\",\"body\":{\"quote_id\":\"$qid3\",\"action\":\"skill\",\"attempt\":\"esc-wrongskill\",\"skill\":\"write.file\",\"task_class\":\"task_exec\",\"offers\":$off2}}")
+expect "★ 点名点错了技能 ⇒ 被拒，而不是被静默改写成对的那个" "$r" 'must name the thing that was priced'
+expect "★ 拒绝里两个名字都在（可执行）" "$r" 'write.file'
+# ★ task_class 是同一件事的第二个入口：`priceOf` 根本不读它（后验是按
+# offer.TaskClass 查的），所以把 task_exec 换成 chat 之后 quote_id 照旧匹配。
+r=$(req "{\"t\":\"escalation.decide\",\"v\":1,\"key\":\"d5\",\"id\":\"e13\",\"body\":{\"quote_id\":\"$qid3\",\"action\":\"skill\",\"attempt\":\"esc-wrongclass\",\"skill\":\"read.file\",\"task_class\":\"chat\",\"offers\":$off2}}")
+expect "★ 点名点错了任务类 ⇒ 被拒（后验从未在那个类下被读过）" "$r" 'would name a fact that never happened'
+r=$(req "{\"t\":\"escalation.decide\",\"v\":1,\"key\":\"d6\",\"id\":\"e14\",\"body\":{\"quote_id\":\"$qid3\",\"action\":\"skill\",\"attempt\":\"esc-nonames\",\"offers\":$off2}}")
+expect "★ 不点名是对的，而且记录用被定价的那一条" "$r" '"grant_cost":1'
+r=$(req '{"t":"audit.tail","v":1,"body":{"limit":50}}')
+expect "★ 链上的记录点名的是 read.file（真的被定价的那一条）" "$r" '"skill":"read.file","task_class":"task_exec"'
+
 echo
 echo "—— ★★ 价格一动，那张报价就作废 ——"
 # open 是全局未结尝试数，前面几段已经留了几个，所以只能断言增量。
