@@ -65,8 +65,9 @@ func MinEvidenceAll(evs []Evidence) Evidence { return evidence.MinAll(evs) }
 // produce different results. pip's dependency closure cannot be content
 // addressed, so we pin the closure explicitly and hash that instead.
 type Env struct {
-	Interpreter string            `json:"interpreter"`
-	Packages    map[string]string `json:"packages,omitempty"`
+	Interpreter string `json:"interpreter"`
+	// DEAD-API: 解释器版本由 Env 的其它字段决定，这一张表只被写、从没被读
+	Packages map[string]string `json:"packages,omitempty"`
 	// Network is true when the skill reaches **another host**.
 	//
 	// It is refused, and the reason is reproducibility rather than safety: an
@@ -172,9 +173,12 @@ func isLoopback(spec string) bool {
 // fix in place — and this is the durable record of the first two. It is
 // required, because a skill whose origin is unknown cannot be audited later.
 type Provenance struct {
-	Source     string `json:"source"`
-	URL        string `json:"url,omitempty"`
-	Commit     string `json:"commit,omitempty"`
+	Source string `json:"source"`
+	// DEAD-API: 出处只被写、从没被读 —— 一条没人读的出处不是出处
+	URL string `json:"url,omitempty"`
+	// DEAD-API: 同上
+	Commit string `json:"commit,omitempty"`
+	// DEAD-API: 同上
 	CapturedAt string `json:"captured_at,omitempty"`
 }
 

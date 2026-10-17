@@ -261,6 +261,42 @@ def read_uses(body, name):
     return n
 
 
+# MARSHAL_CALL 是「一个结构体真的进过编码」的证据。
+MARSHAL_CALL = re.compile(r'mustJSON\(|json\.Marshal\(|json\.NewEncoder\(')
+
+
+def struct_is_marshalled(others, type_name):
+    """非测试代码里，有没有在编码调用附近提到这个类型名。
+
+    ★★★ 而这是一个**近似**，两个方向都会错，必须写下来：
+
+    - 太紧（第一版只找类型名）：Go 传的是**变量**（`decision`）而类型叫 `Decision`，
+      于是 `Decision` 被误判成「从没进过编码」。
+    - 太松（改成大小写不敏感之后）：`Manifest` 这个名字在适配器里到处都是
+      （`"manifest": res.Manifest` 是那个**哈希**），于是 `Manifest` 的字段
+      全被判成「进过编码」—— 而 `Manifest` 这个结构体**从来没被序列化过**
+      （`store.Registration.Manifest` 与 `Resolution.Manifest` 都是 `string`）。
+
+    ★ 所以这一条守卫**能证明的只有一件事**：一个字段在非测试代码里既没有被读、
+    也没有一个能证明它进过编码的结构体。它**不能**证明反面 —— 通过不等于
+    「这个字段被用上了」，只等于「这一条查不出来」。
+
+    **一条近似的守卫，它的说明里必须写明它近似在哪。**
+    """
+    if not type_name:
+        return False
+    # ★ 大小写不敏感：Go 传的是**变量**（`decision`）而类型叫 `Decision`，
+    # 第一版只找类型名，于是 `Decision` 被误判成「从没进过编码」。
+    # **一个区分大小写的判据，会把 `decision` 与 `Decision` 当成两个东西。**
+    pat = re.compile(r'\b' + type_name + r'\b', re.I)
+    for body in others:
+        for m in MARSHAL_CALL.finditer(body):
+            window = body[max(0, m.start() - 400):m.start() + 400]
+            if pat.search(window):
+                return True
+    return False
+
+
 def check_exported_fields_are_read():
     problems = []
     for d in ("organs", "store", "evidence"):
@@ -283,9 +319,12 @@ def check_exported_fields_are_read():
                         others.append(strip_comments(open(os.path.join(dp2, f2), encoding="utf-8").read()))
                 # 只在**结构体内部**找字段：从 `type X struct {` 到对应的 `}`。
                 inside = False
+                struct_name = ""
                 for i, line in enumerate(lines):
-                    if re.match(r'^type \w+ struct \{', line):
+                    tm = re.match(r'^type (\w+) struct \{', line)
+                    if tm:
                         inside = True
+                        struct_name = tm.group(1)
                         continue
                     if inside and line.startswith('}'):
                         inside = False
@@ -301,11 +340,21 @@ def check_exported_fields_are_read():
                     # 第一版没有这一条，于是 `organs/intake` 的 `ContextTokens` /
                     # `FallThrough` 被误报：`task.intake` 把整个 `Decision`
                     # 序列化出去了。**一个只数一种读法的守卫，会把别的读法当成没读。**
-                    # ★ 判据是 `json:"`（反引号在 json 之后），不是 `"json:`
-                    # —— 第一版写成了后者，于是这一条**一次都没生效**，而
-                    # `ContextTokens` / `FallThrough` 照旧被误报。
-                    # **一个写错了字面量的守卫不会报错，它只是永远不触发。**
-                    if 'json:"' in line:
+                    # ★★★ 而「带 json 标签」**不等于**「会被序列化出去」。
+                    #
+                    # 第一版在这里写 `if 'json:"' in line: continue` —— 那一刀太宽，
+                    # 它恰好**放过了这一条要抓的那一类**：`store/manifest.go` 的
+                    # `Effects []string \`json:"effects,omitempty"\`` 与
+                    # `Idempotent bool \`json:"idempotent"\`` 有标签，而 `Manifest`
+                    # **这个结构体从来没有被序列化出去过** —— `store.Registration.Manifest`
+                    # 与 `Resolution.Manifest` 都是 `string`（清单**哈希**），
+                    # `adapters/shell/skill.go:75` 报的 `"manifest": res.Manifest` 就是那个哈希。
+                    #
+                    # **一个字段有 json 标签，只证明它想被序列化；它被不被序列化是另一件事。**
+                    #
+                    # 判据改成「**这个结构体**有没有真的进过一次编码」：在非测试代码里
+                    # 找 `mustJSON(` / `json.Marshal(` 附近出现的类型名。
+                    if 'json:"' in line and struct_is_marshalled(others, struct_name):
                         continue
                     if any(read_uses(b, name) > 0 for b in others):
                         continue
