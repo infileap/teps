@@ -438,11 +438,48 @@ decide  → 占 grant
 ## 七、会话状态机与停滞守卫
 
 ```
-ready → routing → {executing | planning}
-executing → verifying → {done | retrying | escalating}
-escalating → waiting → {executing | timeout→degraded | deny→rearbitrate}
-rearbitrate → {planning | degraded}
+ready         --open-->      routing
+routing       --route-->     executing
+routing       --plan-->      planning
+planning      --planned-->   executing
+executing     --finish-->    verifying
+verifying     --pass-->      done
+verifying     --retry-->     retrying
+verifying     --escalate-->  escalating
+retrying      --rerun-->     executing
+escalating    --quoted-->    waiting
+waiting       --grant-->     executing
+waiting       --timeout-->   degraded
+waiting       --deny-->      rearbitrating
+rearbitrating --replan-->    planning
+rearbitrating --abandon-->   degraded
+done          （没有出边）
+degraded      （没有出边）
 ```
+
+★★★ **上面这张表此前是四条缩写的箭头，而它有三处不对。**
+
+此前写的是：
+
+	ready → routing → {executing | planning}
+	executing → verifying → {done | retrying | escalating}
+	escalating → waiting → {executing | timeout→degraded | deny→rearbitrate}
+	rearbitrate → {planning | degraded}
+
+实测（`organs/session/state.go:73-85` 的 `var transitions map[State]map[Event]State`）：
+
+| 契约此前写的 | 实际 |
+|---|---|
+| `rearbitrate` | **`rearbitrating`** —— 而 `rearbitrating` 这个名字在本文档里**一次都没出现过**（0 次）。照着这张图写客户端的人会去等一个永远不来的状态 |
+| `planning` 只作为**目标**出现（`→ planning` 两次），**没有出边** | `Planning: {Planned: Executing}` —— **它有出边**。照着这张图，一个路由到 planning 的会话看起来**卡住了** |
+| `retrying` 只作为**目标**出现（`→ retrying`），**没有出边** | `Retrying: {Rerun: Executing}` —— 同上，**它也卡住了** |
+
+**两个状态在契约的图里是死胡同，而它们在代码里都能走出去。**
+
+★ 而代码那一侧**是有守卫的**：`state.go` 的注释写着「Go will not refuse to compile
+a non-exhaustive match, so the substitute is `TestEveryPairIsAccountedFor`, which
+enumerates all states × events and compares the allowed edges against a list
+written out by hand」—— **漂移的是契约那一侧。**
 
 守卫**纯计数**，不用模型判断：
 

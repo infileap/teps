@@ -384,6 +384,75 @@ def rec_vocabulary_mismatches():
     return out
 
 
+# ★★★ 契约的状态图里有两个死胡同与一个错名字。
+#
+# 此前那四条缩写的箭头写的是：
+#
+#	ready → routing → {executing | planning}
+#	executing → verifying → {done | retrying | escalating}
+#	escalating → waiting → {executing | timeout→degraded | deny→rearbitrate}
+#	rearbitrate → {planning | degraded}
+#
+# 而实测（organs/session/state.go:73-85 的 var transitions map[State]map[Event]State）：
+#
+#	rearbitrate  -> 实际叫 rearbitrating（这个名字在契约里 0 次）
+#	planning     -> 只有入边，没有出边；实际 Planning: {Planned: Executing}
+#	retrying     -> 只有入边，没有出边；实际 Retrying: {Rerun: Executing}
+#
+# **两个状态在契约的图里是死胡同，而它们在代码里都能走出去。**
+# 而代码那一侧是有守卫的（TestEveryPairIsAccountedFor 枚举所有 states × events）——
+# **漂移的是契约那一侧。**
+#
+# 判据：从 transitions 里推出每一条边（`from --event--> to`），
+# 都必须在契约那段代码块里出现；而块里的每一条边也必须在表里。
+STATE_DECL = re.compile(r'^\t(\w+)\s+State\s*=\s*"([a-z]+)"', re.M)
+EVENT_DECL = re.compile(r'^\t(\w+)\s+Event\s*=\s*"([a-z]+)"', re.M)
+TRANS_ROW = re.compile(r'^\t(\w+):\s*\{([^}]*)\},?\s*$', re.M)
+TRANS_EDGE = re.compile(r'(\w+):\s*(\w+)')
+DIAGRAM_EDGE = re.compile(r'^([a-z]+)\s+--([a-z]+)-->\s+([a-z]+)$', re.M)
+
+
+def transition_edges():
+    """(from, event, to) 三元组，全部解析成字面值。"""
+    src = read("organs/session/state.go")
+    states = dict(STATE_DECL.findall(src))
+    events = dict(EVENT_DECL.findall(src))
+    i = src.find("var transitions = map[State]map[Event]State{")
+    if i < 0:
+        return None
+    j = src.find("\n}", i)
+    out = []
+    for m in TRANS_ROW.finditer(src[i:j]):
+        frm = states.get(m.group(1))
+        if frm is None:
+            continue
+        for ev, to in TRANS_EDGE.findall(m.group(2)):
+            e, t = events.get(ev), states.get(to)
+            if e and t:
+                out.append((frm, e, t))
+    return out
+
+
+def state_diagram_mismatches():
+    edges = transition_edges()
+    if not edges:
+        return ["transitions 读不出来：判据的前提（那个表或它的常量）变了"]
+    contract = read("docs/CONTRACT.md")
+    m = re.search(r'```\n(ready\s+--.*?)```', contract, re.S)
+    if not m:
+        return ["契约里找不到那张状态图（以 `ready --` 开头的那段代码块）"]
+    block = m.group(1)
+    drawn = set(DIAGRAM_EDGE.findall(block))
+    out = []
+    for e in edges:
+        if e not in drawn:
+            out.append(f"代码里 {e[0]} --{e[1]}--> {e[2]} 是一条真的边，而契约的状态图里没有它")
+    for d in sorted(drawn):
+        if d not in edges:
+            out.append(f"契约的状态图里画了 {d[0]} --{d[1]}--> {d[2]}，而代码里没有这条边")
+    return out
+
+
 def main():
     src = read("core/refusal.go")
 
@@ -443,6 +512,11 @@ def main():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ 契约的状态图必须与那张真的转换表对得上。
+    for u in state_diagram_mismatches():
+        print(u)
+        bad += 1
 
     # ★★★ 链上每一条记录都带着 rec，而契约从来没有列过它的词汇表。
     for u in rec_vocabulary_mismatches():
