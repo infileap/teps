@@ -530,7 +530,33 @@ func (s *server) elevateCompose(self *store.Manifest, ceiling store.Evidence, ve
 				"so the chain has still not been shown to be able to fail",
 		}
 	}
-	if rankOf(self.Evidence) >= rankOf(ceiling) {
+	// ★★★ 梯子上没有的等级必须被拒，不许被折到 E0 —— 与 Round 48 在
+	// `store/manifest.go` 的 `evidenceRank` 和 `compose.build` 修的是同一个错。
+	//
+	// 这里是**第三份**同样的前向器：
+	//
+	//   store/manifest.go      evidenceRank(l) { r, _ := evidence.Rank(l); return r }
+	//   adapters/shell/compose.go  rankOf(l)    { r, _ := evidence.Rank(l); return r }
+	//   adapters/shell/knowledge.go 内联的 `rank := 0.0; if r, ok := ...; ok {...}`
+	//
+	// 而 `rankOf` 的注释写着「reads the ladder through one door」，
+	// `evidenceRank` 的注释写着「the store reads the ladder through exactly one
+	// door (manifest.go)」—— **两句都说只有一扇门，而这里有三扇，其中两扇
+	// 犯的是同一个错。** 更糟的是那句理由本身就不成立：`knowledge.go` 早就
+	// 直接 import 了 `teps/evidence`，适配器并不需要什么前向器。
+	//
+	// 所以这里不再用 `rankOf`：直接读梯子，并且**两边都读得懂才比**。
+	// 一个读不懂的等级必须让检查更严，不是更松。
+	declaredRank, declaredKnown := evidence.Rank(self.Evidence)
+	ceilingRank, ceilingKnown := evidence.Rank(ceiling)
+	if !declaredKnown || !ceilingKnown {
+		return &elevationBody{
+			Reason: "cannot compare evidence levels: this composition declares " + string(self.Evidence) +
+				" and its children's minimum is " + string(ceiling) + ". A level that is not on the ladder " +
+				"is not the weakest level — it is an unreadable one, and a ceiling nobody can read is not a ceiling",
+		}
+	}
+	if declaredRank >= ceilingRank {
 		return &elevationBody{
 			Level: string(self.Evidence),
 			From:  string(self.Evidence), To: string(self.Evidence),
@@ -551,14 +577,6 @@ func (s *server) elevateCompose(self *store.Manifest, ceiling store.Evidence, ve
 		Reason: "every child is two-sided and the chain verified, so the composition reached the ceiling its children set: the same payload was registered again as " +
 			res.Ref + " and canary moved to it; the justification is the chain run keyed by attempt " + attempt,
 	}
-}
-
-// rankOf reads the ladder through one door. The store has its own forwarder for
-// the same reason: a second reading of the ladder is a second opinion about what
-// the rungs mean.
-func rankOf(l store.Evidence) int {
-	r, _ := evidence.Rank(l)
-	return r
 }
 
 // payloadNames returns a payload's file names in a stable order.

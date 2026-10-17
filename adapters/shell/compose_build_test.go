@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"teps/core"
+	"teps/organs/executor"
+	"teps/store"
 )
 
 // ★★★ 梯子上没有的证据等级必须被**拒**，不许被折到 E0。
@@ -114,5 +116,61 @@ func TestAnEmptyEvidenceLevelIsRefusedToo(t *testing.T) {
 	}
 	if !strings.Contains(out.Err.Reason, "not a level on the ladder") {
 		t.Fatalf("got %q", out.Err.Reason)
+	}
+}
+
+// ★★★ 梯子上没有的等级必须被拒，不许被折到 E0 —— 这里是**第三份**同样的读取。
+//
+// `adapters/shell/compose.go` 的 `elevateCompose` 此前用
+//
+//	func rankOf(l store.Evidence) int { r, _ := evidence.Rank(l); return r }
+//	if rankOf(self.Evidence) >= rankOf(ceiling) { ... "already at its ceiling" ... }
+//
+// —— 与 `store/manifest.go` 的 `evidenceRank` 逐字相同，也丢掉第二个返回值。
+// 而两句注释都说自己读的是**唯一那扇门**：
+//
+//	rankOf:       "reads the ladder through one door. The store has its own
+//	               forwarder for the same reason: a second reading of the ladder
+//	               is a second opinion about what the rungs mean."
+//	evidenceRank: "the store reads the ladder through exactly one door (manifest.go)"
+//
+// 当时有三扇，其中两扇犯的是同一个错。**一句「只有一扇门」的注释不会让门变成一扇。**
+//
+// 判据取「它说了什么」而不是「它做了什么」：一个读不懂的上限，与一个
+// 「已经到顶了」的上限，是两件不同的事，而此前它们报的是同一句话。
+func TestAnUnreadableCeilingIsNotAlreadyAtItsCeiling(t *testing.T) {
+	s := &server{}
+	self := &store.Manifest{Evidence: store.E0}
+	got := s.elevateCompose(self, store.Evidence("E9"), executor.VerdictOK, nil, nil, "att-1")
+	if got == nil {
+		t.Fatal("elevateCompose must answer")
+	}
+	if strings.Contains(got.Reason, "already at its ceiling") {
+		t.Fatalf("an unreadable ceiling is not a ceiling that was reached: %q", got.Reason)
+	}
+	for _, want := range []string{"cannot compare evidence levels", "E9", "not the weakest level"} {
+		if !strings.Contains(got.Reason, want) {
+			t.Fatalf("the reason must contain %q, got %q", want, got.Reason)
+		}
+	}
+}
+
+// ★ 反向对照：两个都在梯子上时，比较**真的**在决定答案。
+// 没有这一条，上面那条可以被「反正永远拒」满足。
+func TestARealCeilingStillDecides(t *testing.T) {
+	s := &server{}
+	// 已经到顶：E1 的组合，孩子最小值也是 E1。
+	atTop := s.elevateCompose(&store.Manifest{Evidence: store.E1}, store.E1, executor.VerdictOK, nil, nil, "a")
+	if atTop == nil || !strings.Contains(atTop.Reason, "already at its ceiling") {
+		t.Fatalf("E1 with an E1 ceiling is already at its ceiling, got %+v", atTop)
+	}
+	// 没到顶：E0 的组合，孩子最小值是 E1 ⇒ 走提级路径（这里会被 Register 拒，
+	// 因为没有 store，但**理由不能是「已经到顶了」**）。
+	below := s.elevateCompose(&store.Manifest{Evidence: store.E0}, store.E1, executor.VerdictOK, nil, nil, "a")
+	if below == nil {
+		t.Fatal("elevateCompose must answer")
+	}
+	if strings.Contains(below.Reason, "already at its ceiling") {
+		t.Fatalf("E0 below an E1 ceiling is not already at its ceiling: %q", below.Reason)
 	}
 }

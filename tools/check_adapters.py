@@ -52,6 +52,109 @@ def imports_of(path):
     return found
 
 
+# ★★★ 证据阶梯只有一种读法。
+#
+# `evidence.Rank` 返回 `(秩, 在梯子上吗)`，而它的注释逐字写着为什么第二个值
+# 不能丢：
+#
+#   An unknown level is deliberately **not** mapped to zero. Zero is a real level
+#   (E0), and folding "E9" onto it would turn a typo into a trust decision.
+#
+# 这个项目里它被丢了**两次**（`store/manifest.go` 的 `evidenceRank`、
+# `adapters/shell/compose.go` 的 `rankOf`），两次都是 `r, _ := evidence.Rank(l)`，
+# 而两次的注释都声称自己读的是**唯一那扇门**：
+#
+#   rankOf:       "reads the ladder through one door. The store has its own
+#                  forwarder for the same reason"
+#   evidenceRank: "the store reads the ladder through exactly one door (manifest.go)"
+#
+# 两句都说只有一扇，而当时有三扇。**一句「只有一扇门」的注释不会让门变成一扇。**
+# 所以这条规则不写进注释，写进守卫：第二个返回值不许被丢掉。
+DISCARDED_OK = re.compile(r'\w+\s*,\s*_\s*:?=\s*evidence\.Rank\(')
+
+
+def strip_comments(src):
+    """去掉 Go 源码里的注释，保留行号（注释行变成空行）。
+
+    ★★★ 这条剥离是**必须**的，而第一版没有它 —— 于是守卫在它自己的
+    文档上报警：`store/manifest.go` 里那句「它此前丢掉了 Rank 的第二个
+    返回值：`r, _ := evidence.Rank(l)`」是**注释**，而守卫把它当成了代码。
+    `adapters/shell/compose.go` 里那段解释 `rankOf` 的注释同样中招。
+
+    **一个读注释的守卫报的是散文，不是代码。** 这与
+    `check_assertions.py` 第一版是同一类：它用截断来判定，于是报的是它
+    截断的方式。判据必须先落在「这是不是代码」上。
+
+    字符串字面量里的 `//` 不算注释，所以要真的扫一遍，不能用正则切。
+    """
+    n = len(src)
+    # 逐行重建，注释处留空行，行号因此不变。
+    kept = []
+    i, start = 0, 0
+    buf = []
+    while i < n:
+        c = src[i]
+        if c == '"':
+            j = i + 1
+            while j < n and src[j] != '"':
+                if src[j] == "\\":
+                    j += 1
+                j += 1
+            buf.append(src[i:j + 1])
+            i = j + 1
+            continue
+        if c == "`":
+            j = i + 1
+            while j < n and src[j] != "`":
+                j += 1
+            buf.append(src[i:j + 1])
+            i = j + 1
+            continue
+        if c == "/" and i + 1 < n and src[i + 1] == "/":
+            while i < n and src[i] != "\n":
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and src[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (src[i] == "*" and src[i + 1] == "/"):
+                if src[i] == "\n":
+                    buf.append("\n")
+                i += 1
+            i += 2
+            continue
+        if c == "\n":
+            kept.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(c)
+        i += 1
+    kept.append("".join(buf))
+    return "\n".join(kept)
+
+
+def check_rank_is_read_once():
+    """`evidence.Rank` 的第二个返回值不许被丢掉。
+
+    ★ 这条判据是**可算的**：一个 `_` 就是一个被丢掉的事实，不需要读懂语义。
+    ★ 但它必须先在**代码**上算 —— 见 strip_comments 的注释。
+    """
+    problems = []
+    for path in go_files(ROOT):
+        rel = os.path.relpath(path, ROOT)
+        if rel.endswith("_test.go") or rel.startswith("tools/"):
+            continue
+        if "/.toolchain/" in rel or rel.startswith(".toolchain/"):
+            continue
+        code = strip_comments(open(path, encoding="utf-8").read())
+        for i, line in enumerate(code.splitlines(), 1):
+            if DISCARDED_OK.search(line):
+                problems.append(
+                    f"{rel}:{i} 丢掉了 evidence.Rank 的第二个返回值（在梯子上吗）——"
+                    " 未知等级会因此被当成 E0")
+    return problems
+
+
 def main():
     if not os.path.isdir(ADAPTERS):
         print("check_adapters: 没有 adapters/ 目录")
@@ -102,6 +205,13 @@ def main():
         print(f"发现 {len(violations)} 处违规：")
         for v in violations:
             print(f"  ✗ {v}")
+        return 1
+
+    discarded = check_rank_is_read_once()
+    if discarded:
+        print("证据阶梯被读错（evidence.Rank 的第二个返回值被丢掉）：")
+        for d in discarded:
+            print(f"  ✗ {d}")
         return 1
 
     print("适配器边界通过。")
