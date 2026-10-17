@@ -1281,10 +1281,28 @@ qid3=$(printf '%s' "$r" | python3 -c 'import json,sys; print(json.load(sys.stdin
 r=$(req "{\"t\":\"escalation.decide\",\"v\":1,\"key\":\"d4\",\"id\":\"e12\",\"body\":{\"quote_id\":\"$qid3\",\"action\":\"skill\",\"attempt\":\"esc-wrongskill\",\"skill\":\"write.file\",\"task_class\":\"task_exec\",\"offers\":$off2}}")
 expect "★ 点名点错了技能 ⇒ 被拒，而不是被静默改写成对的那个" "$r" 'must name the thing that was priced'
 expect "★ 拒绝里两个名字都在（可执行）" "$r" 'write.file'
-# ★ task_class 是同一件事的第二个入口：`priceOf` 根本不读它（后验是按
-# offer.TaskClass 查的），所以把 task_exec 换成 chat 之后 quote_id 照旧匹配。
+# ★★★ task_class 是同一件事的第二个入口 —— 而 `priceOf` **此前根本不读它**
+# （后验是按 `offer.TaskClass` 查的），于是把 task_exec 换成 chat 之后 quote_id
+# 照旧匹配。实测（{s.a, task_exec} 攒了 20 次全成）：顶层给 task_class、offer 里
+# 不给时，这次报价是在**空类**下读的（也就是先验）；而 decide 会拒、quote 会收 ——
+# **两扇门对同一个字段给了相反的答案**。
+#
+# 现在 `priceOf` 真的读它：调用方说了就用它，offer 自己也说了就必须一致。
+# 于是这条拒绝**发生在更早的地方**，理由也换了 —— 它现在同时点名两个类与那个 offer。
 r=$(req "{\"t\":\"escalation.decide\",\"v\":1,\"key\":\"d5\",\"id\":\"e13\",\"body\":{\"quote_id\":\"$qid3\",\"action\":\"skill\",\"attempt\":\"esc-wrongclass\",\"skill\":\"read.file\",\"task_class\":\"chat\",\"offers\":$off2}}")
-expect "★ 点名点错了任务类 ⇒ 被拒（后验从未在那个类下被读过）" "$r" 'would name a fact that never happened'
+expect "★ 点名点错了任务类 ⇒ 被拒（同一个价不能在两个类下读）" "$r" 'cannot be read under two classes'
+expect "★ 拒绝里两个类都在（可执行）" "$r" 'task_exec'
+# ★ 而**顶层说了就用它**：offer 里不写 task_class 时，价格必须按顶层那个类读。
+# 此前顶层那句是被收下然后丢掉的，报价落在空类上（先验）—— 两扇门一个字段两个答案。
+r=$(req '{"t":"escalation.quote","v":1,"body":{"task_class":"task_exec","offers":[{"action":"read.file","skill":"read.file","value":1,"cost":0,"latency":1}]}}')
+expect "★★ 顶层 task_class 会被读（offer 不写时按它查后验）" "$r" '"quote_id"'
+r=$(req '{"t":"escalation.quote","v":1,"body":{"task_class":"nowhere.at.all","offers":[{"action":"read.file","skill":"read.file","value":1,"cost":0,"latency":1}]}}')
+expect "★★ 换一个从未被读过的类 ⇒ 价必须变（说明那个类真的进了查询）" "$r" '"quote_id"'
+if [ "$(req '{"t":"escalation.quote","v":1,"body":{"task_class":"task_exec","offers":[{"action":"read.file","skill":"read.file","value":1,"cost":0,"latency":1}]}}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["quote_id"])')" != "$(req '{"t":"escalation.quote","v":1,"body":{"task_class":"nowhere.at.all","offers":[{"action":"read.file","skill":"read.file","value":1,"cost":0,"latency":1}]}}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["quote_id"])')" ]; then
+  printf '  ok    ★★ 两个不同的 task_class 给出两个不同的 quote_id（那个字段真的被读了）\n'
+else
+  printf '  FAIL  ★★ 换了 task_class 而 quote_id 没变 —— 那个字段又被丢掉了\n'; fails=$((fails + 1))
+fi
 r=$(req "{\"t\":\"escalation.decide\",\"v\":1,\"key\":\"d6\",\"id\":\"e14\",\"body\":{\"quote_id\":\"$qid3\",\"action\":\"skill\",\"attempt\":\"esc-nonames\",\"offers\":$off2}}")
 expect "★ 不点名是对的，而且记录用被定价的那一条" "$r" '"grant_cost":1'
 r=$(req '{"t":"audit.tail","v":1,"body":{"limit":50}}')

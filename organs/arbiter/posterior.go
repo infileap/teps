@@ -148,10 +148,32 @@ const Exploration = 0.25
 // as evidence accumulates, and it stays large for something tried once. The name
 // matters — it is an upper bound, so an unobserved action is treated as
 // promising rather than as unknown-and-therefore-avoided.
+//
+// ★★★ 而「it shrinks as evidence accumulates」这句话此前只在一个**窄带**里成立。
+//
+// 判据在 `n <= 1` 上：`n = 0` 时 `width = Exploration * sqrt(log(1)/0)` 是
+// `0/0`，**公式没有定义**，所以那一档必须由人做选择（见 UnobservedUpperBound）。
+// 而 `n = 1` 时公式**是有定义的**：`log(2)/1 = 0.693`。此前那一档与 `n = 0`
+// 合并成一句 `return 1.0`，于是**一个跑过一次的技能与一个从没跑过的技能报价
+// 一模一样**。实测（`Posterior{Alpha: 2, Beta: 1}`，n = 1）：
+//
+//	此前：1.0000（守卫直接返回）      公式本应给：0.6667 + 0.25 × 0.8326 = 0.8748
+//
+// ★ 而同一个 `TestUpperBoundShrinksWithEvidence` 拿 `{2,1}` 当「一次」那一点 ——
+// **那一点根本没进公式**，所以那条测试一直在用守卫的 1.0 与 `{100,50}` 的 0.7126
+// 相比，而不是在比公式。**一条读作「界随证据收紧」的测试，它的一半在函数之外。**
+//
+// ★ 另一半：`m > 1` 的夹取在 `Exploration = 0.25` 下从 n≈20 起就开始生效
+// （`{20,2}` 的 mean 是 0.9091、width 是 0.0975 ⇒ 夹到 1；`{1000,1}` 的 mean 是
+// 0.9990 ⇒ 也夹到 1）。所以一个 1000 次全成的技能与一个从没跑过的技能**仍然
+// 同为 1**。夹取本身是对的（一个概率不能大于 1），要改的不是它 ——
+// 是**上面那一档不该借走它的答案**。
 func (p Posterior) UpperBound() float64 {
 	n := p.Count() - 2 // subtract the prior's two pseudo-counts
-	if n <= 1 {
-		return 1.0
+	if n <= 0 {
+		// ★ `n = 0`：公式里 `log(1)/0` 没有定义，所以这是一个**选择**，
+		// 不是一次计算。它有自己的名字与自己的理由。
+		return UnobservedUpperBound
 	}
 	width := Exploration * math.Sqrt(math.Log(1+n)/n)
 	m := p.Mean() + width
@@ -160,6 +182,17 @@ func (p Posterior) UpperBound() float64 {
 	}
 	return m
 }
+
+// UnobservedUpperBound 是**零观测**时 `UpperBound` 的答案。
+//
+// 它是一个具名的选择，不是公式的一个结果：`width = Exploration * sqrt(log(1)/0)`
+// 是 `0/0`，没有定义。这个值说的是「一个还没试过的动作要显得有希望，而不是
+// 未知因而回避」—— 与 `Exploration` 那条注释是同一件事的两半，所以它取最大。
+//
+// ★ 它此前是一个裸的 `1.0`，与「跑过一次」共用同一行 `if n <= 1 { return 1.0 }`。
+// 两档合并的代价不是难看：**它让「没试过」与「试过一次」在报价里同价**，
+// 而那两件事的差别正是这个函数存在的理由。
+const UnobservedUpperBound = 1.0
 
 // RulesOf reports, per key, the distinct judging-rule identities behind its
 // observations.

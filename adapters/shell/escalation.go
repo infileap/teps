@@ -83,16 +83,50 @@ func (s *server) handleEscalation(f core.Frame, out *core.Frame) bool {
 	return true
 }
 
-func offersOf(in []offerJSON) []arbiter.Offer {
+// ★★★ 顶层那个 `task_class` 必须**被读**，否则它是一句被接受然后丢掉的话。
+//
+// `quoteBody` 有 `TaskClass`，`decideBody` 也有 —— 而 `priceOf` 此前**根本不读它**：
+// 后验是按 `offer.TaskClass` 查的，于是顶层给了 `task_class`、offer 里没给时，
+// 这次报价是**在空类下**读的（也就是先验）。实测（`{s.a, task_exec}` 攒了 20 次
+// 全成、`mean=0.9628`、`upper=1`）：
+//
+//	① quote：顶层 task_class=task_exec，offer 里不给
+//	   -> p = 1  utility = 9      ← 读的是 `{s.a, ""}` 的先验
+//	② quote：顶层给、offer 里也给 task_exec
+//	   -> p = 1  utility = 9      ← 两档恰好都是 1，看不出差别
+//	③ decide 对①那一份会**拒**：
+//	   "the decision names task class task_exec but the price it cites was read under :"
+//
+// ③ 那句话里的空串就是证据：**价格是在空类下读的**。而**两扇门对同一个字段
+// 给了相反的答案** —— `decide` 拒、`quote` 收。
+//
+// `priceOf` 那条注释（「Two computations of the same price is how a system ends up
+// quoting one number and acting on another」）与 Round 47 在 `decide` 上的注释
+// （「`priceOf` 根本不读它」）说的是同一件事；这一轮补的是**它真的读**。
+//
+// 判据取「调用方说了就用它、offer 自己也说了就必须一致」：一个不点名的报价
+// 没有错（沿用 offer 自己的类），一个点名点错的必须被拒，而不是被静默改写成
+// 对的那个。
+func offersOf(in []offerJSON, taskClass string) ([]arbiter.Offer, *core.Refusal) {
 	out := make([]arbiter.Offer, 0, len(in))
 	for _, o := range in {
+		tc := o.TaskClass
+		switch {
+		case tc == "":
+			// ★ 调用方在顶层说了，就用它 —— 这才是「被读」。
+			tc = taskClass
+		case taskClass != "" && tc != taskClass:
+			return nil, core.Refuse(core.CodeBadRequest,
+				"the quote names task class "+taskClass+" but the offer for "+o.Skill+
+					" was priced under "+tc+": the same price cannot be read under two classes")
+		}
 		out = append(out, arbiter.Offer{
-			Action: arbiter.Action(o.Action), Skill: o.Skill, TaskClass: o.TaskClass,
+			Action: arbiter.Action(o.Action), Skill: o.Skill, TaskClass: tc,
 			Value: o.Value, Cost: o.Cost, Latency: o.Latency, LatencyWeight: o.LatencyWeight,
 			Pinned: o.Pinned, UsePinned: o.UsePinned,
 		})
 	}
-	return out
+	return out, nil
 }
 
 // priceOf is the single place a price is computed.
@@ -101,7 +135,10 @@ func offersOf(in []offerJSON) []arbiter.Offer {
 // system ends up quoting one number and acting on another — the same class of
 // defect as two gates assigning different refusal codes to one fact.
 func (s *server) priceOf(body quoteBody) ([]arbiter.Ranked, arbiter.Ranked, string, *core.Refusal) {
-	offers := offersOf(body.Offers)
+	offers, ref := offersOf(body.Offers, body.TaskClass)
+	if ref != nil {
+		return nil, arbiter.Ranked{}, "", ref
+	}
 	if len(offers) == 0 {
 		return nil, arbiter.Ranked{}, "", core.Refuse(core.CodeBadRequest,
 			"a quote needs offers: there is nothing to price")

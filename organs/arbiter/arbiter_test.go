@@ -175,11 +175,58 @@ func TestAnAbandonedSkillCanComeBack(t *testing.T) {
 	t.Logf("a skill that failed 30 times recovered from %.3f to %.3f in 30 successes", low, high)
 }
 
+// ★★★ 界必须随证据收紧 —— 而**两边的点都必须在公式里面**。
+//
+// 此前这一条拿 `{2,1}` 当「一次」那一点，而 `{2,1}` 的 `n = 1` 那时被
+// `if n <= 1 { return 1.0 }` 接走了：**那一点根本没进公式**。所以它比的是
+// 「守卫的 1.0」与「`{100,50}` 的 0.7126」，而不是在比公式 ——
+// **一条读作「界随证据收紧」的测试，它的一半在函数之外。**
+//
+// 正确的比法是**固定均值、只加证据**：`{10,5}` 与 `{100,50}` 的均值都是
+// 0.6667，而 n 从 13 涨到 148。那才是「同一个成功率、更多证据」。
 func TestUpperBoundShrinksWithEvidence(t *testing.T) {
+	few := Posterior{Alpha: 10, Beta: 5}
+	many := Posterior{Alpha: 100, Beta: 50}
+	if few.Mean() != many.Mean() {
+		t.Fatalf("this test is only about evidence: the two means must be equal, got %.4f vs %.4f",
+			few.Mean(), many.Mean())
+	}
+	lo, hi := few.UpperBound(), many.UpperBound()
+	if hi >= lo {
+		t.Fatalf("the bound must tighten as evidence accumulates at a fixed mean: few=%.4f many=%.4f", lo, hi)
+	}
+	// ★ 而两边都必须真的**进了公式** —— 否则这一条又会退化成比较两个守卫。
+	if lo == UnobservedUpperBound {
+		t.Fatalf("the few-evidence point must be computed by the formula, not answered by the unobserved case: %.4f", lo)
+	}
+	if hi == UnobservedUpperBound {
+		t.Fatalf("the many-evidence point must be computed by the formula: %.4f", hi)
+	}
+}
+
+// ★★★ 零观测与一次观测是两档，不是一档。
+//
+// 它们此前共用 `if n <= 1 { return 1.0 }`，于是**一个跑过一次的技能与一个从没
+// 跑过的技能报价一模一样**。而 `n = 1` 时公式是有定义的：`log(2)/1 = 0.693`。
+func TestOneObservationIsNotTheSameAsNone(t *testing.T) {
+	none := Prior().UpperBound()
 	once := Posterior{Alpha: 2, Beta: 1}.UpperBound()
-	many := Posterior{Alpha: 100, Beta: 50}.UpperBound()
-	if many >= once {
-		t.Fatalf("the bound must tighten as evidence accumulates: once=%.4f many=%.4f", once, many)
+	if none != UnobservedUpperBound {
+		t.Fatalf("zero observations are the named choice: got %.4f", none)
+	}
+	if once == UnobservedUpperBound {
+		t.Fatalf("one observation must be computed, not answered by the zero-observation case: %.4f", once)
+	}
+	// ★ 而它必须是那个公式给的数：mean + Exploration * sqrt(log(2)/1)。
+	want := Posterior{Alpha: 2, Beta: 1}.Mean() + Exploration*math.Sqrt(math.Log(2))
+	if math.Abs(once-want) > 1e-12 {
+		t.Fatalf("one observation should be %.6f, got %.6f", want, once)
+	}
+	// ★ 而且它必须仍然**高于均值** —— 否则「没试过的要显得有希望」那一半就没了。
+	// ★ 复合字面量出现在 if 的条件里必须加括号：不加的话 `{` 与块的开头
+	// 分不开（Go 的解析器就是这么规定的）。
+	if once <= (Posterior{Alpha: 2, Beta: 1}).Mean() {
+		t.Fatalf("the bound must exceed the mean: %.4f", once)
 	}
 }
 
