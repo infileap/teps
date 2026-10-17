@@ -63,6 +63,90 @@ def producers(names):
     return counts
 
 
+# ★★★ 契约点名过的每一个清单字段，要么**有人执行**，要么**标明没人执行**。
+#
+# 这一条是被 `idempotent` / `effects` / `preconditions` / `postconditions` /
+# `on_failure` 逼出来的：它们都在 `docs/CONTRACT.md` 的 Skill ABI 那一行里，
+# 而实测（非测试代码里的读次数）是 **0**。
+#
+# 一个字段被点名却没人执行，只有**写下来**才算「已声明的缺口」，否则它读起来
+# 像一条承诺 —— 与帧表那条（「契约写了但没人分派 = 文档在承诺一个不存在的
+# 入口」）是同一条，只是对象换成了字段。
+#
+# 判据是**可算的**：
+#   1. 从清单结构体里取每一个 `json:"名字"` 标签；
+#   2. 把它转成 Go 字段名，数非测试代码里的读（`.Name` 后面不是 `=`）；
+#   3. 读次数为 0 时，契约的 ABI 段里必须有一个带 `⬜` 的行提到那个 json 名字。
+MANIFEST_TAG = re.compile(r'^\t([A-Z]\w*)\s+[^`]*`json:"([^",]+)')
+
+
+def manifest_fields():
+    """清单结构体里的 (Go 字段名, json 名字) 对。"""
+    src = read("store/manifest.go")
+    out = []
+    inside = False
+    for line in src.splitlines():
+        if re.match(r'^type Manifest struct \{', line):
+            inside = True
+            continue
+        if inside and line.startswith("}"):
+            break
+        if not inside:
+            continue
+        m = MANIFEST_TAG.match(line)
+        if m:
+            out.append((m.group(1), m.group(2)))
+    return out
+
+
+def unenforced_manifest_fields():
+    contract = read("docs/CONTRACT.md")
+    # ABI 那一段：从 `### Skill ABI` 到下一个 `###`
+    start = contract.find("### Skill ABI")
+    end = contract.find("###", start + 1)
+    abi = contract[start:end] if start >= 0 else ""
+    # ★★★ 「标了」必须是**那一行带 ⬜**，不是「那个名字在这一段里出现过」。
+    #
+    # 第一版取的是整个 ABI 段里的反引号名字 —— 而字段清单本身就写着
+    # `effects[]`，于是**去掉表格里那一行的 ⬜ 之后守卫照样绿**：
+    # 判据被字段名自己满足了。实测确认过（删掉 effects 那一行的 ⬜，退出码仍是 0）。
+    #
+    # **一个被「名字出现过」满足的判据，检查的是存在性，不是那件事。**
+    # 与 Round 43 的「认领了却没处理」是同一条：claimed-vs-unclaimed
+    # 变成了 claimed-and-handled-vs-claimed-and-empty。
+    marked = set()
+    for line in abi.splitlines():
+        if "\u2b1c" not in line:
+            continue
+        marked |= set(re.findall(r'`([a-z_]+)[^`]*`', line))
+    problems = []
+    for go_name, json_name in manifest_fields():
+        reads = 0
+        # ★ 定义它的那个文件也要算 —— `Manifest.Validate` 就住在
+        # `store/manifest.go` 里，而 `m.Version == ""` 是一次**读**。
+        # 第一版把整个文件排除掉了，于是 `Version` 被误报。
+        # **这与 Round 55 的 `check_exported_functions_have_callers` 是同一个坑**：
+        # 排除定义文件会把「同一个文件里的使用者」当成不存在。
+        # 结构体声明那一段要抹掉，否则每个字段都会「用到」自己。
+        for path in go_files():
+            body = open(path, encoding="utf-8").read()
+            if path.endswith("store/manifest.go"):
+                body = re.sub(r'^type Manifest struct \{.*?^\}', '', body, flags=re.M | re.S)
+            for m in re.finditer(r'\.' + go_name + r'\b', body):
+                tail = body[m.end():m.end() + 3].lstrip()
+                if tail.startswith("=") and not tail.startswith("=="):
+                    continue
+                reads += 1
+        if reads > 0:
+            continue
+        if json_name in marked:
+            continue
+        problems.append(
+            f"清单字段 {go_name}（json:{json_name}）在非测试代码里一次都没被读，"
+            f"而契约的 Skill ABI 那一段没有用 `\u2b1c` 标出这件事")
+    return problems
+
+
 def main():
     src = read("core/refusal.go")
 
@@ -122,6 +206,14 @@ def main():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ 契约点名过的每一个清单字段，要么有人执行，要么标明没人执行。
+    unenforced = unenforced_manifest_fields()
+    if unenforced:
+        print("这些清单字段被契约点名、而没有任何地方读它们（要么接上，要么在 ABI 段里标 ⬜）：")
+        for u in unenforced:
+            print(f"  {u}")
+        bad += len(unenforced)
 
     print(f"  拒绝码 {len(codes)} 个，文档列出 {len(doc_codes)} 个。")
     return 1 if bad else 0

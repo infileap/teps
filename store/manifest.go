@@ -189,9 +189,22 @@ type Manifest struct {
 	Kind    Kind            `json:"kind"`
 	Input   json.RawMessage `json:"input_schema,omitempty"`
 	Output  json.RawMessage `json:"output_schema,omitempty"`
-	Pre     []string        `json:"preconditions,omitempty"`
-	Post    []string        `json:"postconditions,omitempty"`
-	Verify  []string        `json:"verify_assert"`
+	// ★★★ Pre 与 Post 是**契约点名过、而这一层没有定义过**的两个字段。
+	//
+	// `docs/CONTRACT.md:153` 的 Skill ABI 那一行写着 `preconditions  postconditions`，
+	// 而实测：这两个名字在整个仓库里**只出现在这一行结构体声明里** ——
+	// 没有文档注释、没有 `Validate` 判据、没有任何地方读它们。
+	// 它们会被 `skill.resolve` 报出去（整个清单都被序列化），仅此而已。
+	//
+	// ★ 一个接入方读着 ABI 看见 `preconditions`，**无从知道它是什么形状、
+	// 更不知道它会不会被检查**。而这一行旁边的每一个字段都有注释 ——
+	// 缺的那两个正好是没人执行的那两个。
+	//
+	// ★ 处置与 `docs/CONTRACT.md` 里「契约承诺但尚未实现的帧」那一张表一致：
+	// **明确标出来的缺口不是静默漂移**。所以它们留在这里，但带着这句话。
+	Pre    []string `json:"preconditions,omitempty"`
+	Post   []string `json:"postconditions,omitempty"`
+	Verify []string `json:"verify_assert"`
 	// Refute is the other half of the evidence: cases where the skill must
 	// **not** pass.
 	//
@@ -203,7 +216,13 @@ type Manifest struct {
 	//
 	// So E1 requires both halves. This field is what makes the second half a
 	// claim the verifier can check rather than a sentence in a README.
-	Refute     []Refutation `json:"verify_refute,omitempty"`
+	Refute []Refutation `json:"verify_refute,omitempty"`
+	// ★ OnFailure 与 Effects 同上：契约点名（`on_failure` / `effects[]`），
+	// 清单里带着，`skill.resolve` 报得出来，而**没有一处会读它们**。
+	//
+	// ★ `effects` 尤其值得说一句：它声明的是「这个技能会碰什么」（网络、文件系统、
+	// 进程…），而那正是 `Env.Network` / `Env.Reaches` 在做的事 ——
+	// **同一个事实的两个入口，而只有后一个被检查**。
 	OnFailure  string       `json:"on_failure,omitempty"`
 	Budget     core.Budget  `json:"budget"`
 	Effects    []string     `json:"effects,omitempty"`
