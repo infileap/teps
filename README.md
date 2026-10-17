@@ -361,10 +361,12 @@ bash tools/drive.sh   # 找那一行：技能腐烂后第 N 次失败起被自�
 - **未知证据等级不许被折成 E0**——E0 是真实等级，把 `"E9"` 折成它是把打字错误变成信任决定。
 - **SimHash 半径必须真的分开两个总体**（测试打印 `radius 12 separates near=6 from far=32`，让漂移可见）。
 
-### 六条守卫各自被注入测试证过
+### 七条守卫各自被注入测试证过
 
-★★★ **这个标题此前写的是「五条」，而 `tools/check_all.sh` 里有六条 `selfcheck`**
-（`nomodel` · `clients` · `examples` · `收件箱分账` · `docs` · `organs`）。
+★★★ **这个标题此前写的是「五条」，后来是「六条」，而 `tools/check_all.sh` 里
+现在是七条 `selfcheck`**
+（`nomodel` · `clients` · `examples` · `收件箱分账` · `docs` · `organs` ·
+**`contract`** —— 最后这一条是 Round 85 补上的，见下）。
 ★ 而这一节下面展开的**是另外五条**（`check_kernel` / `check_contract` /
 `check_frames` / `check_organs` / `check_docs`）—— 两个数**说的不是同一件事**，
 而标题只写了一个数：**一个数如果不说它数的是什么，它就会读成另一个数。**
@@ -372,6 +374,13 @@ bash tools/drive.sh   # 找那一行：技能腐烂后第 N 次失败起被自�
 
 ⇒ 标题改成 `selfcheck` 的真实条数（`tools/check_contract.py` 的
 `selfcheck_count()` 核它）；下面那五条仍然是注入测试逼出来的例子。
+
+★★★ **而 `check_contract.py` 自己此前没有自检** —— 它是现在**最大**的一台守卫
+（Round 73–84 往里加了十一条规则），而六条 `selfcheck` 里没有它。
+**一台守卫在某个时刻红过，不等于它现在还能红。**
+⇒ 它现在有了 `self_test()`：把 `_OVERLAY` 设成一份故意违规的文本、跑那条规则、
+看它红不红、然后清掉 —— **自检不碰盘，也不依赖真实文档的内容**（那正是
+`check_docs.py` 的 `self_test()` 注释里写着的那条规矩）。九条规则各一个样本。
 
 **`tools/check_frames.py`（帧守卫）** —— 它第一次运行就抓到 12 处不一致：8 个前缀族
 文档里根本没提，4 个帧文档在承诺而没人实现。它防的是本项目第四次付过的那笔学费：

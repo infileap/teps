@@ -82,6 +82,10 @@ selfcheck "守卫自检 examples" "TEPS_EXAMPLES_SELF_TEST=1 python3 tools/check
 selfcheck "守卫自检 收件箱分账" "TEPS_EF_LEDGER_SELF_TEST=1 python3 tools/ef_ledger.py"
 selfcheck "守卫自检 docs"     "TEPS_DOCS_SELF_TEST=1 python3 tools/check_docs.py"
 selfcheck "守卫自检 organs"   "TEPS_ORGANS_SELF_TEST=1 python3 tools/check_organs.py"
+# ★★★ 这一条此前**没有** —— 而 check_contract.py 是最大的一台守卫
+# （Round 73–84 往里加了十一条规则，没有一条有自检）。
+# 一台守卫在某个时刻红过，不等于它现在还能红。
+selfcheck "守卫自检 contract" "TEPS_CONTRACT_SELF_TEST=1 python3 tools/check_contract.py"
 
 echo
 if [ "$fails" -eq 0 ]; then

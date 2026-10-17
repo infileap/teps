@@ -18,7 +18,20 @@ RETRY_RE = re.compile(r"(Code\w+):\s*(true|false)")
 ROW_RE = re.compile(r"^\|\s*`([a-z_]+)`\s*\|([^|]*)\|\s*(✅|❌)", re.M)
 
 
+# ★★★ `_OVERLAY` 让自检**换掉**被判据读的那份文件的内容，而不碰盘。
+#
+# 自检必须证明「判据还看得见」，而不是「真实的文档里恰好有一处违规」——
+# 后者在别人清理了文档之后会变成一个**假的失败**（`check_docs.py` 的
+# `self_test()` 为同一件事栽过一次，它的注释逐字写着那件事）。
+#
+# 所以自检把 `_OVERLAY[rel]` 设成一份**故意违规**的文本，跑判据，看它红不红，
+# 然后清掉。真实文件一个字节都不动。
+_OVERLAY = {}
+
+
 def read(rel):
+    if rel in _OVERLAY:
+        return _OVERLAY[rel]
     with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
         return f.read()
 
@@ -685,7 +698,90 @@ def selfcheck_count():
     return out
 
 
+# ★★★ 自检：每一条规则都必须**还看得见**。
+#
+# 这一条是被 Round 84 逼出来的：我按「我已经修好的那一份」写了判据，于是它
+# 只认得那一份，另外三份在它眼里不存在。**一台守卫在某个时刻红过，不等于它
+# 现在还能红。**
+#
+# 而 `check_all.sh` 里有六条 selfcheck（nomodel / clients / examples / 收件箱分账 /
+# docs / organs），**唯独没有 `check_contract.py`** —— 而这个文件现在是最大的一台
+# 守卫，Round 73–84 往里加了十一条规则，**没有一条有自检**。
+#
+# 判据（与 check_docs.py 的 self_test 同一个做法）：把 `_OVERLAY` 设成一份
+# **故意违规**的文本，跑那条规则，看它红不红，然后清掉。
+# ★ 自检**不碰盘**，也不依赖真实文档的内容。
+# ★★★ 每一条还要一个 `must_mention`：报出来的那句话里**必须出现**的片段。
+#
+# 这是被一次实测逼出来的：把 `outcome` 那条规则的正则**弄瞎**之后，自检仍然报
+# `SELF-TEST OK` —— 因为那条规则有一条「读不出来」的退路，而自检只判
+# 「返回的列表非空」。**存在性判据又一次假扮成一致性判据**（Round 43 的老毛病）：
+# 自检证明的是「那条规则响了」，不是「那条规则在比」。
+# 一条永远返回「我读不出来」的规则，会永远通过这种自检。
+#
+# 所以判据改成：**报出来的理由里必须出现被注入的那个值** —— 那才说明它是
+# **比出来的**，不是**找不到**。
+SELF_TESTS = [
+    # (规则名, {rel: 违规文本}, 那条规则, 理由里必须出现的片段)
+    ("channels", {"docs/CONTRACT.md": "（这里没有提到任何一个通道名）"},
+     undocumented_channels, "canary"),
+    ("levels", {"docs/CONTRACT.md": "（这里没有提到任何一个等级名）"},
+     undocumented_levels, "E1"),
+    ("outcome", {"docs/CONTRACT.md": '{"outcome": "ok|error"}'},
+     outcome_vocabulary_mismatches, "error"),
+    ("chain-record", {"docs/CONTRACT.md": "```jsonc\n{\"rec\": \"x\"}\n```\n"},
+     chain_record_mismatches, "attempt"),
+    ("kind", {"docs/CONTRACT.md": "`kind` 是**执行形态的调度键**：`nope`。"},
+     kind_vocabulary_mismatches, "compose"),
+    ("action", {"docs/CONTRACT.md": "### Action ABI\n\n| `Action` | 含义 |\n|---|---|\n| `nope` | 无 |\n"},
+     action_vocabulary_mismatches, "local"),
+    ("state-diagram", {"docs/CONTRACT.md": "```\nready --nope--> routing\n```\n"},
+     state_diagram_mismatches, "ready"),
+    ("doc-numbers", {"docs/KERNEL.md": "| Refusal | `Refusal` + 999 个拒绝码常量 | `core/refusal.go` |"},
+     doc_number_mismatches, "999"),
+    ("selfcheck-count", {"README.md": "### 九条守卫各自被注入测试证过\n"},
+     selfcheck_count, "九"),
+]
+
+
+def self_test():
+    """两半：证明它还看得见，证明看见了会红。"""
+    bad = []
+    for name, overlay, rule, must in SELF_TESTS:
+        _OVERLAY.clear()
+        _OVERLAY.update(overlay)
+        try:
+            got = rule()
+        finally:
+            _OVERLAY.clear()
+        if not got:
+            bad.append(f"自检：规则 {name} 在被注入违规之后**没有报出来** —— 它看不见了")
+        elif not any(must in g for g in got):
+            # ★ 响了，但理由里没有那个被注入的值 ⇒ 它是「找不到」，不是「比出来」。
+            bad.append(f"自检：规则 {name} 响了，但理由里没有 {must!r} —— "
+                       f"它报的是「读不出来」而不是「比出来」：{got[0][:80]}")
+    # ★ 而反过来：把 overlay 清掉之后，那条规则对真实文档不许残留自检的违规。
+    for name, _, rule, must in SELF_TESTS:
+        got = rule()
+        if got and all(must in g or "999" in g or "nope" in g for g in got):
+            bad.append(f"自检：规则 {name} 在真实文档上残留了自检的违规")
+    return bad
+
+
 def main():
+    if os.environ.get("TEPS_CONTRACT_SELF_TEST") == "1":
+        bad = self_test()
+        if bad:
+            for b in bad:
+                print("  " + b)
+            print(f"契约守卫自检失败：{len(bad)} 处")
+            return 1
+        print(f"SELF-TEST OK  契约守卫：{len(SELF_TESTS)} 条规则都还看得见，且看见了会红")
+        return 1
+    return run()
+
+
+def run():
     src = read("core/refusal.go")
 
     # The const block gives name -> code; the retryable map keys by name,
