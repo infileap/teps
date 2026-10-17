@@ -236,3 +236,131 @@ func TestAnOpenHostStillRefusesEveryAttempt(t *testing.T) {
 		}
 	}
 }
+
+// ★★★ 一个解释规则的帧，看不出规则此刻有没有被用上。
+//
+// Round 56 把半开的探针做成了一份**租约**（`s.breakers.probes`），`allowHost`
+// 在占不到位时拒绝。而 `breaker.state` 留在原地。实测（同一个宿主 `/bin/sh`，
+// 预算 800ms、脚本 sleep 5）：
+//
+//	② 冷却过去、还没放探针： [{"host":"/bin/sh","state":"half-open"}]
+//	③ 探针正在飞：           [{"host":"/bin/sh","state":"half-open"}]   ← 与 ② **逐字相同**
+//	③b 而此刻另一次尝试：      err=circuit_open
+//	   "host /bin/sh is half-open and a probe (p1) is already in flight: …"
+//
+// **同一个回答，两件相反的事**：② 里槽是空的（新尝试会被放行），③ 里槽被占了
+// （新尝试会被拒）。而 `breaker.state` 的 `basis` 那句逐字写着
+// 「half-open admits exactly one probe」—— **它解释的那条规则，它自己看不出来。**
+func breakerStateOf(t *testing.T, s *server) map[string]any {
+	t.Helper()
+	var out core.Frame
+	s.handleBreaker(core.Frame{T: "breaker.state", V: 1}, &out)
+	if out.Err != nil {
+		t.Fatalf("breaker.state refused: %s", out.Err.Reason)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out.Body, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return got
+}
+
+func hostRow(t *testing.T, body map[string]any, host string) map[string]any {
+	t.Helper()
+	for _, r := range body["hosts"].([]any) {
+		row := r.(map[string]any)
+		if row["host"] == host {
+			return row
+		}
+	}
+	t.Fatalf("no row for %s in %v", host, body["hosts"])
+	return nil
+}
+
+func TestTheHalfOpenSlotIsVisible(t *testing.T) {
+	s := halfOpenServer(t)
+
+	free := breakerStateOf(t, s)
+	if free["probes_in_flight"] != float64(0) {
+		t.Fatalf("nothing is in flight yet, got %v", free["probes_in_flight"])
+	}
+	if hostRow(t, free, "host.x")["probe_in_flight"] != false {
+		t.Fatalf("the slot is free: %v", hostRow(t, free, "host.x"))
+	}
+
+	// ★ 占住那一个探针。
+	if ref := s.allowHost("host.x", "probe-1"); ref != nil {
+		t.Fatalf("the first probe must be admitted: %s", ref.Reason)
+	}
+	held := breakerStateOf(t, s)
+	if held["probes_in_flight"] != float64(1) {
+		t.Fatalf("a probe is in flight, got %v", held["probes_in_flight"])
+	}
+	row := hostRow(t, held, "host.x")
+	if row["probe_in_flight"] != true {
+		t.Fatalf("the row must say the slot is taken: %v", row)
+	}
+	// ★ 而它必须点名**那一个探针** —— 「有一个探针」不说是哪一个，读的人没法去查它。
+	if row["probe_attempt"] != "probe-1" {
+		t.Fatalf("the row must name the attempt holding the slot, got %v", row["probe_attempt"])
+	}
+	// ★ 而**状态没变** —— 变的只是槽。这两件事必须是两个数。
+	if row["state"] != free["hosts"].([]any)[0].(map[string]any)["state"] {
+		t.Fatalf("the state did not change, only the slot: %v vs %v", row["state"], free["hosts"])
+	}
+
+	// ★ 而它回来之后槽必须还回去。
+	//
+	// ★ 一个**成功**的探针会把状态推到 closed（那一条 ok 打断了连续失败的串），
+	// 于是那一行不再有「槽」这个概念 —— 所以这里用一次**失败**的探针，
+	// 让状态留在 open，才能观察「槽还回去了、而宿主仍然不放行」这两件事同时成立。
+	s.recordTrip("host.x", "refused", "probe-1")
+	back := breakerStateOf(t, s)
+	if back["probes_in_flight"] != float64(0) {
+		t.Fatalf("the slot must be given back, got %v", back["probes_in_flight"])
+	}
+	rowBack := hostRow(t, back, "host.x")
+	if rowBack["state"] != string(breaker.Open) {
+		t.Fatalf("a failed probe puts the host back to open, got %v", rowBack["state"])
+	}
+	// ★ 而 open 的宿主没有槽 —— 一个都不放，所以「槽空着」这句话在这里不成立。
+	if _, has := rowBack["probe_in_flight"]; has {
+		t.Fatalf("an open host has no slot: %v", rowBack)
+	}
+	// ★ 而它必须仍然拒绝一切 —— 探针失败之后重新等一个冷却期。
+	if ref := s.allowHost("host.x", "probe-2"); ref == nil {
+		t.Fatal("a failed probe must not open the gate again")
+	}
+}
+
+// ★★★ 而**一个我写错了的测试**留在这里作记录。
+//
+// 我本来写了 `TestASlotGivenBackIsNotTheSameAsOneNeverTaken`，断言「探针回来了」
+// 与「探针从来没派出去」在**槽**这件事上相同（都是空）、在**状态**上不同。
+// 它红了，而**红得对**：一次**失败**的探针会把宿主推回 `open`，而
+// **open 的宿主没有「槽」这个概念** —— 那一行里根本没有 `probe_in_flight` 这个键。
+// 于是 `given["probe_in_flight"]` 是 `nil`、`never[...]` 是 `false`，两者不同。
+//
+// 我断言的是一个**设计上故意不存在**的区分。删掉它，并把这件事写在这里：
+// **一条按「我以为的对称」写出来的测试，红了是它在纠正我，不是在妨碍我。**
+
+// ★ 反向对照：**开着**的宿主没有「槽」这一说 —— 它一个都不放。
+// 这一条防的是「给每个宿主都加上 probe_in_flight 这个键」那种改法。
+func TestAnOpenHostHasNoSlot(t *testing.T) {
+	s := breakerServer(t)
+	now := time.Now().UnixMilli()
+	for i := 0; i < breaker.Threshold; i++ {
+		trip(t, s, "host.x", now, false)
+	}
+	body := breakerStateOf(t, s)
+	row := hostRow(t, body, "host.x")
+	if row["state"] != string(breaker.Open) {
+		t.Fatalf("precondition: want open, got %v", row["state"])
+	}
+	if _, has := row["probe_in_flight"]; has {
+		t.Fatalf("an open host admits nothing, so it has no slot: %v", row)
+	}
+	if body["probes_in_flight"] != float64(0) {
+		t.Fatalf("nothing is in flight: %v", body["probes_in_flight"])
+	}
+}

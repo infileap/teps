@@ -201,10 +201,33 @@ func (s *server) breakerState(f core.Frame, out *core.Frame) {
 	now := time.Now().UnixMilli()
 	s.breakers.lock()
 	trips := append([]breaker.Trip(nil), s.breakers.trips...)
+	// ★★★ 探针占位也要一起取出来 —— 它此前**一个字都没报**。
+	//
+	// Round 56 把半开的探针做成了一份**租约**（`s.breakers.probes`），
+	// `allowHost` 在占不到位时拒绝。而 `breaker.state` 留在原地。实测
+	// （同一个宿主 `/bin/sh`，预算 800ms、脚本 sleep 5）：
+	//
+	//   ② 冷却过去、还没放探针： [{"host":"/bin/sh","state":"half-open"}]
+	//   ③ 探针正在飞：           [{"host":"/bin/sh","state":"half-open"}]   ← 与 ② **逐字相同**
+	//   ③b 而此刻另一次尝试：      err=circuit_open
+	//      "host /bin/sh is half-open and a probe (p1) is already in flight: …"
+	//
+	// **同一个回答，两件相反的事**：② 里槽是空的（新尝试会被放行），③ 里槽被占了
+	// （新尝试会被拒）。而 `breaker.state` 的 `basis` 那句逐字写着
+	// 「half-open admits exactly one probe」—— **一个解释规则的帧，看不出规则此刻
+	// 有没有被用上。**
+	//
+	// ★ 这与 Round 45 的 `open` 数 `st != Closed` 是同一条（一个名字读作 A 而
+	// 值是 B），也与这一整轮的「补一扇门不叫修好一个缺陷」是同一条。
+	probes := make(map[string]probeLease, len(s.breakers.probes))
+	for h, p := range s.breakers.probes {
+		probes[h] = p
+	}
 	s.breakers.unlock()
 
 	rows := make([]map[string]any, 0)
 	open, halfOpen, closed := 0, 0, 0
+	inFlight := 0
 	for _, h := range breaker.Hosts(trips) {
 		st := breaker.StateOf(trips, h, now)
 		// ★★★ 三个状态、三个计数。
@@ -233,6 +256,19 @@ func (s *server) breakerState(f core.Frame, out *core.Frame) {
 				row["reason"] = ref.Reason
 			}
 		}
+		// ★ 半开的宿主必须报出「那一个探针现在在不在飞」。
+		if st == breaker.HalfOpen {
+			if p, held := probes[h]; held && p.expires > now {
+				inFlight++
+				row["probe_in_flight"] = true
+				row["probe_attempt"] = p.attempt
+				row["probe_expires_at"] = p.expires
+			} else {
+				// ★ 槽是空的 —— 这与「有探针在飞」是**相反**的两件事，
+				// 而它们此前在回答里长得一样。
+				row["probe_in_flight"] = false
+			}
+		}
 		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i]["host"].(string) < rows[j]["host"].(string) })
@@ -244,6 +280,10 @@ func (s *server) breakerState(f core.Frame, out *core.Frame) {
 		"half_open":   halfOpen,
 		"closed":      closed,
 		"hosts_total": len(rows),
+		// ★ 而半开的那几个里，有几个**此刻正拿着那一个探针**。
+		// `half_open: 1` 说的是「有一个宿主在半开」，`probes_in_flight` 说的是
+		// 「那一个探针已经派出去了」—— 两件事两个数。
+		"probes_in_flight": inFlight,
 		// The two numbers the state is made of, reported next to it so a reader
 		// can check the state rather than take it.
 		"threshold":   breaker.Threshold,

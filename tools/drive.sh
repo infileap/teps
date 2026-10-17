@@ -2171,6 +2171,47 @@ else
 fi
 expect "★ 它说清这三个计数与 hosts 里那些 state 是同一批事实" "$r" 'half-open is not open'
 
+# ★★★ 而 `half-open` 那一行必须说出**那一个探针现在在不在飞**。
+#
+# Round 56 把半开的探针做成了一份**租约**（`s.breakers.probes`），`allowHost`
+# 在占不到位时拒绝。而 `breaker.state` 留在原地。实测（同一个宿主 `/bin/sh`，
+# 预算 800ms、脚本 sleep 5）：
+#
+#   ② 冷却过去、还没放探针： [{"host":"/bin/sh","state":"half-open"}]
+#   ③ 探针正在飞：           [{"host":"/bin/sh","state":"half-open"}]   ← 与 ② **逐字相同**
+#   ③b 而此刻另一次尝试：      err=circuit_open
+#      "host /bin/sh is half-open and a probe (p1) is already in flight: …"
+#
+# **同一个回答，两件相反的事**：② 里槽是空的（新尝试会被放行），③ 里槽被占了
+# （新尝试会被拒）。而这一帧的 `basis` 那句逐字写着
+# 「half-open admits exactly one probe」—— **它解释的那条规则，它自己看不出来。**
+#
+# 这里只断言**没有探针在飞**的那一半（放一个探针进去要真的等一个冷却期，
+# 而一条要等 31 秒的断言就是一条会被跳过的断言）；在飞的那一半由
+# adapters/shell/breaker_test.go 的 TestTheHalfOpenSlotIsVisible 覆盖。
+# ★ 而「半开的那一行里有 probe_in_flight」这一条**在这里断言不了**：此刻那个宿主
+# 是 `open`，而 open 的宿主一个都不放、**没有槽这个概念**（上面那段 python 正是
+# 在检查这一点）。那一半由 adapters/shell/breaker_test.go 的
+# TestTheHalfOpenSlotIsVisible 覆盖 —— **一条在当前夹具下不可能为真的断言，
+# 不是一条更严的断言，是一条永远红的断言。**
+expect "★★ 而这个数说的是「有几个探针已经派出去了」" "$r" '"probes_in_flight"'
+expect "★★ 此刻一个都没派出去" "$r" '"probes_in_flight":0'
+# ★ 而那个等式要**算**出来：probes_in_flight 必须等于那些行里 probe_in_flight 为真的个数。
+if printf '%s' "$r" | python3 -c '
+import json,sys
+b=json.load(sys.stdin)["body"]
+n=sum(1 for h in b["hosts"] if h.get("probe_in_flight"))
+assert b["probes_in_flight"]==n, (b["probes_in_flight"], n)
+# ★ 而**只有半开的那些行**才有这个键 —— open 的宿主一个都不放，没有槽这一说。
+for h in b["hosts"]:
+    if h["state"]!="half-open":
+        assert "probe_in_flight" not in h, ("只有半开有槽", h)
+'; then
+  printf '  ok    ★★ probes_in_flight 与那些行算出来的个数一致，且只有半开有槽（算出来的）\n'
+else
+  printf '  FAIL  ★★ probes_in_flight 与那些行对不上\n'; fails=$((fails + 1))
+fi
+
 # ★ 一个宿主坏了，不该把别的宿主一起关掉。
 r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"ns7\",\"body\":{\"ref\":\"$xok\",\"attempt\":\"n-after-open\",\"task_class\":\"task_exec\"}}")
 expect "★ 另一个宿主完全不受影响（坏的是那个解释器，不是这台机器）" "$r" '"outcome":"ok"'
