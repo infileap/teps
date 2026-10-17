@@ -486,6 +486,45 @@ def kind_vocabulary_mismatches():
     return out
 
 
+# ★★★ 契约写了 arbiter 的四帧，却从来没有列过仲裁器可以选的那些动作。
+#
+# `organs/arbiter/escalation.go:45-61` 声明**恰好六个**，而契约里以单词边界出现
+# 的次数是 —— local **0** · ask_human **0** · degrade **0** · escalate **1**
+# （而那一次是状态机的事件 `verifying --escalate--> escalating`，**不是动作**）。
+#
+# **一个读契约的人看不出仲裁器会在哪几个动作之间选。**
+#
+# 判据：`Action\w+ Action = "…"` 的每个值都必须在契约那一节的表里；
+# 表里列的每个值也必须是代码真的声明的。
+ACTION_DECL = re.compile(r'^\tAction\w+\s+Action\s*=\s*"([a-z_]+)"', re.M)
+ACTION_ROW = re.compile(r'^\| `([a-z_]+)` \|', re.M)
+ACTION_SECTION = "### Action ABI"
+
+
+def action_vocabulary_mismatches():
+    declared = set(ACTION_DECL.findall(read("organs/arbiter/escalation.go")))
+    if not declared:
+        return ["一个 Action 声明都找不到：判据的前提变了"]
+    contract = read("docs/CONTRACT.md")
+    a = contract.find(ACTION_SECTION)
+    if a < 0:
+        return [f"契约里找不到那一节（{ACTION_SECTION}）"]
+    b = contract.find("###", a + 1)
+    sect = contract[a:b]
+    # ★ 表**头**那一行也是 `| \`Action\` | 含义… |` —— 只看表头分隔行之后的行。
+    sep = re.search(r'^\|[\s\-:|]+\|\s*$', sect, re.M)
+    body = sect[sep.end():] if sep else sect
+    listed = set(ACTION_ROW.findall(body))
+    out = []
+    for v in sorted(declared):
+        if v not in listed:
+            out.append(f"动作 {v} 在 organs/arbiter/escalation.go 里被声明，而契约那一节的表里没有它")
+    for v in sorted(listed):
+        if v not in declared:
+            out.append(f"契约那一节的表里列了动作 {v}，而代码里没有声明它")
+    return out
+
+
 def main():
     src = read("core/refusal.go")
 
@@ -545,6 +584,11 @@ def main():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ 仲裁器的动作表必须与真的 Action 声明对得上。
+    for u in action_vocabulary_mismatches():
+        print(u)
+        bad += 1
 
     # ★★★ kind 那张表必须与真的 Kind 声明对得上。
     for u in kind_vocabulary_mismatches():

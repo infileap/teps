@@ -187,6 +187,29 @@ provenance{source, url, commit, captured_at}
 组合技能另有三条（见 [../store/README.md](../store/README.md)）：
 数据流接线、`evidence = min(子技能)`、可靠性是乘积 `∏P_i`。
 
+### Action ABI
+
+★★★ **这一段此前不存在。** 契约在帧表里写了 `arbiter.observe` / `arbiter.rank` /
+`arbiter.state` / `arbiter.fix` 四帧，却**从来没有列过仲裁器可以选的那些动作**。
+实测：`organs/arbiter/escalation.go:45-61` 声明**恰好六个**，而契约里以单词边界
+出现的次数是 —— `local` **0** · `ask_human` **0** · `degrade` **0** · `escalate` **1**
+（而那一次是状态机的事件 `verifying --escalate--> escalating`，**不是动作**）。
+
+**一个读契约的人看不出仲裁器会在哪几个动作之间选。**
+
+| `Action` | 含义（逐字取自 `escalation.go` 的注释） |
+|---|---|
+| `local` | answers from what is already known. Nearly free, low ceiling. |
+| `skill` | runs a stored skill. Deterministic when it works at all. |
+| `shadow` | explores on a fork: real compute, no side effects. |
+| `escalate` | asks an outside expert. **Expensive in money and latency.** |
+| `ask_human` | the most expensive thing available, in wall-clock time. |
+| `degrade` | answers honestly with less. Its cost is near zero and so is its value, and having it in the set is what stops the arbiter from having to choose between an overpriced action and nothing. |
+
+★★ **而那条分界是钱**：`func spendsOutsideMoney(a Action) bool { return a == ActionEscalate || a == ActionAskHuman }`
+（`organs/arbiter/escalation.go`）。`ShouldEscalate` 拿**付费**里效用最高的那个
+去比**其余四个**里最高的那个 —— **这六个动作不是一张平表，中间有一条钱的线。**
+
 ### Evidence ABI
 
 ★★★ **这一段此前不存在，而 A6 却把它当成定义过的。** 上面 A6 那一行写的是
