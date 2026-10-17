@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import re
 import sys
@@ -197,7 +198,69 @@ def rel(path):
         return str(path)
 
 
+# ★★★ 自检：四条判据必须**还看得见**。
+#
+# 这一台守卫的四条判据里，有两条是**纯的**（`subwords` 与 `go_direct_requires`
+# 都只吃字符串），所以自检根本不需要碰盘 —— 与 check_assertions.py 同一条路。
+# 另外两条（`count_lines` / `public_types`）吃文件，用一个临时目录喂它们。
+#
+# 判据分两半，与 check_docs.py 的 self_test() 同一条：
+#   ① 喂它一个**违规**的样本 ⇒ 必须报出来；
+#   ② 喂它一个**干净**的样本 ⇒ 不许报（否则它是「永远红」，不是「看得见」）。
+def self_test() -> int:
+    bad = []
+
+    # ---- 第 4 条：领域词。前提是 camelCase 切分。 ----
+    if "gain" not in list(subwords("TotalGain")):
+        bad.append("自检：subwords('TotalGain') 没有切出 gain —— 第 4 条守卫的前提没了")
+    # ★ 而它**刻意不**误伤：`bargain` 不许切出 `gain`（DOMAIN_WORDS 的注释逐字写着这件事）。
+    if "gain" in list(subwords("bargain")):
+        bad.append("自检：subwords('bargain') 切出了 gain —— 那是 DOMAIN_WORDS 注释里说好不许发生的误伤")
+
+    # ---- 第 2 条：直接依赖。 ----
+    sample = "module x\n\nrequire (\n\tgithub.com/foo/bar v1.0.0\n)\n\nreplace zz => ../zz\n"
+    got = go_direct_requires(sample)
+    if "github.com/foo/bar" not in got:
+        bad.append("自检：go_direct_requires 没看见 require 块里的依赖")
+    if not any(g.startswith("replace ") for g in got):
+        bad.append("自检：go_direct_requires 没看见 replace —— 注释逐字写着它也算耦合")
+    if go_direct_requires("module x\n\ngo 1.21\n"):
+        bad.append("自检：一个零依赖的 go.mod 被 go_direct_requires 报了东西")
+
+    # ---- 第 1 与第 3 条：吃文件的，用临时目录。 ----
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        (d / "a.go").write_text("package a\n\n\ntype Big struct{}\n", encoding="utf-8")
+        (d / "b.go").write_text("package a\n\ntype small struct{}\n", encoding="utf-8")
+        (d / "a_test.go").write_text("package a\n\n// 测试文件不该计入行数\n", encoding="utf-8")
+        files = sorted(d.glob("*.go"))
+        # 第 1 条：只数非空行，且跳过 _test.go。
+        # ★ 每个文件是 2 个非空行（`package a` 与 `type …`）—— 第一版我按 3 写，
+        # 而那是**我数错了**，不是判据错了。自检的期望值也是要被核的东西。
+        n = count_lines(files)
+        if n != 4:
+            bad.append(f"自检：count_lines 该数出 4 行（两个非测试文件各 2 行），数出了 {n}")
+        # 第 3 条：只收大写开头的类型。★ 它回的是 (名字, 路径) 的**对**。
+        types = [n for n, _ in public_types(files)]
+        if "Big" not in types:
+            bad.append("自检：public_types 没看见 Big")
+        if "small" in types:
+            bad.append("自检：public_types 把 small 也收进去了 —— 它不是公开类型")
+    return bad
+
+
 def main() -> int:
+    if os.environ.get("TEPS_KERNEL_SELF_TEST") == "1":
+        bad = self_test()
+        if bad:
+            for b in bad:
+                print("  " + b)
+            print(f"内核守卫自检失败：{len(bad)} 处")
+            return 1
+        print("SELF-TEST OK  内核守卫：四条判据都还看得见，且干净的样本不报")
+        return 1
     ap = argparse.ArgumentParser(description="内核四条守卫")
     ap.add_argument("--report", action="store_true", help="额外打印判据本身")
     ap.add_argument("--strict", action="store_true", help="内核尚未落地即判失败（CI 用）")

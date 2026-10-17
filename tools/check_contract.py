@@ -739,8 +739,13 @@ SELF_TESTS = [
      state_diagram_mismatches, "ready"),
     ("doc-numbers", {"docs/KERNEL.md": "| Refusal | `Refusal` + 999 个拒绝码常量 | `core/refusal.go` |"},
      doc_number_mismatches, "999"),
-    ("selfcheck-count", {"README.md": "### 九条守卫各自被注入测试证过\n"},
-     selfcheck_count, "九"),
+    # ★★ 而这个样本**不能写死一个数**：它必须与真实条数**不同**，否则
+    # 「注入违规」与「真实文档」给同一个答案，自检就报「它看不见了」——
+    # 而那正是这一轮实测撞上的事（README 的真实标题升到「九条」之后，
+    # 写死「九条」的样本不再是一次违规）。
+    # **一个写死的样本，会在被检查的东西走到它上面时失效。**
+    ("selfcheck-count", {"README.md": "### 十一条守卫各自被注入测试证过\n"},
+     selfcheck_count, "十一"),
 ]
 
 
