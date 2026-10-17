@@ -333,6 +333,57 @@ def chain_record_mismatches():
     return out
 
 
+# ★★★ 契约按例子描述记录，却从来没有列过 `rec` 的词汇表 —— 而每一条链上记录
+# 都带着它。实测：`adapters/` 里写出去的 `rec` 恰好七个，而契约里以引号形式
+# 出现过的只有 `"execution"` 与 `"session"` —— 另外五个一次都没出现过。
+#
+# 一个读链的人看见 `{"rec": "reflex"}`，**没有任何依据说它是合法的还是写错了的。**
+#
+# 判据是**两向**的：`Rec: "..."` 的每个字面量都必须在契约那一节里以
+# **表格行首**的形式出现；而那一节表格里列的每个值也必须是代码真的会写的。
+REC_LITERAL = re.compile(r'Rec:\s*"([a-z_]+)"')
+REC_ROW = re.compile(r'^\| `([a-z_]+)` \|', re.M)
+# ★ 而 `rec` 的字面量只出现在适配器里；内核不认识这个字段。
+REC_SECTION = "### rec：链上每一条记录属于哪个子系统"
+
+
+def rec_vocabulary_mismatches():
+    written = set()
+    for path in go_files():
+        # ★ `go_files()` 返回的是**绝对路径**，而第一版写的是
+        # `path.startswith("adapters/")` —— 它一次都没匹配上，于是判据报的是
+        # 「一个字面量都找不到」，而那不是「链上没有 rec」，是**判据看错了地方**。
+        # **一个拿绝对路径去比相对前缀的判据，永远匹配不到，而它报出来的
+        # 是「没有东西可查」。**
+        if not os.path.relpath(path, ROOT).startswith("adapters" + os.sep):
+            continue
+        body = open(path, encoding="utf-8").read()
+        written |= set(REC_LITERAL.findall(body))
+    if not written:
+        return ["一个 Rec: \"...\" 字面量都找不到：判据的前提变了"]
+    contract = read("docs/CONTRACT.md")
+    a = contract.find(REC_SECTION)
+    if a < 0:
+        return [f"契约里找不到那一节（{REC_SECTION}）"]
+    b = contract.find("###", a + 1)
+    sect = contract[a:b]
+    # ★★ 而表**头**那一行也是 `| \`rec\` | 写它的地方 | 是什么 |` ——
+    # 第一版把它当成了一个 `rec` 的值，于是报「契约列了 rec=rec」。
+    # **一条只看「第一个单元格是不是反引号名字」的判据，会把表头读成一行数据。**
+    # 判据改成只看**表头分隔行之后**的那些行。
+    sep = re.search(r'^\|[\s\-:|]+\|\s*$', sect, re.M)
+    body = sect[sep.end():] if sep else sect
+    listed = set(REC_ROW.findall(body))
+    out = []
+    for v in sorted(written):
+        if v not in listed:
+            out.append(f"链上真的会写 rec={v}，而契约那一节的表里没有它")
+    for v in sorted(listed):
+        if v not in written:
+            out.append(f"契约那一节的表里列了 rec={v}，而适配器里没有一处写它")
+    return out
+
+
 def main():
     src = read("core/refusal.go")
 
@@ -392,6 +443,11 @@ def main():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ 链上每一条记录都带着 rec，而契约从来没有列过它的词汇表。
+    for u in rec_vocabulary_mismatches():
+        print(u)
+        bad += 1
 
     # ★★★ 链上真的写的字段，与契约描述的那两条记录，必须对得上。
     for u in chain_record_mismatches():

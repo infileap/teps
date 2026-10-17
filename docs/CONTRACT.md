@@ -288,6 +288,28 @@ decide  → 占 grant
 
 **⇒ 不能靠顺序解，只能靠分裂。**
 
+### rec：链上每一条记录属于哪个子系统
+
+★★★ **这一段此前不存在。** 契约按例子描述记录，却**从来没有列过 `rec` 的词汇表** ——
+而每一条链上记录都带着它。实测：`adapters/` 里写出去的 `rec` **恰好七个**，
+而契约里以引号形式出现过的只有 `"execution"`（5 次）与 `"session"`（1 次）——
+**另外五个一次都没出现过**（`"breaker"` / `"escalation"` / `"pool"` / `"reflex"` / `"task"`）。
+
+一个读链的人看见 `{"rec": "reflex"}`，**没有任何依据说它是合法的还是写错了的。**
+
+| `rec` | 写它的地方 | 是什么 |
+|---|---|---|
+| `execution` | `decision.go` 的 `arbiterObserve` | 一次尝试的 intent 与 resolution |
+| `session` | `session.go`（`open` / `event` / `observe` / `retry`） | 会话状态机的一次转移 |
+| `task` | `intake.go` | 取进一条任务 |
+| `reflex` | `reflex.go` 与 `distill.go` | 一条反射规则，或它的蒸馏 |
+| `pool` | `pool.go` 与 `admission.go`（`register` / `lease` / `release`） | 资源登记与租约 |
+| `breaker` | `breaker.go` | 一个宿主的一次成败 |
+| `escalation` | `escalation.go` | 一次升级报价 |
+
+★ 而 `rec` **不是** `intent` / `resolution`：那两个字是 **`key` 的后缀**
+（`a1:intent`），不是 `rec` 的值 —— 见下一段。
+
 ### 拆成两条记录
 
 ```jsonc
