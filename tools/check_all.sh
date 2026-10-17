@@ -86,6 +86,7 @@ selfcheck "守卫自检 organs"   "TEPS_ORGANS_SELF_TEST=1 python3 tools/check_o
 # （Round 73–84 往里加了十一条规则，没有一条有自检）。
 # 一台守卫在某个时刻红过，不等于它现在还能红。
 selfcheck "守卫自检 contract" "TEPS_CONTRACT_SELF_TEST=1 python3 tools/check_contract.py"
+selfcheck "守卫自检 assertions" "TEPS_ASSERTIONS_SELF_TEST=1 python3 tools/check_assertions.py"
 
 echo
 if [ "$fails" -eq 0 ]; then

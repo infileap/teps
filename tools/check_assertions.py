@@ -89,7 +89,67 @@ def needles(src):
             continue
         yield body.replace('\\' + _STR, _STR), src.count(chr(10), 0, m.start()) + 1
 
+# ★★★ 自检：这一条判据必须**还看得见**。
+#
+# 与 check_contract.py / check_docs.py 同一个做法：喂它一份**故意违规**的源文本，
+# 看它红不红。★ 而 `needles()` 与 `report()` 都是纯的（`src` 与 `by_key` 是入参），
+# 所以自检**根本不需要碰盘** —— 这一点是这个文件本来就有的好处，第一版却没用上。
+#
+# 判据分两半，与 check_docs.py 的 self_test() 同一条：
+#   ① 喂一份**有前缀风险**的 ⇒ 必须红；
+#   ② 喂一份**没有**的 ⇒ 必须绿（否则它是「永远红」，不是「看得见」）。
+SAMPLE_BAD = """expect "标签一" "$r" '"cost":0.9'
+expect "标签二" "$r" '"cost":0.9091'
+"""
+SAMPLE_GOOD = """expect "标签一" "$r" '"cost":0.9'
+expect "标签二" "$r" '"cost":1.2'
+"""
+
+
+def self_test():
+    bad = []
+    # ① 有风险 ⇒ 必须红。
+    by_key = {}
+    for body, ln in needles(SAMPLE_BAD):
+        for m in KEY.finditer(body):
+            val, _ = read_value(body, m.end())
+            if val is None:
+                continue
+            by_key.setdefault(m.group(1), []).append((val, ln))
+    if not by_key:
+        bad.append("自检：needles() 在样本上一段都没抓到 —— 它看不见 expect 了")
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = report(by_key)
+    if rc != 1:
+        bad.append("自检：样本里的 0.9 是 0.9091 的真前缀，而 report() 回了 0 —— 它看不见了")
+    # ② 没有风险 ⇒ 必须绿。
+    by_key2 = {}
+    for body, ln in needles(SAMPLE_GOOD):
+        for m in KEY.finditer(body):
+            val, _ = read_value(body, m.end())
+            if val is None:
+                continue
+            by_key2.setdefault(m.group(1), []).append((val, ln))
+    buf2 = io.StringIO()
+    with contextlib.redirect_stdout(buf2):
+        rc2 = report(by_key2)
+    if rc2 != 0:
+        bad.append("自检：样本里没有前缀关系，而 report() 回了 1 —— 它是永远红，不是看得见")
+    return bad
+
+
 def main():
+    if os.environ.get("TEPS_ASSERTIONS_SELF_TEST") == "1":
+        bad = self_test()
+        if bad:
+            for b in bad:
+                print("  " + b)
+            print(f"断言守卫自检失败：{len(bad)} 处")
+            return 1
+        print("SELF-TEST OK  断言守卫：有前缀的会红，没前缀的会绿")
+        return 1
     src = open(DRIVE, encoding='utf-8').read()
     by_key = {}
     for body, ln in needles(src):
