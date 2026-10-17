@@ -1441,3 +1441,60 @@ func TestOnlyDeclaredChannelsCanBeWritten(t *testing.T) {
 		}
 	}
 }
+
+// ★★★ 同一扇门有三处，只堵两处不叫堵上。
+//
+// Round 71 给 `Refs.Set` 与 `Refs.Get` 加上了「通道必须是声明过的」，而
+// **`History` 漏了**：`History("x", "whatever")` 此前回的是
+// 「no history for x/whatever」—— 一个**关于文件不存在**的理由，而真正发生的
+// 事是「这个存储没有这个通道」。
+//
+// ★ 而 `Channels` 是另一处：它列的是「目录里有什么」（只按后缀滤掉 `.log`/`.tmp`），
+// 而 `skill.list` 把它直接报出去 —— 于是一个**手工建出来的目录**会在回答里
+// 读起来像一个真的通道。`Set` 现在写不进去了，但「列出来的东西必须是这个存储
+// 定义过的」不该依赖「写不进去」。
+func TestEveryChannelDoorKnowsWhichChannelsExist(t *testing.T) {
+	root := t.TempDir()
+	refs, err := OpenRefs(root)
+	if err != nil {
+		t.Fatalf("open refs: %v", err)
+	}
+	h := strings.Repeat("a", 64)
+	if ref := refs.Set("x.y", ChannelCanary, h); ref != nil {
+		t.Fatalf("publish: %s", ref.Reason)
+	}
+	// ① History 的拒绝必须是「未知通道」，不是「没有历史」。
+	if _, ref := refs.History("x.y", "whatever"); ref == nil {
+		t.Fatal("History must refuse an undeclared channel")
+	} else if !strings.Contains(ref.Reason, "unknown channel") {
+		t.Fatalf("History must say the channel is undeclared, not that the file is missing: %s", ref.Reason)
+	}
+	// ★ 而声明过的那个通道有历史 —— 否则这一条测的是别的东西。
+	hist, ref := refs.History("x.y", ChannelCanary)
+	if ref != nil || len(hist) != 1 || hist[0] != h {
+		t.Fatalf("the declared channel must have its history: %v %v", hist, ref)
+	}
+	// ② 手工建出来的目录不许被列出来。
+	//
+	// 这正是「目录里有什么就列什么」与「这个存储定义过什么」的区别：
+	// 前者把**磁盘的状态**当成**契约的一部分**报了出去。
+	d := filepath.Join(root, "x.y")
+	if err := os.MkdirAll(filepath.Join(d, "prod"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "prod", "HEAD"), []byte(h+"\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got, err := refs.Channels("x.y")
+	if err != nil {
+		t.Fatalf("channels: %v", err)
+	}
+	for _, c := range got {
+		if c == "prod" {
+			t.Fatalf("a directory somebody made by hand is not a channel this store defines: %v", got)
+		}
+	}
+	if len(got) != 1 || got[0] != ChannelCanary {
+		t.Fatalf("want exactly the declared channel, got %v", got)
+	}
+}

@@ -176,6 +176,16 @@ func (r *Refs) History(name, channel string) ([]string, *core.Refusal) {
 	if !ValidName(name) || !ValidName(channel) {
 		return nil, &core.Refusal{Code: core.CodeBadRequest, Reason: "bad ref name"}
 	}
+	// ★ 而通道必须是声明过的 —— 与 `Set` / `Get` 同一扇门。
+	//
+	// Round 71 堵了 `Set` 与 `Get`，**漏了这里**：`History("x", "whatever")`
+	// 此前回的是「no history for x/whatever」—— 一个**关于文件不存在**的理由，
+	// 而真正发生的事是「这个存储没有这个通道」。
+	// **同一扇门有三处，只堵两处不叫堵上。**
+	if !ValidChannel(channel) {
+		return nil, &core.Refusal{Code: core.CodeBadRequest, Reason: "unknown channel " + channel +
+			": this store defines " + ChannelCanary + " and " + ChannelStable}
+	}
 	f, err := os.Open(r.hist(name, channel))
 	if err != nil {
 		return nil, &core.Refusal{Code: core.CodeBadRequest, Reason: "no history for " + name + "/" + channel}
@@ -209,6 +219,15 @@ func (r *Refs) Channels(name string) ([]string, error) {
 	for _, e := range ents {
 		n := e.Name()
 		if strings.HasSuffix(n, ".log") || strings.HasSuffix(n, ".tmp") {
+			continue
+		}
+		// ★ 而只列**声明过的**通道。
+		//
+		// 此前这里是「目录里有什么就列什么」（只按后缀滤掉 `.log` / `.tmp`），
+		// 而 `skill.list` 把它直接报出去 —— 于是一个**手工建出来的目录**
+		// 会在回答里读起来像一个真的通道。`Set` 现在写不进去了，
+		// 但「列出来的东西必须是这个存储定义过的」不该依赖「写不进去」。
+		if !ValidChannel(n) {
 			continue
 		}
 		out = append(out, n)
