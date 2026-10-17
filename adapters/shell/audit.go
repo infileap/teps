@@ -70,10 +70,46 @@ func (s *server) auditTail(f core.Frame, out *core.Frame) {
 		rows = append(rows, tailEntry{Seq: e.Seq, Key: e.Key, Prev: e.Prev, Head: e.Head, Body: e.Body})
 	}
 	head, seq := s.log.Head()
+	// ★★★ 一个窗口必须报出它的窗口。
+	//
+	// 此前这里只回 `entries` / `head` / `seq` / `epoch`。链上有 25 条、没传
+	// limit 时它回 20 条，而回答里**没有任何一处说这件事**：调用方分不出
+	// 「这 20 条是我要的」还是「服务端替我决定的」，也分不出「这就是链」还是
+	// 「这是链的尾巴」。`seq` 是链头序号，它在那里，但它不回答这个问题 ——
+	// 一个 25 与一个 20 并排出现，读的人得自己做减法，而**它本来就是要被
+	// 说出来的那个事实**。
+	//
+	// 与 `metrics.accuracy` 报 `traced`/`chains_run`/`unrun`、与 `waste` 报
+	// 它的两个计数是同一条：**一个数是某个窗口里的数时，窗口是它的一部分。**
+	//
+	// 那句注释「A default limit is not a silent decision」此前只在代码里成立：
+	// 默认值确实是被**做出**的，只是**没有被说出去**。而 drive.sh 那条断言
+	// 的标签写着「没给 limit 时用默认值，不是无声地全给」，它查的却是
+	// `len(entries) == 20` —— **一条查行数的断言，配了一句承诺报默认值的
+	// 标签**。两件事，两句话。
+	first, last := uint64(0), uint64(0)
+	if len(rows) > 0 {
+		first, last = rows[0].Seq, rows[len(rows)-1].Seq
+	}
 	out.Body = mustJSON(map[string]any{
 		"entries": rows,
-		"head":    head,
-		"seq":     seq,
-		"epoch":   s.log.Epoch(),
+		// 实际生效的 limit：0 表示请求没给，服务端用了默认值。它必须出现，
+		// 否则「默认值不是无声的决定」这句话在回答里是假的。
+		"limit": body.Limit,
+		// 这一窗口里有多少条。与 `len(entries)` 是同一个数，但它在这里是
+		// **被报出来的**，而不是要调用方自己去数一个数组。
+		"returned": len(rows),
+		// 窗口的两端。有了它们，调用方可以接着往回翻，而不必猜。
+		"first_seq": first,
+		"last_seq":  last,
+		// ★ 链比窗口长 ⇒ 这是一条尾巴，不是整条链。
+		"truncated": seq > uint64(len(rows)),
+		"head":      head,
+		"seq":       seq,
+		"epoch":     s.log.Epoch(),
+		"basis": "entries is a window over the chain, not the chain: limit is the limit " +
+			"that was applied (a request that omits it gets the server default), returned " +
+			"is how many records are in this window, first_seq and last_seq are its ends, " +
+			"and truncated says whether the chain is longer than the window",
 	})
 }

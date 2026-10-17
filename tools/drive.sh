@@ -1174,7 +1174,20 @@ else
 fi
 r=$(req '{"t":"audit.tail","v":1}')
 n=$(printf '%s' "$r" | jlen)
-if [ "$n" = "20" ]; then printf '  ok    没给 limit 时用默认值，不是无声地全给\n'; else printf '  FAIL  默认返回 %s 条\n' "$n"; fails=$((fails+1)); fi
+if [ "$n" = "20" ]; then printf '  ok    没给 limit 时返回默认的 20 条\n'; else printf '  FAIL  默认返回 %s 条\n' "$n"; fails=$((fails+1)); fi
+# ★★★ 上面那条查的是**行数**，而它此前的标签写着「不是无声地全给」——
+# 一句承诺「默认值被报出来了」的话，配一条只数数组长度的断言。
+# 默认值有没有被说出来，是另一个事实，要另一条断言。
+expect "★ 生效的 limit 被报出来了（不是要调用方自己数）" "$r" '"limit":20'
+expect "★ 这一窗口里有多少条被报出来了" "$r" '"returned":20'
+expect "★ 链比窗口长 ⇒ 它说这是一条尾巴，不是整条链" "$r" '"truncated":true'
+expect "★ 窗口的两端被报出来了（可以接着往回翻）" "$r" '"first_seq"'
+expect "★ 它说清 entries 是一个窗口，不是链" "$r" 'entries is a window over the chain'
+# ★ 反过来：limit 比链还长时，truncated 必须是 false —— 否则这个字段
+# 只是「总是 true」，那不是读数。
+rl=$(req '{"t":"audit.tail","v":1,"body":{"limit":1000}}')
+expect "★ limit 超过链长 ⇒ 窗口就是整条链，truncated 为 false" "$rl" '"truncated":false'
+expect "★ 而它仍然报出生效的 limit" "$rl" '"limit":1000'
 expect "负数 limit 被拒" "$(req '{"t":"audit.tail","v":1,"body":{"limit":-1}}')" 'bad_request'
 expect "超过上限被拒（不是悄悄截断）" "$(req '{"t":"audit.tail","v":1,"body":{"limit":1001}}')" 'bad_request'
 before=$(req '{"t":"status","v":1}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"]["seq"])')
