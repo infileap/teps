@@ -88,6 +88,7 @@ selfcheck "守卫自检 organs"   "TEPS_ORGANS_SELF_TEST=1 python3 tools/check_o
 selfcheck "守卫自检 contract" "TEPS_CONTRACT_SELF_TEST=1 python3 tools/check_contract.py"
 selfcheck "守卫自检 assertions" "TEPS_ASSERTIONS_SELF_TEST=1 python3 tools/check_assertions.py"
 selfcheck "守卫自检 kernel" "TEPS_KERNEL_SELF_TEST=1 python3 tools/check_kernel.py"
+selfcheck "守卫自检 adapters" "TEPS_ADAPTERS_SELF_TEST=1 python3 tools/check_adapters.py"
 
 echo
 if [ "$fails" -eq 0 ]; then

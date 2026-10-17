@@ -155,7 +155,58 @@ def check_rank_is_read_once():
     return problems
 
 
+# ★★★ 自检：这一条判据必须**还看得见**。
+#
+# 而它有两个前提，都是**纯的**（只吃字符串），所以自检不需要碰盘：
+#   ① `strip_comments(src)` 必须真的剥掉注释 —— **但字符串字面量里的 `//` 不算注释**；
+#   ② `DISCARDED_OK` 必须真的匹配 `r, _ := evidence.Rank(l)`，
+#      而**不许**匹配 `r, ok := evidence.Rank(l)`（那是正确写法）。
+#
+# ★★ 而 ① 不是可选的：这个守卫的**第一版在它自己的文档上报警** ——
+# `store/manifest.go` 里那句「它此前丢掉了 `Rank` 的第二个返回值：
+# `r, _ := evidence.Rank(l)`」是**注释**。**一个读注释的守卫报的是散文，不是代码。**
+# 所以自检必须把「注释里的那个形状」也钉住。
+def self_test():
+    bad = []
+
+    # ① strip_comments：注释要没，字符串里的 `//` 要留。
+    src = 'x := 1 // r, _ := evidence.Rank(l)\n' \
+          'y := "http://example.com"\n'
+    out = strip_comments(src)
+    if "evidence.Rank" in out:
+        bad.append("自检：strip_comments 没有剥掉行尾注释 —— 守卫会去报散文")
+    if "http://example.com" not in out:
+        bad.append("自检：strip_comments 把字符串字面量里的 // 也当成了注释")
+
+    # ② DISCARDED_OK：丢掉第二个返回值的要匹配，没丢的不许匹配。
+    if not DISCARDED_OK.search('r, _ := evidence.Rank(l)'):
+        bad.append("自检：DISCARDED_OK 没匹配 `r, _ := evidence.Rank(l)` —— 它看不见了")
+    if DISCARDED_OK.search('r, ok := evidence.Rank(l)'):
+        bad.append("自检：DISCARDED_OK 匹配了 `r, ok := ...` —— 那是正确写法，不是违规")
+
+    # ③ imports_of：吃路径，用临时文件喂。
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "a.go"
+        f.write_text('package a\n\nimport (\n\t"teps/core"\n)\n\nimport "os"\n', encoding="utf-8")
+        got = imports_of(str(f))
+        for want in ("teps/core", "os"):
+            if want not in got:
+                bad.append(f"自检：imports_of 没看见 {want}")
+    return bad
+
+
 def main():
+    if os.environ.get("TEPS_ADAPTERS_SELF_TEST") == "1":
+        bad = self_test()
+        if bad:
+            for b in bad:
+                print("  " + b)
+            print(f"适配器守卫自检失败：{len(bad)} 处")
+            return 1
+        print("SELF-TEST OK  适配器守卫：剥注释与丢返回值两条前提都还看得见")
+        return 1
     if not os.path.isdir(ADAPTERS):
         print("check_adapters: 没有 adapters/ 目录")
         return 1
