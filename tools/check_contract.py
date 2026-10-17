@@ -174,6 +174,35 @@ def undocumented_channels():
     return out
 
 
+# ★★★ 一个只给了范围的词汇表，等于没有词汇表。
+#
+# 契约 A6 那一行写的是「E0–E4 在传递中不可丢失、不可提升」—— 一个**范围**。
+# 而实测：`E1` / `E2` / `E3` 在 `docs/CONTRACT.md` 里**一次都没出现过**
+# （`E0` 出现 2 次、`E4` 出现 1 次）。唯一说到的具体等级是 E0。
+#
+# ★ 而 E1 是那扇门：`Manifest.Verified()` 就是 `evidence.AtLeast(m.Evidence, E1)`，
+# 而 `Store.Promote` 对低于它的一律拒绝（"unverified work must not be frozen"）。
+# **本文档此前没有说出「哪一档才允许把工作固化」**，而那是这个词汇表里唯一
+# 一个承重的刻度。
+#
+# 判据与通道那条同形：`evidence/evidence.go` 里每一个 `L\d Level = "E\d"` 的值，
+# 都必须在 `docs/CONTRACT.md` 里出现。
+LEVEL_CONST = re.compile(r'^\tL\d\s+Level\s*=\s*"(E\d)"', re.M)
+
+
+def undocumented_levels():
+    src = read("evidence/evidence.go")
+    contract = read("docs/CONTRACT.md")
+    out = []
+    for m in LEVEL_CONST.finditer(src):
+        lv = m.group(1)
+        if lv not in contract:
+            out.append(f"证据等级 {lv} 在 evidence/evidence.go 里被声明，而 docs/CONTRACT.md "
+                       f"一次都没提过它（A6 只给了 E0–E4 这个**范围**，而范围不是定义；"
+                       f"E1 是 Promote 那道门）")
+    return out
+
+
 def main():
     src = read("core/refusal.go")
 
@@ -233,6 +262,11 @@ def main():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ 契约没提过的等级，等于契约没做出的决定。
+    for u in undocumented_levels():
+        print(u)
+        bad += 1
 
     # ★★★ 契约没提过的通道，等于契约没做出的决定。
     for u in undocumented_channels():

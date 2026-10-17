@@ -180,6 +180,37 @@ provenance{source, url, commit, captured_at}
 组合技能另有三条（见 [../store/README.md](../store/README.md)）：
 数据流接线、`evidence = min(子技能)`、可靠性是乘积 `∏P_i`。
 
+### Evidence ABI
+
+★★★ **这一段此前不存在，而 A6 却把它当成定义过的。** 上面 A6 那一行写的是
+「E0–E4 在传递中**不可丢失、不可提升**」—— 一个**范围**。而实测：`E1` / `E2` /
+`E3` 这三个名字在本文档里**一次都没出现过**（`E0` 出现 2 次、`E4` 出现 1 次）。
+唯一说到的具体等级是 E0（「只有必过用例的声明停在 E0」）。
+
+**一个只给了范围的词汇表，等于没有词汇表。**
+
+五档（`evidence/evidence.go` 的 `L0`–`L4`，值就是它们的名字）：
+
+| 等级 | 含义 |
+|---|---|
+| `E0` | model-generated, unverified — **never enters core memory** |
+| `E1` | **ran once in a sandbox and succeeded** |
+| `E2` | confirmed by a second, independent source |
+| `E3` | external authority, or a human |
+| `E4` | succeeded N times with no failure |
+
+★★ **而 E1 是那扇门**：`Manifest.Verified()` 就是 `evidence.AtLeast(m.Evidence, E1)`
+（`store/manifest.go:534`），而 `Store.Promote` 对低于它的一律拒绝，理由是
+「unverified work must not be frozen」。也就是说 —— **本文档此前没有说出「哪一档
+才允许把工作固化」**，而那是这个词汇表里唯一一个承重的刻度。
+
+★ 两件事必须一起读：
+- **未知等级不是 E0。** `evidence.Rank` 的注释逐字写着那件事不许发生：
+  「An unknown level is deliberately **not** mapped to zero. Zero is a real level
+  (E0), and folding "E9" onto it would turn a typo into a trust decision.」
+- **E1 要两半。** 只有必过用例的声明停在 E0（上面 `skill.` 那一行）；
+  一条断言既能通过、又能被证伪，才叫跑过一次且成功。
+
 ### Channel ABI
 
 ★★★ **这一段此前不存在。** `docs/CONTRACT.md` 在 Round 73 之前**一次都没有提到
