@@ -148,11 +148,28 @@ func (s *server) breakerState(f core.Frame, out *core.Frame) {
 	s.breakers.unlock()
 
 	rows := make([]map[string]any, 0)
-	open := 0
+	open, halfOpen, closed := 0, 0, 0
 	for _, h := range breaker.Hosts(trips) {
 		st := breaker.StateOf(trips, h, now)
-		if st != breaker.Closed {
+		// ★★★ 三个状态、三个计数。
+		//
+		// 此前这里是 `if st != breaker.Closed { open++ }` —— 一个叫 `open` 的数
+		// 数的是**不是闭的**，也就是 `open + half-open`。实测（同一个宿主，
+		// 三次失败之后）：
+		//
+		//   冷却 30s 内  -> {"open":1, hosts:[{"state":"open"}]}
+		//   冷却过去之后 -> {"open":1, hosts:[{"state":"half-open"}]}
+		//
+		// **同一个 1，两个状态。** 而这两个状态在操作上是相反的：`open` 拒绝一切，
+		// `half-open` **放一个探针进去**。一个读 `open: 1` 以为「不会有东西被尝试」
+		// 的人，在第二种情况下正好读反了。
+		switch st {
+		case breaker.Open:
 			open++
+		case breaker.HalfOpen:
+			halfOpen++
+		default:
+			closed++
 		}
 		row := map[string]any{"host": h, "state": string(st)}
 		if st == breaker.Open {
@@ -165,11 +182,22 @@ func (s *server) breakerState(f core.Frame, out *core.Frame) {
 	sort.Slice(rows, func(i, j int) bool { return rows[i]["host"].(string) < rows[j]["host"].(string) })
 	out.Body = mustJSON(map[string]any{
 		"hosts": rows,
-		"open":  open,
+		// ★ 三个状态三个计数。`open` 只数真的开着的那些；半开的**不是**开着的 ——
+		// 它正在放一个探针，那是这一层唯一在做的事。
+		"open":        open,
+		"half_open":   halfOpen,
+		"closed":      closed,
+		"hosts_total": len(rows),
 		// The two numbers the state is made of, reported next to it so a reader
 		// can check the state rather than take it.
 		"threshold":   breaker.Threshold,
 		"cooldown_ms": breaker.CooldownMS,
 		"trips":       len(trips),
+		// 一句话说清这三个计数与 hosts 里那些 state 是同一批事实：
+		// 否则读的人会把 `open` 当成「有多少宿主不闭」。
+		"basis": "open / half_open / closed partition the hosts in this answer, one host each: " +
+			"open refuses every attempt, half-open admits exactly one probe, closed admits all. " +
+			"half-open is not open — a count named open that also counted half-open would " +
+			"read as \"nothing will be tried\" at the one moment something is being tried",
 	})
 }

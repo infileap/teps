@@ -1796,6 +1796,35 @@ expect "★ 熔断表说这个宿主是开着的" "$r" '"state":"open"'
 expect "★ 而且把它据以判断的两个数一起报出来（让人能核，而不是信）" "$r" '"threshold":3'
 expect "冷却时长也在" "$r" '"cooldown_ms":30000'
 expect "状态里带上理由" "$r" 'did not come back'
+# ★★★ 三个状态、三个计数。
+#
+# 此前 `open` 是 `if st != breaker.Closed { open++ }` —— 一个叫 open 的数数的是
+# **不是闭的**，也就是 open + half-open。而这两个状态在操作上是相反的：
+# open 拒绝一切，half-open **放一个探针进去**。实测（同一个宿主，三次失败之后）：
+#   冷却 30s 内  -> {"open":1, hosts:[{"state":"open"}]}
+#   冷却过去之后 -> {"open":1, hosts:[{"state":"half-open"}]}
+# **同一个 1，两个状态。**
+expect "★ 开着的计数只数真的开着的" "$r" '"open":1'
+expect "★ 半开是另一个计数，不是 open 的一部分" "$r" '"half_open":0'
+expect "★ 闭着的也有自己的计数" "$r" '"closed"'
+# ★ 划分要**算**出来，不能靠数一行里的字面量。用 python 读这份回答，
+# 检查 open + half_open + closed == hosts_total，以及每个计数与那一行自己的
+# state 对得上 —— 否则计数是第二份事实，而第二份事实就是会烂掉的那一份。
+if printf '%s' "$r" | python3 -c '
+import json,sys
+b=json.load(sys.stdin)["body"]
+by={}
+for h in b["hosts"]: by[h["state"]]=by.get(h["state"],0)+1
+assert b["open"]+b["half_open"]+b["closed"]==b["hosts_total"], "三个计数不划分那些宿主"
+assert b["open"]==by.get("open",0), "open 计数与那些行对不上"
+assert b["half_open"]==by.get("half-open",0), "half_open 计数与那些行对不上"
+assert b["closed"]==by.get("closed",0), "closed 计数与那些行对不上"
+'; then
+  printf '  ok    ★ 三个计数划分那些宿主，且与每一行自己的 state 对得上（算出来的）\n'
+else
+  printf '  FAIL  ★ 三个计数与那些行对不上\n'; fails=$((fails + 1))
+fi
+expect "★ 它说清这三个计数与 hosts 里那些 state 是同一批事实" "$r" 'half-open is not open'
 
 # ★ 一个宿主坏了，不该把别的宿主一起关掉。
 r=$(req "{\"t\":\"skill.invoke\",\"v\":1,\"key\":\"ns7\",\"body\":{\"ref\":\"$xok\",\"attempt\":\"n-after-open\",\"task_class\":\"task_exec\"}}")
