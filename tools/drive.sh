@@ -798,6 +798,34 @@ fi
 expect "★ 提议自述它为什么够得着" "$r" '"why"'
 expect "★ 不声明类型的技能被报告为无法参与规划" "$r" 'will not guess what a skill accepts'
 
+# ★★★ 搜索的分母必须出现。
+#
+# 此前这里只有一个 `"catalog": len(catalog)` —— 它是**登记表条数**，而真正
+# 交给规划器的技能是 `len(skills)`，两者之间差着 `untyped` 那一批。实测
+# （登记表 4 个技能、2 个不声明类型）：返回字段里只有 catalog / untyped /
+# unusable / dropped / proposals / states / truncated —— **参与搜索的技能数
+# 没有这个字段**，读的人只能自己做减法。
+#
+# 而这不是一个可有可无的数：`proposals: []` 在一个「大半技能不会声明类型」的
+# 登记表上，与在一个「全都能参与搜索、但确实没有路」的登记表上，是两个完全
+# 不同的事实 —— 一个是**问不出来**，一个是**问过了，没有**。
+expect "★ 参与搜索的技能数被报出来了（不是要调用方做减法）" "$r" '"searched"'
+expect "★ 不声明类型的那一批也有自己的计数" "$r" '"untyped_count"'
+expect "★ 登记表条数仍然在（它是另一个事实）" "$r" '"catalog"'
+expect "★ 它说清 catalog = searched + untyped_count" "$r" 'equals'
+expect "★ 而且它说清「问不出来」与「问过了没有」是两件事" "$r" 'could not be asked'
+# ★ 那个等式要**算**出来，不能靠数一行里的字面量。
+if printf '%s' "$r" | python3 -c '
+import json,sys
+b=json.load(sys.stdin)["body"]
+assert b["catalog"] == b["searched"] + b["untyped_count"], "catalog != searched + untyped_count"
+assert b["untyped_count"] == len(b["untyped"]), "untyped_count 与 untyped 数组对不上"
+'; then
+  printf '  ok    ★ 三个计数互相对得上（算出来的）\n'
+else
+  printf '  FAIL  ★ 三个计数对不上\n'; fails=$((fails + 1))
+fi
+
 r=$(req '{"t":"compose.propose","v":1,"body":{"from":["doc"],"to":["nowhere"],"task_class":"task_exec","max_depth":4,"floor":0.1}}')
 expect "★ 够不着的目标不提议" "$r" '"proposals":[]'
 expect "★ 但它报告自己探索过多少状态" "$r" '"states"'

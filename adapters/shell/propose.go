@@ -126,9 +126,37 @@ func (s *server) handlePropose(f core.Frame, out *core.Frame) {
 	for _, u := range res.Unusable {
 		un = append(un, map[string]any{"skill": u.Name, "reason": u.Reason})
 	}
+	// ★★★ 搜索的分母必须出现。
+	//
+	// 此前这里只有一个 `"catalog": len(catalog)` —— 它是**登记表条数**，而真正
+	// 交给规划器的技能是 `len(skills)`，两者之间差着 `untyped` 那一批。实测
+	// （登记表 4 个技能，其中 2 个不声明类型）返回的是：
+	//
+	//   ['catalog', 'dropped', 'proposals', 'states', 'truncated', 'untyped', 'unusable']
+	//   catalog = 4 · untyped 条数 = 2 · **参与搜索的技能数：没有这个字段**
+	//
+	// 读的人只能自己做减法 4 − 2 = 2。而这不是一个可有可无的数：`proposals: []`
+	// 在一个「4 个技能里 2 个不会声明类型」的登记表上，与在一个「4 个技能全都
+	// 能参与搜索、但确实没有路」的登记表上，是两个完全不同的事实 ——
+	// 一个是**问不出来**，一个是**问过了，没有**。
+	//
+	// `catalog` 这个名字本身也读错方向：它读起来是「这就是登记表」，而它是一个数。
+	// 与 `metrics.accuracy` 报 `traced`/`chains_run`/`unrun`、与 `waste` 报它的
+	// 两个计数是同一条：**一个数是某个窗口里的数时，窗口是它的一部分。**
 	out.Body = mustJSON(map[string]any{
 		"proposals": props, "dropped": drops, "unusable": un, "untyped": untyped,
 		"states": res.States, "truncated": res.Truncated,
+		// 登记表条数。
 		"catalog": len(catalog),
+		// ★ 真正交给规划器的技能数 —— 上面那个数减去这一批。
+		"searched": len(skills),
+		// 这一批的条数。与 `len(untyped)` 是同一个数，但它在这里是**被报出来的**，
+		// 而不是要调用方自己去数一个数组。
+		"untyped_count": len(untyped),
+		"basis": "searched is the number of skills that declared both input_schema and output_schema " +
+			"and were therefore handed to the planner; catalog is the whole registry and equals " +
+			"searched + untyped_count. `proposals: []` over a registry where most skills declare no " +
+			"types means the question could not be asked, which is not the same as having asked it " +
+			"and found nothing",
 	})
 }

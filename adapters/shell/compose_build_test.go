@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -172,5 +173,119 @@ func TestARealCeilingStillDecides(t *testing.T) {
 	}
 	if strings.Contains(below.Reason, "already at its ceiling") {
 		t.Fatalf("E0 below an E1 ceiling is not already at its ceiling: %q", below.Reason)
+	}
+}
+
+// ★★★ 搜索的分母必须出现。
+//
+// `compose.propose` 此前只回一个 `"catalog": len(catalog)` —— 登记表条数，
+// 而真正交给规划器的技能是 `len(skills)`，两者之间差着 `untyped` 那一批。
+// 实测（登记表 4 个技能、2 个不声明类型）返回的字段里**没有**参与搜索的技能数，
+// 读的人只能自己做减法 4 − 2 = 2。
+//
+// 而这不是一个可有可无的数：`proposals: []` 在一个「大半技能不会声明类型」的
+// 登记表上，与在一个「全都能参与搜索、但确实没有路」的登记表上，是两个完全
+// 不同的事实 —— 一个是**问不出来**，一个是**问过了，没有**。
+func proposeServer(t *testing.T, typed, untyped int) *server {
+	t.Helper()
+	s := testServer(t)
+	st, err := store.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	s.skills = st
+	put := func(id, in, out string) {
+		m := &store.Manifest{
+			SkillID: id, Version: "1.0.0", Kind: store.KindScript,
+			Input: json.RawMessage(in), Output: json.RawMessage(out),
+			Verify: []string{"exit == 0"},
+			Budget: core.Budget{MS: 2000}, Evidence: store.E1, Idempotent: true,
+			License: "MIT", Provenance: store.Provenance{Source: "test"},
+			Env: store.Env{Interpreter: "/bin/sh"},
+		}
+		if _, ref := st.Register(store.Registration{Manifest: m, Files: map[string][]byte{"run.sh": []byte("cat")}}); ref != nil {
+			t.Fatalf("register %s: %s", id, ref.Reason)
+		}
+	}
+	for i := 0; i < typed; i++ {
+		put("typed."+strconv.Itoa(i), `["doc"]`, `["lines"]`)
+	}
+	for i := 0; i < untyped; i++ {
+		put("untyped."+strconv.Itoa(i), "", "")
+	}
+	return s
+}
+
+func proposeOnce(t *testing.T, s *server, to string) map[string]any {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"from": []string{"doc"}, "to": []string{to},
+		"task_class": "task_exec", "max_depth": 4, "floor": 0.1, "max_proposals": 5,
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out core.Frame
+	s.handlePropose(core.Frame{T: "compose.propose", V: 1, Body: body}, &out)
+	if out.Err != nil {
+		t.Fatalf("compose.propose refused: %s", out.Err.Reason)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out.Body, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return got
+}
+
+func TestTheSearchDenominatorIsReported(t *testing.T) {
+	s := proposeServer(t, 2, 3)
+	got := proposeOnce(t, s, "lines")
+	if got["catalog"] != float64(5) {
+		t.Fatalf("catalog = %v, want 5 (the whole registry)", got["catalog"])
+	}
+	if got["searched"] != float64(2) {
+		t.Fatalf("searched = %v, want 2 (only the typed ones reach the planner)", got["searched"])
+	}
+	if got["untyped_count"] != float64(3) {
+		t.Fatalf("untyped_count = %v, want 3", got["untyped_count"])
+	}
+	// ★ 三个计数必须互相对得上，而且 `untyped_count` 必须与那个数组一致 ——
+	// 否则计数是第二份事实，而第二份事实就是会烂掉的那一份。
+	if got["catalog"].(float64) != got["searched"].(float64)+got["untyped_count"].(float64) {
+		t.Fatalf("catalog(%v) != searched(%v) + untyped_count(%v)",
+			got["catalog"], got["searched"], got["untyped_count"])
+	}
+	if got["untyped_count"].(float64) != float64(len(got["untyped"].([]any))) {
+		t.Fatalf("untyped_count = %v but %d entries came back",
+			got["untyped_count"], len(got["untyped"].([]any)))
+	}
+}
+
+// ★ 最要紧的那一条：**「问不出来」与「问过了，没有」必须分得开。**
+//
+// 同一个登记表、同一个够不着的目标，两种情况下 `proposals` 都是 `[]` ——
+// 而 `searched` 告诉读的人他到底问出去了没有。
+func TestAnUnanswerableQuestionLooksDifferentFromAnAnsweredOne(t *testing.T) {
+	// 全部不声明类型 ⇒ 一个技能都没交给规划器。
+	none := proposeOnce(t, proposeServer(t, 0, 4), "nowhere")
+	if none["searched"] != float64(0) {
+		t.Fatalf("searched = %v, want 0", none["searched"])
+	}
+	if len(none["proposals"].([]any)) != 0 {
+		t.Fatalf("nothing was searchable, so nothing can be proposed: %v", none["proposals"])
+	}
+	// 全都声明类型、但目标够不着 ⇒ 问出去了，没有。
+	// ★ 目标必须真的够不着：`doc -> lines` 会被一个 `doc -> lines` 的技能
+	// 一步满足，那样这条对照测的就是「找到了」，与它的标题不符。
+	some := proposeOnce(t, proposeServer(t, 4, 0), "nowhere")
+	if some["searched"] != float64(4) {
+		t.Fatalf("searched = %v, want 4", some["searched"])
+	}
+	// 两次的 `proposals` 都是空 —— 分开它们的就是 `searched`。
+	if len(some["proposals"].([]any)) != 0 {
+		t.Fatalf("the target is unreachable here, got %v", some["proposals"])
+	}
+	if none["searched"] == some["searched"] {
+		t.Fatal("these two are different facts, so the denominator must differ")
 	}
 }
