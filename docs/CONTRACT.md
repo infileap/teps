@@ -291,17 +291,56 @@ decide  → 占 grant
 ### 拆成两条记录
 
 ```jsonc
-// apply 之前写
-{"rec": "intent", "trace": ..., "attempt": ..., "session": ..., 
- "task_class": ..., "skill_ref": "<内容哈希>", "strategy": ...,
- "budget": {...}, "action_hash": ...}
+// apply 之前写。key = "<attempt>:intent"
+{"rec": "execution", "attempt": "a1", "skill": "e.one",
+ "strategy": "s1", "task_class": "task_exec"}
 
-// apply 之后写
-{"rec": "resolution", "of": "<intent head 哈希>",
- "outcome": "ok|failed|timeout|refused",
- "verified_by": "verifier", "verify_assert": ...,
- "gain": ..., "actual": {...}}
+// apply 之后写。key = "<attempt>:resolution"
+{"rec": "execution", "attempt": "a1", "skill": "e.one",
+ "strategy": "s1", "task_class": "task_exec",
+ "ok": true, "verified_by": "verify_assert",
+ "rules": "<那组断言的身份，一个内容哈希>", "latency": 2, "cost": 0}
 ```
+
+★★★ **这一段此前描述的记录不存在。** 实测（`skill.invoke` 一个 `exit 0` 的技能，然后读盘）：
+
+	key=a1:intent
+	  {"attempt": "a1", "rec": "execution", "skill": "e.one", "strategy": "s1", "task_class": "task_exec"}
+	key=a1:resolution
+	  {"attempt": "a1", "latency": 2, "ok": true, "rec": "execution",
+	   "rules": "a6c0e2387ff61ace52dab4a732ff56c0a8a23ef97dc2c3f90f6aa919ce3176e4",
+	   "skill": "e.one", "strategy": "s1", "task_class": "task_exec", "verified_by": "verify_assert"}
+
+逐字对照：
+
+| 契约此前写的 | 实际 |
+|---|---|
+| `"rec": "intent"` / `"rec": "resolution"` | `"rec": "execution"` —— 而 `intent` / `resolution` 是 **`key` 的后缀**（`a1:intent`），不是一个 `rec` 值 |
+| `"outcome": "ok\|failed\|timeout\|refused"` | **`"ok": true`** —— 一个**布尔** |
+| `"trace"` · `"session"` · `"budget"` · `"action_hash"` | **都不存在** |
+| `"skill_ref"` | `"skill"` |
+| `"of": "<intent head 哈希>"` | **不存在** |
+| `"verify_assert"` | `"rules"`（一个内容哈希，不是断言原文） |
+| `"gain"` · `"actual"` | **都不存在** |
+| （缺 `latency`） | 实际有 |
+
+**这一段里除了 `attempt` / `task_class` / `strategy` / `verified_by`，每一个字段名要么是错的、要么根本不存在。**
+
+★★ 而 `outcome` 是一个**被渲染出来的值**，不是被存下来的值：
+`adapters/shell/execute.go:405-420` 的重放路径读的是 `rec.OK`（`*bool`），
+`*rec.OK` 为真就渲染成 `"ok"`、否则渲染成 `"failed"`。**链上存的是那个布尔。**
+
+★ 所以那条 `"outcome"` 的判据管的是**渲染出来的**词汇表（`Verdict.Outcome()`），
+与**链上**的字段名是两件事 —— 两者都写下来，才不会把「渲染出来的」当成「存下来的」。
+
+**渲染出来的 `outcome`（响应与 `arbiter.observe` 里用的那一个）：**
+
+```jsonc
+{"outcome": "ok|failed|timeout|refused"}
+```
+
+★ 而 `unknown` **不在这一行里**：它不是被写出去的值，而是**没有 resolution**
+这件事本身（见上面那条重放规则）。
 
 **重放规则：**
 

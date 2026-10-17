@@ -262,6 +262,77 @@ def outcome_vocabulary_mismatches():
     return out
 
 
+# ★★★ 契约描述了一条**不存在**的记录。
+#
+# 此前那一段「拆成两条记录」写的是：
+#
+#	{"rec": "intent", "trace": ..., "attempt": ..., "session": ...,
+#	 "task_class": ..., "skill_ref": "<内容哈希>", "strategy": ...,
+#	 "budget": {...}, "action_hash": ...}
+#	{"rec": "resolution", "of": "<intent head 哈希>",
+#	 "outcome": "ok|failed|timeout|refused",
+#	 "verified_by": "verifier", "verify_assert": ..., "gain": ..., "actual": {...}}
+#
+# 而实测（skill.invoke 一个 exit 0 的技能，然后读盘）：
+#
+#	key=a1:intent
+#	  {"attempt": "a1", "rec": "execution", "skill": "e.one", "strategy": "s1", "task_class": "task_exec"}
+#	key=a1:resolution
+#	  {"attempt": "a1", "latency": 2, "ok": true, "rec": "execution", "rules": "<哈希>",
+#	   "skill": "e.one", "strategy": "s1", "task_class": "task_exec", "verified_by": "verify_assert"}
+#
+# **除了 attempt / task_class / strategy / verified_by，每一个字段名要么是错的、
+# 要么根本不存在。** 而 `intent` / `resolution` 是 **key 的后缀**，不是 `rec` 的值；
+# `outcome` 是一个**渲染出来的**值，链上存的是 `ok`（一个布尔）。
+#
+# 判据：`observeBody` 的每一个 json 标签，加上写入时补上的那几个
+# （`rec` / `ok` / `latency`），都必须在契约里出现。
+OBSERVE_TAG = re.compile(r'\t\w+\s+[\w\.\[\]\*]+\s+`json:"([a-z_]+)')
+# ★ 写入时由 s.observe 补上的、不在 observeBody 里的键。
+OBSERVE_ADDED = ["rec", "ok", "latency"]
+# ★ 契约此前描述过、而实际不存在的字段。写下来，免得它们再长回去。
+PHANTOM_FIELDS = ["trace", "session", "budget", "action_hash", "skill_ref",
+                  "gain", "actual", "verify_assert", "of"]
+
+
+def chain_record_mismatches():
+    # ★ 写出去的那个结构体是 `executionRecord`，**不是** `observeBody`：
+    # `observeBody` 是 `arbiter.observe` 的**请求**形状，而
+    # `arbiterObserve` 把它转成 `executionRecord` 再落盘。第一版读错了那个结构体，
+    # 于是报出「链上真的会写字段 cost」—— 而 `cost` 在 `observeBody` 里确实有、
+    # 在 `executionRecord` 里也有（带 `omitempty`，所以我的转储里没出现）。
+    src = read("adapters/shell/decision.go")
+    i = src.find("type executionRecord struct")
+    if i < 0:
+        return ["executionRecord 找不到了：判据的前提变了"]
+    j = src.find("\n}", i)
+    fields = OBSERVE_TAG.findall(src[i:j])
+    contract = read("docs/CONTRACT.md")
+    # ★ 只看「拆成两条记录」那一段里的 **jsonc 代码块** —— 我的对照表
+    # 也写着 trace / session / … 这些**旧名字**，整段去查会把那张表当成主张。
+    # **一个把「被否定的旧名字」当成「主张」的判据，会把纠正它的人判成错的。**
+    a = contract.find("### 拆成两条记录")
+    b = contract.find("###", a + 1)
+    sect = contract[a:b] if a >= 0 else contract
+    m = re.search(r'```jsonc(.*?)```', sect, re.S)
+    block = m.group(1) if m else ""
+    # ★★ 而「键」与「值」必须分开认：第一版查的是 `"verify_assert"`，
+    # 而块里那一行是 `"verified_by": "verify_assert"` —— **`verify_assert` 是那个
+    # 键的「值」**，于是判据把一个正确的键报成了幽灵字段。
+    # **一个分不清键与值的判据，会把一个值判成一个字段名。**
+    def has_key(name):
+        return re.search(r'"' + name + r'"\s*:', block) is not None
+
+    out = []
+    for f in fields:
+        if not has_key(f):
+            out.append(f"链上真的会写字段 {f}，而「拆成两条记录」的 jsonc 块里没有它")
+    for f in PHANTOM_FIELDS:
+        if has_key(f) and f not in fields:
+            out.append(f"「拆成两条记录」的 jsonc 块里列了 {f}，而链上从不写它")
+    return out
+
+
 def main():
     src = read("core/refusal.go")
 
@@ -321,6 +392,11 @@ def main():
         for c in orphan:
             print(f"    {c}")
         bad += len(orphan)
+
+    # ★★★ 链上真的写的字段，与契约描述的那两条记录，必须对得上。
+    for u in chain_record_mismatches():
+        print(u)
+        bad += 1
 
     # ★★★ outcome 的词汇表必须是**两向**对齐的。
     for u in outcome_vocabulary_mismatches():
