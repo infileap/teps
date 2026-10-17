@@ -539,7 +539,22 @@ def action_vocabulary_mismatches():
 # 与 `456 行` 这两个旧数（它们是那段说明的一部分）。
 # **一个把「被否定的旧值」当成主张的判据，会把纠正它的人判成错的**（Round 76 的坑）。
 CLAIM_CODES = re.compile(r'\| Refusal \| `Refusal` \+ (\d+) 个拒绝码常量')
-CLAIM_LINES = re.compile(r'，(\d+) 行（Gate 1')
+
+# ★★★ 而「行数」这一个事实在文档里被写成了**四份**，用的是**四种不同的措辞**，
+# 而且三个数不一样（459 / 516 / 661）。Round 81 的判据只写了其中**一种**措辞
+# （`，(\d+) 行（Gate 1`）—— **我修了哪一份，判据就只认得哪一份**，
+# 于是另外三份在它眼里不存在。
+#
+# **一个照着「我已经修好的那一份」写出来的判据，会放过所有还没修的份。**
+#
+# 现在四种措辞全列出来，都核同一个数。
+CORE_LINE_CLAIMS = [
+    re.compile(r'(\d+) 行 · 6 类型'),
+    re.compile(r'（(\d+) 行 / 6 公开类型'),
+    re.compile(r'(\d+) 行 · 6 个公开类型'),
+    re.compile(r'(\d+) / 3000 行'),
+    re.compile(r'，(\d+) 行（Gate 1'),
+]
 
 
 def _code_count():
@@ -564,14 +579,28 @@ def doc_number_mismatches():
     want_lines = _core_lines()
     if want_codes == 0 or want_lines == 0:
         return ["读不出 core 的拒绝码数或行数：判据的前提变了"]
-    for rel in ["docs/KERNEL.md"]:
+    for rel in ["docs/KERNEL.md", "README.md"]:
         body = read(rel)
         for m in CLAIM_CODES.finditer(body):
             if int(m.group(1)) != want_codes:
                 out.append(f"{rel} 说 {m.group(1)} 个拒绝码常量，而 core/refusal.go 里是 {want_codes} 个")
-        for m in CLAIM_LINES.finditer(body):
-            if int(m.group(1)) != want_lines:
-                out.append(f"{rel} 说 {m.group(1)} 行（Gate 1），而 core/ 的非测试 .go 是 {want_lines} 行")
+        for pat in CORE_LINE_CLAIMS:
+            for m in pat.finditer(body):
+                # ★★★ 而**引着旧值**的那几处不该被当成主张。
+                #
+                # 这一条 README 行里就写着那三个旧数（它们是「哪四份、哪三个数」
+                # 那段说明的一部分）。判据第一版把它们全报了出来 ——
+                # **一个把「被否定的旧值」当成主张的判据，会把纠正它的人判成错的**
+                # （Round 76/81/82 的同一个坑，这一次是第四遍）。
+                #
+                # 判据改成：紧邻的前一个字符是反引号或 `「` 时，那是一次引用。
+                # ★ 而「引用」不一定紧贴数字：`「`（459 行…` 里，紧贴的是 `（`。
+                # 所以往左多看几个字符，遇到反引号或 `「` 就算引用。
+                back = body[max(0, m.start(1) - 4):m.start(1)]
+                if '`' in back or '「' in back:
+                    continue
+                if int(m.group(1)) != want_lines:
+                    out.append(f"{rel} 说 core/ 有 {m.group(1)} 行，而非测试 .go 是 {want_lines} 行")
     return out
 
 
