@@ -686,6 +686,42 @@ CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
           "七": 7, "八": 8, "九": 9, "十": 10}
 
 
+# ★ 反向表：整数 → 中文数字（自检要**造**一个与真实值不同的数）。
+CN_OUT = {1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七",
+          8: "八", 9: "九", 10: "十", 11: "十一", 12: "十二", 13: "十三",
+          14: "十四", 15: "十五", 16: "十六", 17: "十七", 18: "十八",
+          19: "十九", 20: "二十", 21: "二十一", 22: "二十二", 23: "二十三"}
+
+
+def count_selfchecks():
+    """`tools/check_all.sh` 里 selfcheck 的行数（自检要用它算一个**不同**的值）。"""
+    return sum(1 for line in read("tools/check_all.sh").splitlines()
+               if line.startswith("selfcheck "))
+
+
+def cn_num(s):
+    """中文数字 → 整数。**「十一」这种也要认。**
+
+    ★★ 第一版只有单字表（一…十），于是标题升到「十一条」之后
+    `CN_NUM.get("十一")` 回 `None` ⇒ 判据**报了一个假的失败**：
+    「README 的标题说 十一 条守卫有注入自检，而 check_all.sh 里有 11 条」
+    —— **两句话说的是同一个数。**
+    **一个只认到「十」的中文数字表，会在标题升到「十一」时开始说假话。**
+    """
+    if not s:
+        return None
+    if s == "十":
+        return 10
+    if s.startswith("十"):
+        return 10 + (CN_NUM.get(s[1:]) or 0)
+    if s.endswith("十"):
+        return (CN_NUM.get(s[:-1]) or 0) * 10
+    if "十" in s:
+        a, _, b = s.partition("十")
+        return (CN_NUM.get(a) or 0) * 10 + (CN_NUM.get(b) or 0)
+    return CN_NUM.get(s)
+
+
 def selfcheck_count():
     n = sum(1 for line in read("tools/check_all.sh").splitlines()
             if line.startswith("selfcheck "))
@@ -693,7 +729,7 @@ def selfcheck_count():
         return ["tools/check_all.sh 里数不出 selfcheck 行：判据的前提变了"]
     out = []
     for m in SELFCHECK_HEAD.finditer(read("README.md")):
-        if CN_NUM.get(m.group(1)) != n:
+        if cn_num(m.group(1)) != n:
             out.append(f"README 的标题说 {m.group(1)} 条守卫有注入自检，而 check_all.sh 里有 {n} 条 selfcheck")
     return out
 
@@ -739,13 +775,18 @@ SELF_TESTS = [
      state_diagram_mismatches, "ready"),
     ("doc-numbers", {"docs/KERNEL.md": "| Refusal | `Refusal` + 999 个拒绝码常量 | `core/refusal.go` |"},
      doc_number_mismatches, "999"),
-    # ★★ 而这个样本**不能写死一个数**：它必须与真实条数**不同**，否则
-    # 「注入违规」与「真实文档」给同一个答案，自检就报「它看不见了」——
-    # 而那正是这一轮实测撞上的事（README 的真实标题升到「九条」之后，
-    # 写死「九条」的样本不再是一次违规）。
-    # **一个写死的样本，会在被检查的东西走到它上面时失效。**
-    ("selfcheck-count", {"README.md": "### 十一条守卫各自被注入测试证过\n"},
-     selfcheck_count, "十一"),
+    # ★★★ 而这个样本**不能写死一个数**。
+    #
+    # Round 87 我写死了「九条」，而 README 的真实标题升到「九条」之后那个样本
+    # 不再是一次违规 ⇒ 自检报「它看不见了」。当时我改成「十一条」并写下
+    # **「一个写死的样本，会在被检查的东西走到它上面时失效」** ——
+    # 然后**下一轮就撞了同一堵墙**：真实条数变成了 11。
+    #
+    # **改成一个更大的数不算修好，那只是把下一次失效推远。**
+    # 修法是让样本**从真实值算出来**：overlay 可以是一个**函数**。
+    ("selfcheck-count", lambda: {"README.md":
+        "### " + CN_OUT[count_selfchecks() + 1] + "条守卫各自被注入测试证过\n"},
+     selfcheck_count, None),
 ]
 
 
@@ -753,6 +794,9 @@ def self_test():
     """两半：证明它还看得见，证明看见了会红。"""
     bad = []
     for name, overlay, rule, must in SELF_TESTS:
+        # ★ overlay 可以是一个函数 —— 那样它就能**从真实值算出一个不同的值**。
+        if callable(overlay):
+            overlay = overlay()
         _OVERLAY.clear()
         _OVERLAY.update(overlay)
         try:
@@ -761,14 +805,14 @@ def self_test():
             _OVERLAY.clear()
         if not got:
             bad.append(f"自检：规则 {name} 在被注入违规之后**没有报出来** —— 它看不见了")
-        elif not any(must in g for g in got):
+        elif must is not None and not any(must in g for g in got):
             # ★ 响了，但理由里没有那个被注入的值 ⇒ 它是「找不到」，不是「比出来」。
             bad.append(f"自检：规则 {name} 响了，但理由里没有 {must!r} —— "
                        f"它报的是「读不出来」而不是「比出来」：{got[0][:80]}")
     # ★ 而反过来：把 overlay 清掉之后，那条规则对真实文档不许残留自检的违规。
     for name, _, rule, must in SELF_TESTS:
         got = rule()
-        if got and all(must in g or "999" in g or "nope" in g for g in got):
+        if got and all((must or "\x00") in g or "999" in g or "nope" in g for g in got):
             bad.append(f"自检：规则 {name} 在真实文档上残留了自检的违规")
     return bad
 

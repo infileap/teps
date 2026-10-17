@@ -110,20 +110,30 @@ def handler_frames():
             bodies.setdefault(name, body[pos:end])
     out = {}
     for name, body in bodies.items():
-        frames = set()
-        for pre in PREFIX_RE.findall(body):
-            frames.add(pre + "*")
-        for group in CASE_RE.findall(body):
-            for frame in CASE_TOK.findall(group):
-                frames.add(frame)
-        for frame in EQ_RE.findall(body):
-            frames.add(frame)
-        for frame in BARE_EQ_RE.findall(body):
-            frames.add(frame)
-        for frame in BARE_CASE_RE.findall(body):
-            frames.add(frame)
-        out[name] = frames
+        out[name] = frames_in_body(body)
     return out
+
+
+def frames_in_body(body):
+    """一个函数体**自己认得**的帧集合。
+
+    ★ 抽出来是为了让自检能喂它一段**合成**的 Go 源码 —— 这一条判据的眼睛是
+    那七个正则，而正则坏掉的样子与「这一段没有帧」一模一样。
+    **一台守卫在某个时刻红过，不等于它现在还能红。**
+    """
+    frames = set()
+    for pre in PREFIX_RE.findall(body):
+        frames.add(pre + "*")
+    for group in CASE_RE.findall(body):
+        for frame in CASE_TOK.findall(group):
+            frames.add(frame)
+    for frame in EQ_RE.findall(body):
+        frames.add(frame)
+    for frame in BARE_EQ_RE.findall(body):
+        frames.add(frame)
+    for frame in BARE_CASE_RE.findall(body):
+        frames.add(frame)
+    return frames
 
 
 def check_claims_are_inhabited():
@@ -264,7 +274,63 @@ def check_request_bodies_go_through_decodebody():
     return problems
 
 
+# ★★★ 自检：这一条判据的**眼睛**（七个正则）必须还看得见。
+#
+# 判据分两半，与 check_docs.py 的 self_test() 同一条：喂它一段**有帧**的
+# 合成源码 ⇒ 必须认出来；喂它一段**没有**的 ⇒ 不许认出来。
+#
+# ★★ 而最要紧的一条是 PREFIX_RE：它此前**只认字面量**
+# （`HasPrefix(f.T, "session.")`），于是 `adapters/shell/ops.go` 里那张
+# **表驱动**的分派（`{Prefix: "teleport.", …}`，变量不是字面量）对它是**隐形的** ——
+# 实测：注入一个空族之后，check_frames.py 报「帧类型一致」退出码 0，
+# 而 drive.sh 的 ops 段报「每一个族都真的被分派认领（18 个）」：
+# **两台守卫都绿，而 `ops` 在宣传一个对什么都答 unknown 的族。**
+# 所以自检必须把「变量不是字面量」这件事也钉住 —— 它**不该**被认出来。
+SAMPLE_FRAMES = """func (s *server) handleThing(f core.Frame, out *core.Frame) bool {
+	switch f.T {
+	case "alpha.one", "alpha.two":
+	case "beta.three":
+	}
+	if strings.HasPrefix(f.T, "gamma.") {
+	}
+	if f.T == "delta.four" {
+	}
+	if f.T != "epsilon" {
+	}
+	switch f.T {
+	case "zeta":
+	}
+	return true
+}
+"""
+
+
+def self_test():
+    bad = []
+    got = frames_in_body(SAMPLE_FRAMES)
+    for want in ("alpha.one", "alpha.two", "beta.three", "gamma.*", "delta.four",
+                 "epsilon", "zeta"):
+        if want not in got:
+            bad.append(f"自检：frames_in_body 没认出 {want} —— 那几个正则里有一个瞎了")
+    # ★ 而反过来：一个**变量**前缀不许被当成帧（那正是表驱动分派对守卫隐形的原因）。
+    var_body = 'func (s *server) handleVar(f core.Frame, out *core.Frame) bool {\n' \
+               '\tif strings.HasPrefix(f.T, c.Prefix) {\n\t}\n\treturn true\n}\n'
+    if frames_in_body(var_body):
+        bad.append("自检：frames_in_body 把 `HasPrefix(f.T, c.Prefix)` 也当成了帧 —— "
+                   "那是变量不是字面量，它不该被认出来")
+    return bad
+
+
 def main():
+    if os.environ.get("TEPS_FRAMES_SELF_TEST") == "1":
+        bad = self_test()
+        if bad:
+            for b in bad:
+                print("  " + b)
+            print(f"帧守卫自检失败：{len(bad)} 处")
+            return 1
+        print("SELF-TEST OK  帧守卫：七个正则都还看得见，且变量前缀不被误认")
+        return 1
     live = dispatched()
     doc, pending = documented()
 
